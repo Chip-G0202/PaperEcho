@@ -146,12 +146,13 @@ export async function runPreflight(options, dependencies = {}) {
   const readiness = [];
   const warnings = [...(options.configWarnings || [])];
   const entry = path.resolve(entries[options.mode]);
+  const radarProfile = options.profile === "radar";
 
   if (Number(process.versions.node.split(".")[0]) < 18) requiredMissing.push(missing("Node.js >= 18", "运行 PaperEcho", "安装受支持的 Node.js", "dependency"));
   if (!existsSync(entry)) requiredMissing.push(missing("production entry", "启动当前路径", `恢复 ${safePath(entry, repoRoot)}`, "dependency"));
   else readiness.push({ name: "production_entry", status: "ready" });
 
-  if (options.mode === "desktop") {
+  if (options.mode === "desktop" && !radarProfile) {
     const app = dependencies.desktopApplicationImpl
       ? dependencies.desktopApplicationImpl(env, platform, existsSync)
       : desktopApplication(env, platform, existsSync);
@@ -162,10 +163,14 @@ export async function runPreflight(options, dependencies = {}) {
     readiness.push({ name: "zotero_desktop", status: app ? "ready" : "blocked" }, { name: "desktop_cli_bridge", status: cli ? "ready" : "blocked" });
   }
 
-  if (options.mode === "web") {
+  if (options.mode === "web" && !radarProfile) {
     if (!String(env.ZOTERO_API_KEY || "").trim()) requiredMissing.push({ ...missing("ZOTERO_API_KEY", "Web API 认证与 library 解析", "设置 web.apiKeyEnv 指向已配置的环境变量", "configuration"), section: "web" });
     readiness.push({ name: "zotero_web_api", status: env.ZOTERO_API_KEY ? "ready" : "blocked", connectivity: "not_probed" });
     if (!env.ZOTERO_USER_ID) optionalMissing.push(optional("ZOTERO_USER_ID", "避免运行时解析 user library ID", "可在环境中配置；生产入口也可按 API key 解析"));
+  }
+
+  if (radarProfile && options.mode !== "local") {
+    readiness.push({ name: "radar_no_writeback", status: "ready", zoteroRequired: false });
   }
 
   if (options.mode !== "local") {

@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   acquireRunLease,
+  acquireWorkflowLease,
   createOperationLedger,
   OperationLedgerStore,
   operationIdempotencyKey,
@@ -124,6 +125,19 @@ test("two simultaneous resume attempts admit exactly one lease owner", async (t)
   ]);
   assert.equal(attempts.filter((item) => item.acquired).length, 1);
   assert.equal(attempts.filter((item) => !item.acquired && item.reason === "active_lease").length, 1);
+  await releaseRunLease(attempts.find((item) => item.acquired));
+});
+
+test("one workflow lease serializes Radar, Weekly, manual, and resume run identities", async (t) => {
+  const runRoot = await sandbox(t);
+  const attempts = await Promise.all([
+    acquireWorkflowLease({ runRoot, runId: "radar-run", profile: "radar", ownerId: "radar-owner" }, { hostname: "host", processAlive: () => false }),
+    acquireWorkflowLease({ runRoot, runId: "weekly-run", profile: "standard", ownerId: "weekly-owner" }, { hostname: "host", processAlive: () => false }),
+  ]);
+  assert.equal(attempts.filter((item) => item.acquired).length, 1);
+  const blocked = attempts.find((item) => !item.acquired);
+  assert.equal(blocked.reason, "active_lease");
+  assert.equal(blocked.leasePath, attempts.find((item) => item.acquired).leasePath);
   await releaseRunLease(attempts.find((item) => item.acquired));
 });
 

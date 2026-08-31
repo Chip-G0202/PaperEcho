@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
+import { writeAtomicJson } from "../lib/atomic_json.mjs";
+
+export { writeAtomicJson } from "../lib/atomic_json.mjs";
 
 export const SOURCE_STATE_SCHEMA_VERSION = 1;
 export const RETRIEVAL_AUDIT_SCHEMA_VERSION = 1;
@@ -131,24 +134,6 @@ export function sourceHealthObservations(stateUpdates = []) {
       { kind: "source_yield", healthKey: `source:${state.profile}:${state.source}:${state.queryHash}:yield`, degraded: state.health?.yield?.anomaly === true, subject },
     ];
   });
-}
-
-export async function writeAtomicJson(filePath, value, { fsApi = fs } = {}) {
-  await fsApi.mkdir(path.dirname(filePath), { recursive: true });
-  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  let handle;
-  try {
-    handle = await fsApi.open(temporary, "wx");
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
-    if (typeof handle.sync === "function") await handle.sync();
-    await handle.close();
-    handle = null;
-    await fsApi.rename(temporary, filePath);
-  } catch (error) {
-    if (handle) await handle.close().catch(() => {});
-    await fsApi.unlink(temporary).catch(() => {});
-    throw error;
-  }
 }
 
 export async function commitRetrievalTransaction({ artifactPath, artifact, stateUpdates = [], atomicWriter = writeAtomicJson } = {}) {

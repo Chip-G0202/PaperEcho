@@ -106,6 +106,60 @@ export function resolvePlannedSlotAt(date) {
   return new Date(slot.getTime() - ASIA_SHANGHAI_OFFSET_MS);
 }
 
+export function plannedSlotCalendarDateKey(date) {
+  const plannedSlot = resolvePlannedSlotAt(date);
+  const localSlot = toBeijingDate(plannedSlot);
+  return `${localSlot.getUTCFullYear()}-${String(localSlot.getUTCMonth() + 1).padStart(2, "0")}-${String(localSlot.getUTCDate()).padStart(2, "0")}`;
+}
+
+export function scheduleDayDecisionPath(stateRoot, dateKey) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ""))) throw new Error("SCHEDULE_DATE_KEY_INVALID");
+  return path.join(path.resolve(stateRoot), "v1", `${dateKey}.json`);
+}
+
+export async function claimScheduleDayDecision({
+  stateRoot,
+  now = new Date(),
+  weeklyDue = false,
+  requestedProfile = "radar",
+  runId,
+  fsApi = fs,
+  atomicWriter = writeAtomicJson,
+  clock = () => new Date(),
+} = {}) {
+  const dateKey = plannedSlotCalendarDateKey(now);
+  const filePath = scheduleDayDecisionPath(stateRoot, dateKey);
+  return withAtomicJsonLock(filePath, async () => {
+    let existing = null;
+    try { existing = JSON.parse(await fsApi.readFile(filePath, "utf8")); }
+    catch (error) { if (error?.code !== "ENOENT") throw error; }
+    if (existing) {
+      if (existing.schemaVersion !== 1 || existing.dateKey !== dateKey || !new Set(["weekly_takeover", "radar"]).has(existing.decision)) {
+        throw new Error("SCHEDULE_DAY_DECISION_INVALID");
+      }
+      if (existing.decision === "weekly_takeover" && requestedProfile === "weekly" && !existing.businessRunId) {
+        existing.businessRunId = String(runId || "");
+        existing.claimedAt = clock().toISOString();
+        await atomicWriter(filePath, existing, { fsApi });
+        return { ...existing, filePath, created: false, duplicateTrigger: false, claimedExistingDecision: true };
+      }
+      return { ...existing, filePath, created: false, duplicateTrigger: Boolean(existing.businessRunId), claimedExistingDecision: false };
+    }
+    const decision = weeklyDue ? "weekly_takeover" : "radar";
+    const value = {
+      schemaVersion: 1,
+      dateKey,
+      plannedSlotAt: resolvePlannedSlotAt(now).toISOString(),
+      decision,
+      businessRunId: decision === "radar" || requestedProfile === "weekly" ? String(runId || "") : "",
+      createdAt: clock().toISOString(),
+    };
+    if (decision === "radar" && !value.businessRunId) throw new Error("SCHEDULE_DAY_RUN_ID_REQUIRED");
+    await atomicWriter(filePath, value, { fsApi });
+    return { ...value, filePath, created: true, duplicateTrigger: false };
+  }, { fsApi, clock });
+}
+
 function parseNullableIso(value) {
   if (value === undefined || value === null || value === "") return null;
   const ms = Date.parse(value);
@@ -153,3 +207,7 @@ export function evaluateRunInterval({
     next_eligible_run_at: nextEligibleRunAt,
   };
 }
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import { withAtomicJsonLock, writeAtomicJson } from "./atomic_json.mjs";

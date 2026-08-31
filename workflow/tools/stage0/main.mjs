@@ -27,7 +27,12 @@ import { buildExportManifest, buildRunSummary, pipelineModeFromBackend } from ".
 import { resolveStage5Request, runStage5Notification } from "../stage5/main.mjs";
 import { receiptPathFor, recipientHash } from "../stage5/email_receipt.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
+import { claimScheduleDayDecision } from "../lib/schedule_support.mjs";
+import { getDefaultZoteroLibraryIndexPath } from "../lib/zotero_library_index_store.mjs";
+import { recordRadarNotificationOutcome, selectRadarNotificationCandidates } from "../radar/state.mjs";
+import { radarNotificationReceiptPath, sendRadarAggregateNotification } from "../stage5/radar_notification.mjs";
 import { createRunRecoveryCoordinator, resumeRunFromLedger } from "../recovery/run_recovery.mjs";
+import { acquireWorkflowLease, releaseRunLease } from "../recovery/operation_ledger.mjs";
 import { buildZoteroRecoveryReconcilers } from "../recovery/zotero_reconciliation.mjs";
 import { dayLabel, monthLabel } from "../lib/report_period_support.mjs";
 import {
@@ -201,10 +206,14 @@ export async function runZoteroLiteratureFilter({
   argv = process.argv.slice(2),
   env = process.env,
   stage5Runner = runStage5Notification,
+  radarStage5Runner = sendRadarAggregateNotification,
+  scheduleDecisionClaimer = claimScheduleDayDecision,
   runId = `zlf-${Date.now()}-${randomUUID().slice(0, 8)}`,
   recoveryCoordinator = null,
 } = {}) {
   const startedAt = iso(clock());
+  const profile = String(env.PAPERECHO_RUN_PROFILE || "standard").trim().toLowerCase();
+  const radarProfile = profile === "radar";
   const manualTrigger = runMode.isManualOrForce;
   const runtimeSafety = buildRuntimeSafetyConfig({ runtime: config });
   const dryRun = Boolean(runtimeSafety.dry_run);
@@ -223,6 +232,7 @@ export async function runZoteroLiteratureFilter({
   let startup = null;
   const runRoot = path.join(config.reviewRoot, "runs");
   let runGroupManifestPath = "";
+  const monthlyAggregationApplicable = !radarProfile;
   let monthlyAggregationCompleted = false;
   let notificationHealthObservations = [];
   let runGroupPipelineMode = pipelineModeFromBackend(env.ZOTERO_BACKEND);
@@ -233,7 +243,7 @@ export async function runZoteroLiteratureFilter({
   const runArtifacts = [
     { kind: "run_state", rootKey: "runs", path: runId, retention: "30d" },
     { kind: "pipeline", rootKey: "research", path: path.relative(config.researchRoot, config.pipelineDir), retention: "30d" },
-    { kind: "weekly_export", rootKey: "review", path: path.join(monthLabel(config.now), dayLabel(config.now)), retention: "30d" },
+    ...(!radarProfile ? [{ kind: "weekly_export", rootKey: "review", path: path.join(monthLabel(config.now), dayLabel(config.now)), retention: "30d" }] : []),
   ];
   try {
     const group = await startRunGroup({
@@ -242,7 +252,7 @@ export async function runZoteroLiteratureFilter({
       pipelineMode: runGroupPipelineMode,
       startedAt,
       artifacts: runArtifacts,
-      references: { monthlyAggregationPending: true },
+      references: { monthlyAggregationPending: monthlyAggregationApplicable },
     });
     runGroupManifestPath = group.manifestPath;
     housekeeping = await runRetentionCleanup({
@@ -286,9 +296,9 @@ export async function runZoteroLiteratureFilter({
           status: String(report?.status || "").includes("failed") ? "failed" : "completed",
           finishedAt: report?.finishedAt || iso(clock()),
           pipelineMode: runGroupPipelineMode,
-          monthlyAggregationPending: !monthlyAggregationCompleted,
+          monthlyAggregationPending: monthlyAggregationApplicable && !monthlyAggregationCompleted,
         });
-        if (monthlyAggregationCompleted) await releaseMonthlyAggregation({ runRoot, monthPrefix: startedAt.slice(0, 7), monthArtifactPrefix: monthLabel(config.now) });
+        if (monthlyAggregationApplicable && monthlyAggregationCompleted) await releaseMonthlyAggregation({ runRoot, monthPrefix: startedAt.slice(0, 7), monthArtifactPrefix: monthLabel(config.now) });
       } catch (error) {
         housekeeping.warnings = [...(housekeeping.warnings || []), String(error?.message || error)];
       }
@@ -308,12 +318,16 @@ export async function runZoteroLiteratureFilter({
     const originalLegacyForceRun = process.env.FORCE_review_results_RUN;
     const originalTrigger = process.env.review_results_ORCHESTRATOR_TRIGGER;
     const originalRunId = process.env.review_results_RUN_ID;
+    const originalPaperEchoRunId = process.env.PAPERECHO_RUN_ID;
+    const originalProfile = process.env.PAPERECHO_RUN_PROFILE;
     if (manualTrigger) {
       process.env.review_results_FORCE_RUN = "true";
       process.env.FORCE_review_results_RUN = "true";
       process.env.review_results_ORCHESTRATOR_TRIGGER = "manual";
     }
     process.env.review_results_RUN_ID = runId;
+    process.env.PAPERECHO_RUN_ID = runId;
+    process.env.PAPERECHO_RUN_PROFILE = profile;
     try {
       return await baseStageRunner(stage);
     } finally {
@@ -325,6 +339,10 @@ export async function runZoteroLiteratureFilter({
       else process.env.review_results_ORCHESTRATOR_TRIGGER = originalTrigger;
       if (originalRunId === undefined) delete process.env.review_results_RUN_ID;
       else process.env.review_results_RUN_ID = originalRunId;
+      if (originalPaperEchoRunId === undefined) delete process.env.PAPERECHO_RUN_ID;
+      else process.env.PAPERECHO_RUN_ID = originalPaperEchoRunId;
+      if (originalProfile === undefined) delete process.env.PAPERECHO_RUN_PROFILE;
+      else process.env.PAPERECHO_RUN_PROFILE = originalProfile;
     }
   };
   const toolsDir = path.join(config.repoRoot, "workflow", "tools");
@@ -347,28 +365,46 @@ export async function runZoteroLiteratureFilter({
   const intervalGate = await evaluateOrchestratorIntervalGate(config, () => new Date(startedAt), readJson, { triggerMode });
   const skipReport = intervalGate.skipReport;
   const intervalGateDiagnostics = intervalGate.diagnostics;
-  if (skipReport) {
+  const scheduledTrigger = new Set(["scheduled", "background"]).has(String(triggerMode || "").toLowerCase());
+  let scheduleDecision = null;
+  if (scheduledTrigger && (radarProfile || !skipReport)) {
+    scheduleDecision = await scheduleDecisionClaimer({
+      stateRoot: path.join(config.researchRoot, "schedule_decisions"),
+      now: new Date(startedAt),
+      weeklyDue: !skipReport,
+      requestedProfile: radarProfile ? "radar" : "weekly",
+      runId,
+    });
+  }
+  const radarTakenOver = radarProfile && scheduleDecision?.decision === "weekly_takeover";
+  const duplicateScheduledRun = Boolean(scheduleDecision?.duplicateTrigger && scheduleDecision.businessRunId !== runId);
+  if ((skipReport && !radarProfile) || radarTakenOver || duplicateScheduledRun) {
+    const scheduleSkipReason = radarTakenOver ? "weekly_takeover" : duplicateScheduledRun ? "duplicate_schedule_trigger" : "interval_not_reached";
     stages.push(skippedStage(stageDefs.stage1.name, stageDefs.stage1.scriptPath, "interval_not_reached", () => new Date(startedAt)));
-    stages.push(skippedStage(stageDefs.zoteroBackendReady.name, stageDefs.zoteroBackendReady.scriptPath, "interval_not_reached", () => new Date(startedAt)));
-    stages.push(skippedStage(stageDefs.stage2.name, stageDefs.stage2.scriptPath, "interval_not_reached", () => new Date(startedAt)));
-    stages.push(skippedStage(stageDefs.stage3.name, stageDefs.stage3.scriptPath, "interval_not_reached", () => new Date(startedAt)));
-    stages.push(skippedStage(stageDefs.stage4.name, stageDefs.stage4.scriptPath, "interval_not_reached", () => new Date(startedAt)));
-    await writeJson(`${config.pipelineDir}/run_skip_report.json`, skipReport);
-    await writeJson(`${config.pipelineDir}/run_report.json`, skipReport);
+    stages.at(-1).skipReason = scheduleSkipReason;
+    stages.push(skippedStage(stageDefs.zoteroBackendReady.name, stageDefs.zoteroBackendReady.scriptPath, scheduleSkipReason, () => new Date(startedAt)));
+    stages.push(skippedStage(stageDefs.stage2.name, stageDefs.stage2.scriptPath, scheduleSkipReason, () => new Date(startedAt)));
+    stages.push(skippedStage(stageDefs.stage3.name, stageDefs.stage3.scriptPath, scheduleSkipReason, () => new Date(startedAt)));
+    stages.push(skippedStage(stageDefs.stage4.name, stageDefs.stage4.scriptPath, scheduleSkipReason, () => new Date(startedAt)));
+    const effectiveSkipReport = skipReport || { skipped: true, skipped_due_to_interval: false, reason: scheduleSkipReason };
+    await writeJson(`${config.pipelineDir}/run_skip_report.json`, { ...effectiveSkipReport, schedule_decision: scheduleDecision, reason: scheduleSkipReason });
+    await writeJson(`${config.pipelineDir}/run_report.json`, { ...effectiveSkipReport, schedule_decision: scheduleDecision, reason: scheduleSkipReason });
     const report = buildOrchestratorReport({
       status: "skipped",
       runContext,
       finishedAt: startedAt,
       stages,
       artifacts,
-      extra: { skipReport, interval_gate_diagnostics: intervalGateDiagnostics, runtimeSafety },
+      extra: { skipReport: effectiveSkipReport, schedule_decision: scheduleDecision, interval_gate_diagnostics: intervalGateDiagnostics, runtimeSafety },
     });
     await writeReport(report);
     return await completeRunGroup(report);
   }
 
   try {
-    startup = dryRun
+    startup = radarProfile
+      ? { ok: true, skipped: true, strategy: "radar_no_zotero_startup" }
+      : dryRun
       ? { ok: true, skipped_due_to_dry_run: true, strategy: "dry_run_no_external_startup" }
       : await ensureStartupReady();
   } catch (err) {
@@ -427,6 +463,72 @@ export async function runZoteroLiteratureFilter({
       artifacts,
       extra: { startup, interval_gate_diagnostics: intervalGateDiagnostics, runtimeSafety },
     });
+    await writeReport(report);
+    return await completeRunGroup(report);
+  }
+
+  if (radarProfile) {
+    const radarResult = stages.at(-1).data?.radar || null;
+    const radarAuditPath = String(radarResult?.auditPath || "");
+    const radarAuditStat = radarAuditPath ? await statArtifact(radarAuditPath) : { exists: false, mtimeMs: 0 };
+    const radarAuditFresh = Boolean(radarAuditStat.exists && Number(radarAuditStat.mtimeMs || 0) >= Date.parse(stages.at(-1).startedAt));
+    artifacts.radar_audit = { key: "radar_audit", path: radarAuditPath || null, exists: Boolean(radarAuditStat.exists), currentRun: radarAuditFresh, stale: !radarAuditFresh, data: radarResult?.audit || null };
+    if (!radarAuditFresh || radarResult?.audit?.zoteroWriteCount !== 0 || radarResult?.audit?.xlsxWriteCount !== 0) {
+      stages.push(skippedStage(stageDefs.zoteroBackendReady.name, stageDefs.zoteroBackendReady.scriptPath, "radar_audit_invalid", clock));
+      stages.push(skippedStage(stageDefs.stage2.name, stageDefs.stage2.scriptPath, "radar_audit_invalid", clock));
+      stages.push(skippedStage(stageDefs.stage3.name, stageDefs.stage3.scriptPath, "radar_audit_invalid", clock));
+      stages.push(skippedStage(stageDefs.stage4.name, stageDefs.stage4.scriptPath, "radar_audit_invalid", clock));
+      const report = buildOrchestratorReport({ status: "failed_stage1", runContext, finishedAt: iso(clock()), stages, artifacts, extra: { startup, schedule_decision: scheduleDecision, interval_gate_diagnostics: intervalGateDiagnostics, runtimeSafety } });
+      await writeReport(report);
+      return await completeRunGroup(report);
+    }
+    if (recoveryCoordinator) {
+      await recoveryCoordinator.bindArtifact(radarAuditPath, stages.at(-1).data?.triagedAll || []);
+      await recoveryCoordinator.store.setStage("stage1", "verified", { artifactHash: recoveryCoordinator.store.ledger.artifact.hash, identityCount: Number(radarResult.audit.candidateCount || 0) });
+    }
+    stages.push(skippedStage(stageDefs.zoteroBackendReady.name, stageDefs.zoteroBackendReady.scriptPath, "radar_no_writeback", clock));
+    stages.push(skippedStage(stageDefs.stage2.name, stageDefs.stage2.scriptPath, "radar_no_writeback", clock));
+    stages.push(skippedStage(stageDefs.stage3.name, stageDefs.stage3.scriptPath, "radar_no_writeback", clock));
+    stages.push(skippedStage(stageDefs.stage4.name, stageDefs.stage4.scriptPath, "radar_json_only", clock));
+    if (recoveryCoordinator) {
+      await recoveryCoordinator.store.setStage("stage2_writeback", "skipped", { reason: "radar_no_writeback" });
+      await recoveryCoordinator.store.setStage("stage3_translation", "skipped", { reason: "radar_no_writeback" });
+      await recoveryCoordinator.store.setStage("stage4_exports", "skipped", { reason: "radar_json_only" });
+    }
+    const urgentItems = Array.isArray(radarResult.urgentItems) ? radarResult.urgentItems : [];
+    const indexPath = getDefaultZoteroLibraryIndexPath(config.projectRoot);
+    const notificationSelection = await selectRadarNotificationCandidates(indexPath, urgentItems);
+    const selectedItems = notificationSelection.selected.map((entry) => entry.item);
+    const stage5Request = resolveStage5Request(argv, env);
+    const stage5StateRoot = runStateRoot(runRoot, runId);
+    const receiptPath = radarNotificationReceiptPath(stage5StateRoot, runId, selectedItems);
+    const notificationOperation = recoveryCoordinator && selectedItems.length && stage5Request.recipient
+      ? await recoveryCoordinator.prepareFileOperation({ type: "notification", targetId: "radar_business", targetPath: receiptPath, input: { fingerprints: notificationSelection.selected.map((entry) => entry.fingerprint) }, retryable: false, intent: { notificationType: "radar_business", eventEpoch: runId } })
+      : null;
+    const stage5Notification = await radarStage5Runner({ runId, urgentItems: selectedItems, recipient: stage5Request.recipient, runStateRoot: stage5StateRoot, env, ledgerOperationId: notificationOperation?.idempotencyKey || "" });
+    await recordRadarNotificationOutcome(indexPath, notificationSelection.selected, stage5Notification, { generatedAt: iso(clock()) });
+    if (notificationOperation && stage5Notification.status === "accepted") {
+      await recoveryCoordinator.completeNotification(notificationOperation, { ...stage5Notification, receiptStatus: "accepted", messageId: stage5Notification.receipt?.messageId || "" });
+      await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: "accepted" });
+    } else if (notificationOperation && stage5Notification.status === "unknown") {
+      await recoveryCoordinator.store.transition(notificationOperation.idempotencyKey, "remote_observed", { verification: { possibleAccepted: true } });
+      await recoveryCoordinator.store.setStage("stage5_notification", "failed", { status: "unknown" });
+    } else if (notificationOperation && stage5Notification.status === "failed") {
+      await recoveryCoordinator.store.transition(notificationOperation.idempotencyKey, "failed", { error: `RADAR_NOTIFICATION_${String(stage5Notification.reason || "failed").toUpperCase()}` });
+      await recoveryCoordinator.store.setStage("stage5_notification", "failed", { status: "failed" });
+    } else if (recoveryCoordinator) {
+      await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: "skipped", reason: stage5Notification.reason });
+    }
+    const finalStatus = stage5Notification.status === "failed" ? "failed_stage5_notification" : stage5Notification.status === "unknown" ? "completed_with_warnings" : "completed";
+    const report = buildOrchestratorReport({
+      status: finalStatus,
+      runContext,
+      finishedAt: iso(clock()),
+      stages,
+      artifacts,
+      extra: { startup, schedule_decision: scheduleDecision, interval_gate_diagnostics: intervalGateDiagnostics, runtimeSafety, radar_notification_selection: { selected: selectedItems.length, suppressed: notificationSelection.suppressed.length } },
+    });
+    report.steps = { ...(report.steps || {}), stage5_notification: stage5Notification };
     await writeReport(report);
     return await completeRunGroup(report);
   }
@@ -719,6 +821,7 @@ async function main() {
   _emergencyPipelineDir = config.pipelineDir;
   let report;
   let attemptedResumeRunId = "";
+  let workflowLease = null;
   try {
     const resumeToken = (process.argv || []).find((value) => value === "--resume" || String(value).startsWith("--resume="));
     const resumeIndex = (process.argv || []).indexOf("--resume");
@@ -732,7 +835,12 @@ async function main() {
     const configHash = String(process.env.PAPERECHO_CONFIG_HASH || canonicalQueryHash({ mode: pipelineMode, profile, repoRoot: config.repoRoot, projectRoot: config.projectRoot }));
     const inputHash = String(process.env.PAPERECHO_INPUT_HASH || canonicalQueryHash({ mode: pipelineMode, profile }));
     const runRoot = path.join(config.reviewRoot, "runs");
-    if (resumeRunId) {
+    const targetRunId = resumeRunId || String(process.env.PAPERECHO_RUN_ID || `zlf-${Date.now()}-${randomUUID().slice(0, 8)}`);
+    workflowLease = await acquireWorkflowLease({ runRoot, runId: targetRunId, profile });
+    if (!workflowLease.acquired) {
+      report = { runId: targetRunId, run_id: targetRunId, status: "skipped", reason: workflowLease.reason || "active_workflow_lease", profile };
+      orchestratorReportWritten = true;
+    } else if (resumeRunId) {
       report = await resumeRunFromLedger({
         runRoot,
         runId: resumeRunId,
@@ -746,7 +854,7 @@ async function main() {
         },
       });
     } else {
-      const runId = String(process.env.PAPERECHO_RUN_ID || `zlf-${Date.now()}-${randomUUID().slice(0, 8)}`);
+      const runId = targetRunId;
       const recoveryCoordinator = await createRunRecoveryCoordinator({
         runRoot,
         runId,
@@ -784,9 +892,11 @@ async function main() {
     }
     report = { status: "orchestrator_crash" };
     }
+  } finally {
+    if (workflowLease?.acquired) await releaseRunLease(workflowLease).catch(() => {});
   }
   console.log(JSON.stringify(report, null, 2));
-  process.exit(["completed", "completed_stage1_only", "degraded_due_to_zotero_backend_unavailable", "skipped"].includes(report.status) ? 0 : 1);
+  process.exit(["completed", "completed_with_warnings", "completed_stage1_only", "degraded_due_to_zotero_backend_unavailable", "skipped"].includes(report.status) ? 0 : 1);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {

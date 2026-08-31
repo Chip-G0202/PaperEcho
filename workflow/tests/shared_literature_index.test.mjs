@@ -23,7 +23,7 @@ test("all paths resolve one shared index and preserve namespaced presence", asyn
     ...emptyZoteroLibraryIndex(),
     live_items: { Z1: { itemKey: "Z1", title: "Shared paper", doi: "https://doi.org/10.0000/example.038BC", collections: [], collection_roles: [] } },
   });
-  await updateLocalLiteratureIndexItems(indexPath, [{ local_id: "lp_1", title: "Shared paper", doi: "10.0000/example.040", grade: "A" }], { outputRoot: path.join(root, "local") });
+  await updateLocalLiteratureIndexItems(indexPath, [{ local_id: "lp_1", title: "Shared paper", doi: "10.0000/example.038BC", grade: "A" }], { outputRoot: path.join(root, "local") });
   const read = await readZoteroLibraryIndex(indexPath);
   const record = findLiteratureRecord(read.index, { doi: "https://doi.org/10.0000/example.038BC" });
   assert.equal(record.presence.zotero.itemKey, "Z1");
@@ -35,7 +35,7 @@ test("all paths resolve one shared index and preserve namespaced presence", asyn
 test("identity priority and normalization are shared", () => {
   assert.deepEqual(LITERATURE_IDENTITY_PRIORITY, ["doi", "pmid", "pmcid", "arxiv", "openalex", "url", "title"]);
   assert.deepEqual(getLiteratureIdentityKeys({ DOI: "https://doi.org/10.0000/example.051", arxiv_id: "2401.1", openalex_id: "https://openalex.org/W1", title: "A  title" }), [
-    "doi:10.0000/example.052", "arxiv:2401.1", "openalex:w1", "title:a title",
+    "doi:10.0000/example.051", "arxiv:2401.1", "openalex:w1", "title:a title",
   ]);
 });
 

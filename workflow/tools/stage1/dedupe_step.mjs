@@ -1,4 +1,5 @@
 import { hashText } from "../lib/llm_json_support.mjs";
+import { getLiteratureIdentityKeys } from "../lib/literature_identity.mjs";
 
 function cleanText(s) {
   return String(s || "").replace(/<!\[CDATA\[|\]\]>/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -18,23 +19,7 @@ function normTitle(t) {
 }
 
 function dedupeKeysForItem(item = {}) {
-  const keys = [];
-  const add = (type, value) => {
-    const raw = String(value || "").trim();
-    if (!raw) return;
-    keys.push({ type, key: `${type}:${raw.toLowerCase()}` });
-  };
-  add("doi", item.doi);
-  add("pmid", item.pmid);
-  add("pmcid", item.pmcid);
-  add("url", item.url);
-  const title = normTitle(item.title);
-  if (title) keys.push({ type: "title", key: `title:${title}` });
-  const unique = new Map();
-  for (const entry of keys) {
-    if (!unique.has(entry.key)) unique.set(entry.key, entry);
-  }
-  return [...unique.values()];
+  return getLiteratureIdentityKeys(item).map((key) => ({ type: key.slice(0, key.indexOf(":")), key }));
 }
 
 export function dedupWithDiagnostics(items = []) {

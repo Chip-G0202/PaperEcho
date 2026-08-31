@@ -23,7 +23,7 @@ const SECTION_KEYS = Object.freeze({
   failure: new Set(["enabled"]),
   health: new Set(["enabled", "consecutiveThreshold"]),
   receiptStore: new Set(["root", "retryFailed", "unknownPolicy"]),
-  radar: new Set(["enabled"]),
+  radar: new Set(["enabled", "dailyTime", "retentionDays"]),
   integrity: new Set(["enabled"]),
 });
 const V2_COMMON_KEYS = new Set(["sourceState", "notifications", "radar", "integrity"]);
@@ -134,6 +134,11 @@ function validateCommon(common, schemaVersion = 1) {
     for (const section of ["radar", "integrity"]) {
       const reserved = validateKeys(value[section], section);
       optionalBoolean(reserved.enabled, `common.${section}.enabled`);
+      if (section === "radar") {
+        optionalString(reserved.dailyTime, "common.radar.dailyTime");
+        if (reserved.dailyTime != null && reserved.dailyTime !== "15:00") fail("CONFIG_VALUE_INVALID", "common.radar.dailyTime must be 15:00", { field: "common.radar.dailyTime" });
+        optionalInteger(reserved.retentionDays, "common.radar.retentionDays", { min: 0, max: 36500 });
+      }
     }
   }
   return { value, llm, email, smtp, cleanup, sourceState, notifications, failure, health, receiptStore };
@@ -202,7 +207,7 @@ async function loadConfigFile({ requestedPath, source, fsApi, cwd }) {
   optionalString(config.mode, "mode");
   if (config.mode != null && !MODES.has(config.mode)) fail("CONFIG_MODE_INVALID", `mode must be desktop, web, local, or null`, { mode: config.mode });
   optionalString(config.profile, "profile");
-  if (config.profile != null && !PROFILES.has(config.profile)) fail("CONFIG_PROFILE_INVALID", "profile must be standard or complete", { profile: config.profile });
+  if (config.profile != null && !PROFILES.has(config.profile)) fail("CONFIG_PROFILE_INVALID", "profile must be standard, complete, or radar", { profile: config.profile });
   validateEnabledSections(config);
   return { config, configPath: requestedPath, source };
 }
@@ -271,7 +276,9 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
     if (common.receiptStore.root) effectiveEnv.PAPERECHO_NOTIFICATION_RECEIPT_ROOT = resolveRelative(common.receiptStore.root, configDir);
     if (common.sourceState.root) effectiveEnv.PAPERECHO_SOURCE_STATE_ROOT = resolveRelative(common.sourceState.root, configDir);
     effectiveEnv.PAPERECHO_NOTIFICATION_HEALTH_ROOT = path.join(path.dirname(effectiveEnv.PAPERECHO_NOTIFICATION_RECEIPT_ROOT || effectiveEnv.PAPERECHO_SOURCE_STATE_ROOT || resolveRelative("../review_results/source_state", configDir)), "notification_health");
-    if (common.value.radar?.enabled === true) warnings.push("common.radar is reserved; Radar remains disabled in v2.1");
+    setEnvValue(effectiveEnv, "PAPERECHO_RADAR_ENABLED", common.value.radar?.enabled === true);
+    if (common.value.radar?.dailyTime) setEnvValue(effectiveEnv, "PAPERECHO_RADAR_DAILY_TIME", common.value.radar.dailyTime);
+    if (has(common.value.radar, "retentionDays")) setEnvValue(effectiveEnv, "PAPERECHO_RADAR_RETENTION_DAYS", common.value.radar.retentionDays);
     if (common.value.integrity?.enabled === true) warnings.push("common.integrity is reserved; integrity monitoring remains disabled in v2.1");
   }
   if (has(common.value, "journalQualityApiKeyEnv")) {
@@ -303,6 +310,8 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
 
   const provided = cliOptions.provided || {};
   const profile = provided.profile ? cliOptions.profile : (config?.profile || cliOptions.profile || "standard");
+  if (profile === "radar" && configSchemaVersion !== 2) fail("CONFIG_RADAR_REQUIRES_SCHEMA_V2", "Radar profile requires schemaVersion 2", { profile });
+  if (profile === "radar" && common.value.radar?.enabled !== true) fail("CONFIG_RADAR_NOT_ENABLED", "Radar profile requires common.radar.enabled=true", { profile });
   const configRequireLlm = common.llm.requireRealModel === true;
   const requireLlm = Boolean(cliOptions.requireLlm || configRequireLlm);
   let llmMode = cliOptions.llmMode;

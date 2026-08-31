@@ -19,7 +19,7 @@ import { commitRetrievalTransaction, RETRIEVAL_AUDIT_SCHEMA_VERSION, sourceHealt
  * @param {Object} options.now - Current date
  * @returns {Promise<{merged: Array, sourceSummary: Object, sourceSelection: Object, rss: Object, db: Object, openalex: Object}>}
  */
-export async function runSourceSelectionAndFetch({ root, pubmedPmcConfig, now, pipeDir = "", profile = "weekly", sourceStateRoot = "", fetchers = {} }) {
+export async function runSourceSelectionAndFetch({ root, pubmedPmcConfig, now, pipeDir = "", profile = "weekly", sourceStateRoot = "", fetchers = {}, deferCommit = false }) {
   // Load source selection config
   const sourceSelection = loadSourceSelectionConfig({ root });
   const { rssEnabled, pubmedEnabled, openalexEnabled, manualConfirmationRequired } = resolveRetrievalPlan(sourceSelection);
@@ -52,6 +52,7 @@ export async function runSourceSelectionAndFetch({ root, pubmedPmcConfig, now, p
   });
 
   let retrievalAuditPath = "";
+  let retrievalTransaction = null;
   if (pipeDir) {
     retrievalAuditPath = path.join(pipeDir, "retrieval_audit.json");
     const sourceAudits = [...(rss.audit || []), ...(db.audit || []), ...(openalex.audit || [])];
@@ -65,11 +66,12 @@ export async function runSourceSelectionAndFetch({ root, pubmedPmcConfig, now, p
       candidateCounts: { rss: rss.items.length, pubmedPmc: db.items.length, openalex: openalex.items.length },
       candidates: { rss: rss.items, pubmedPmc: db.items, openalex: openalex.items },
     };
-    await commitRetrievalTransaction({
+    retrievalTransaction = {
       artifactPath: retrievalAuditPath,
       artifact,
       stateUpdates: [...(rss.stateUpdates || []), ...(db.stateUpdates || []), ...(openalex.stateUpdates || [])],
-    });
+    };
+    if (!deferCommit) await commitRetrievalTransaction(retrievalTransaction);
   }
 
   // Build source summary
@@ -119,6 +121,7 @@ export async function runSourceSelectionAndFetch({ root, pubmedPmcConfig, now, p
     db,
     openalex,
     retrievalAuditPath,
+    retrievalTransaction,
     healthObservations: sourceHealthObservations([...(rss.stateUpdates || []), ...(db.stateUpdates || []), ...(openalex.stateUpdates || [])]),
   };
 }

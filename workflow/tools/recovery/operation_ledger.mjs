@@ -74,7 +74,7 @@ export function validateOperationLedger(value, { expectedRunId = "" } = {}) {
   const runId = validateRecoveryRunId(value.runId);
   if (expectedRunId && runId !== validateRecoveryRunId(expectedRunId)) throw new Error("OPERATION_LEDGER_RUN_ID_MISMATCH");
   if (!new Set(["desktop", "web", "local"]).has(value.mode)) throw new Error("OPERATION_LEDGER_MODE_INVALID");
-  if (!new Set(["standard", "complete"]).has(value.profile)) throw new Error("OPERATION_LEDGER_PROFILE_INVALID");
+  if (!new Set(["standard", "complete", "radar"]).has(value.profile)) throw new Error("OPERATION_LEDGER_PROFILE_INVALID");
   assertHash(value.configHash, "OPERATION_LEDGER_CONFIG_HASH_INVALID");
   assertHash(value.inputHash, "OPERATION_LEDGER_INPUT_HASH_INVALID");
   if (!value.artifact || typeof value.artifact.path !== "string") throw new Error("OPERATION_LEDGER_ARTIFACT_INVALID");
@@ -311,4 +311,52 @@ export async function releaseRunLease(lease, { fsApi = fs } = {}) {
   if (current.ownerId !== lease.lease.ownerId) return { released: false, reason: "owner_changed" };
   await fsApi.unlink(lease.leasePath);
   return { released: true };
+}
+
+export async function acquireWorkflowLease({ runRoot, runId, profile, ttlMs = 60_000, ownerId = randomUUID() }, dependencies = {}) {
+  const fsApi = dependencies.fsApi || fs;
+  const clock = dependencies.clock || (() => new Date());
+  const hostname = dependencies.hostname || os.hostname();
+  const processAlive = dependencies.processAlive;
+  const leasePath = path.join(path.resolve(runRoot), ".workflow.lease.json");
+  await fsApi.mkdir(path.dirname(leasePath), { recursive: true });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const now = clock();
+    const lease = {
+      schemaVersion: RUN_LEASE_SCHEMA_VERSION,
+      runId: validateRecoveryRunId(runId),
+      profile: String(profile || "standard"),
+      ownerId,
+      hostname,
+      pid: process.pid,
+      createdAt: iso(now),
+      heartbeatAt: iso(now),
+      expiresAt: iso(new Date(now.getTime() + ttlMs)),
+    };
+    try {
+      await writeNewLease(leasePath, lease, fsApi);
+      return { acquired: true, leasePath, lease, takeover: null };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+    let previous;
+    try { previous = JSON.parse(await fsApi.readFile(leasePath, "utf8")); }
+    catch {
+      if (attempt < 4) { await new Promise((resolve) => setTimeout(resolve, 5)); continue; }
+      throw new Error("WORKFLOW_LEASE_UNREADABLE");
+    }
+    if (previous.schemaVersion !== RUN_LEASE_SCHEMA_VERSION || !previous.runId) throw new Error("WORKFLOW_LEASE_INVALID");
+    const expired = Date.parse(previous.expiresAt || 0) <= now.getTime();
+    if (!expired || ownerAlive(previous, { hostname, processAlive })) return { acquired: false, reason: "active_lease", leasePath, lease: previous, takeover: null };
+    const historyPath = `${leasePath}.takeover.${now.toISOString().replace(/[:.]/g, "-")}.${String(previous.ownerId || "unknown").replace(/[^A-Za-z0-9_-]/g, "-")}.json`;
+    try { await fsApi.rename(leasePath, historyPath); }
+    catch (error) { if (error?.code === "ENOENT" || error?.code === "EEXIST") continue; throw error; }
+    try {
+      await writeNewLease(leasePath, lease, fsApi);
+      return { acquired: true, leasePath, lease, takeover: { previous, historyPath } };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+  }
+  return { acquired: false, reason: "lease_race", leasePath, lease: null, takeover: null };
 }

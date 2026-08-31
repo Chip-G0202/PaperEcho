@@ -243,9 +243,10 @@ test("schema v2 enables only configured notification capabilities with safe defa
   assert.equal(resolved.env.PAPERECHO_HEALTH_NOTIFIER_ENABLED, "true");
   assert.equal(resolved.env.PAPERECHO_NOTIFICATION_UNKNOWN_POLICY, "hold");
   assert.equal(resolved.env.SMTP_HOST, undefined);
-  assert.equal("PAPERECHO_RADAR_ENABLED" in resolved.env, false);
+  assert.equal(resolved.env.PAPERECHO_RADAR_ENABLED, "true");
   assert.equal("PAPERECHO_INTEGRITY_ENABLED" in resolved.env, false);
-  assert.equal(resolved.warnings.length, 2);
+  assert.equal(resolved.warnings.length, 1);
+  assert.match(resolved.warnings[0], /integrity monitoring remains disabled/);
 });
 
 test("schema v2 canonical hash excludes secret values", async (t) => {

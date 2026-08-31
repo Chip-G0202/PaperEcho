@@ -203,6 +203,9 @@ function recordFromZoteroItem(item = {}, previous = {}) {
         dateModified: normalized.dateModified,
       },
     },
+    ...(previous.radar_notification ? { radar_notification: previous.radar_notification } : {}),
+    ...(previous.radar_metadata ? { radar_metadata: previous.radar_metadata } : {}),
+    ...(previous.integrity ? { integrity: previous.integrity } : {}),
   };
 }
 
@@ -399,6 +402,7 @@ export async function updateLocalLiteratureIndexItems(filePath, items = [], { ou
       if (!canonicalId || !item.local_id) continue;
       const previous = index.records[canonicalId] || {};
       index.records[canonicalId] = {
+        ...previous,
         canonical_id: canonicalId,
         identity: getZoteroIndexFingerprints(item),
         title: item.title || previous.title || "",
@@ -411,6 +415,35 @@ export async function updateLocalLiteratureIndexItems(filePath, items = [], { ou
     index.generated_at = generatedAt;
     await writeIndexUnlocked(filePath, index);
     return { ok: true, updated_count: updatedCount };
+  });
+}
+
+export async function updateSharedLiteratureRecordState(filePath, updates = [], { generatedAt = nowIso() } = {}) {
+  return withIndexLock(filePath, async () => {
+    const read = await readZoteroLibraryIndex(filePath);
+    const index = read.usable ? normalizeZoteroLibraryIndex(read.index) : emptyZoteroLibraryIndex({ generatedAt });
+    let updatedCount = 0;
+    for (const update of updates) {
+      const item = update?.item || update;
+      const canonicalId = canonicalRecordId(item);
+      if (!canonicalId) continue;
+      const previous = index.records[canonicalId] || {};
+      const patch = update?.patch && typeof update.patch === "object" ? update.patch : {};
+      index.records[canonicalId] = {
+        ...previous,
+        ...patch,
+        canonical_id: canonicalId,
+        identity: { ...(previous.identity || {}), ...getZoteroIndexFingerprints(item) },
+        title: firstString(item.title, previous.title),
+        first_seen_at: previous.first_seen_at || generatedAt,
+        last_seen_at: generatedAt,
+        presence: { ...(previous.presence || {}), ...(patch.presence || {}) },
+      };
+      updatedCount += 1;
+    }
+    index.generated_at = generatedAt;
+    await writeIndexUnlocked(filePath, index);
+    return { ok: true, updated_count: updatedCount, index };
   });
 }
 

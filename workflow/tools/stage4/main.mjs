@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { assertProfileCapability, runtimeProfile } from "../lib/profile_capabilities.mjs";
 
 import { buildRuntimeConfig } from "../lib/runtime_config.mjs";
 import { REVIEW_REPORT_LABEL, REVIEW_WORKBOOK_FILE_NAME, dayLabel, isLastDueRunOfMonth, monthLabel, yyMd } from "../lib/report_period_support.mjs";
@@ -27,6 +28,7 @@ const TODAY = RUNTIME.now;
 export { buildStage4RuntimeStateUpdate };
 
 export async function finalizeResearchOsExports() {
+  assertProfileCapability(runtimeProfile(), "xlsxWrite");
   const stageStarted = Date.now();
   const dateStr = fmtDate(TODAY);
   const pipelineDir = RUNTIME.pipelineDir;

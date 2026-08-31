@@ -34,6 +34,13 @@ import { buildLlmReviewCandidates, resolveEligibleRuleGrades } from "./llm_grade
 import { runSourceSelectionAndFetch } from "./source_selection_step.mjs";
 import { runPreferenceLearningPhase } from "./preference_learning_step.mjs";
 import { runFeedbackActionsAndWriteback } from "./feedback_actions_step.mjs";
+import {
+  finalizeRadarStage1,
+  isRadarProfile,
+  prepareRadarCandidatePool,
+  radarPreferenceLearningPlaceholder,
+  radarRunArtifactDir,
+} from "./radar_step.mjs";
 
 
 export { dedupWithDiagnostics } from "./dedupe_step.mjs";
@@ -59,10 +66,14 @@ export async function runResearchOsPipeline({
   feedbackActionSink = null,
   normalizedFeedbackRows = null,
   feedbackSource = "",
-  skipZotero = false,
+  skipZotero = null,
   zoteroBoundaries = {},
 } = {}) {
   const totalStarted = Date.now();
+  const runProfile = String(process.env.PAPERECHO_RUN_PROFILE || "standard").trim().toLowerCase();
+  const radarProfile = isRadarProfile(runProfile);
+  const zoteroSkipped = skipZotero == null ? radarProfile : Boolean(skipZotero);
+  const runId = String(process.env.PAPERECHO_RUN_ID || "");
   const exportLimitArg = argv.find((x) => x.startsWith("--export-limit="));
   const exportLimit = exportLimitArg ? Number(exportLimitArg.split("=")[1]) : null;
   const now = RUNTIME.now;
@@ -92,7 +103,7 @@ export async function runResearchOsPipeline({
     runIntervalDays,
     triggerMode,
     manualTrigger,
-    explicitForceRun,
+    explicitForceRun: explicitForceRun || radarProfile,
   });
   if (!runDue && !forceRun) {
     const skipReport = buildStage1SkipRunReport({
@@ -161,7 +172,7 @@ export async function runResearchOsPipeline({
   const pubmedPmcConfigPath = path.join(ROOT, "config", "pubmed_pmc_search.json");
   const pubmedPmcConfig = loadPubMedPmcSearchConfig({ root: ROOT, now: new Date() });
   const llmPreferenceStarted = Date.now();
-  const preferenceLearning = await runPreferenceLearningPhase({
+  const preferenceLearning = radarProfile ? radarPreferenceLearningPlaceholder() : await runPreferenceLearningPhase({
     reviewRoot: REVIEW_ROOT,
     desktopRoot: DESKTOP_REVIEW_ROOT,
     researchRoot: RESEARCH_ROOT,
@@ -202,7 +213,7 @@ export async function runResearchOsPipeline({
   });
 
   // --- Pwsh gate and connector ---
-  report.steps.pwsh_gate = skipZotero ? { pwsh_gate_passed: true, skipped: true, reason: "local_mode" } : checkPwshVersionGate(PW_SH);
+  report.steps.pwsh_gate = zoteroSkipped ? { pwsh_gate_passed: true, skipped: true, reason: radarProfile ? "radar_no_writeback" : "local_mode" } : checkPwshVersionGate(PW_SH);
   if (!report.steps.pwsh_gate.pwsh_gate_passed && !report.steps.pwsh_gate.pwsh_version_unknown) {
     report.failures.push({
       stage: "pwsh_gate",
@@ -213,8 +224,8 @@ export async function runResearchOsPipeline({
     });
   }
   try {
-    if (skipZotero) {
-      report.steps.connector = { ok: false, skipped: true, local_mode: true, probe_attempted: false, writeback_attempted: false };
+    if (zoteroSkipped) {
+      report.steps.connector = { ok: false, skipped: true, local_mode: !radarProfile, radar_no_writeback: radarProfile, probe_attempted: false, writeback_attempted: false };
     } else {
       const ensureBackendReady = zoteroBoundaries.ensureBackendReady || ensureZoteroBackendReady;
       report.steps.connector = await ensureBackendReady({ retries: 1, intervalMs: 1000, postStartDelayMs: 0 });
@@ -230,6 +241,7 @@ export async function runResearchOsPipeline({
     dryRun: buildRuntimeSafetyConfig({ runtime: RUNTIME, argv }).dry_run,
     allowFixture: parseBooleanFlag(process.env.PAPERFLOW_ALLOW_FIXTURE_INPUT),
   });
+  const radarArtifactDir = radarProfile ? radarRunArtifactDir(REVIEW_ROOT, runId) : "";
   const sourceResult = Array.isArray(candidateSource)
     ? {
         sourceSelection: { ok: true, research_domain: "local", primary_sources: ["local_import"], supplemental_sources: [], enabled_sources: ["local_import"], require_manual_confirmation: false, warnings: [] },
@@ -262,11 +274,12 @@ export async function runResearchOsPipeline({
         root: ROOT,
         pubmedPmcConfig,
         now,
-        pipeDir,
-        profile: "weekly",
+        pipeDir: radarProfile ? radarArtifactDir : pipeDir,
+        profile: radarProfile ? "radar" : "weekly",
         sourceStateRoot: process.env.PAPERECHO_SOURCE_STATE_ROOT || path.join(RESEARCH_ROOT, "source_state"),
+        deferCommit: radarProfile,
       });
-  const { sourceSelection, sourceCollectionSummary, rss, db, openalex, retrievalAuditPath = "" } = sourceResult;
+  const { sourceSelection, sourceCollectionSummary, rss, db, openalex, retrievalAuditPath = "", retrievalTransaction = null } = sourceResult;
   const rssEnabled = sourceSelection.enabled_sources?.includes("rss") ?? false;
   const pubmedEnabled = sourceSelection.enabled_sources?.includes("pubmed_pmc") ?? false;
   const openalexEnabled = sourceSelection.enabled_sources?.includes("openalex") ?? false;
@@ -304,11 +317,16 @@ export async function runResearchOsPipeline({
     source_collection_summary: sourceCollectionSummary,
   };
 
+  const rawCandidates = [...rss.items, ...db.items, ...openalex.items];
+  const radarPreparation = radarProfile
+    ? await prepareRadarCandidatePool({ projectRoot: ROOT, reviewRoot: REVIEW_ROOT, runId, currentCandidates: rawCandidates })
+    : null;
+  const dedupeInput = radarPreparation?.candidates || rawCandidates;
   const dedupeStarted = Date.now();
-  const dedupeResult = dedupWithDiagnostics([...rss.items, ...db.items, ...openalex.items]);
+  const dedupeResult = dedupWithDiagnostics(dedupeInput);
   const merged = dedupeResult.items;
   const dedupSummary = buildStage1DedupSummary({
-    inputItems: [...rss.items, ...db.items, ...openalex.items],
+    inputItems: dedupeInput,
     dedupedItems: merged,
     dedupDiagnostics: dedupeResult.diagnostics,    dedupKeyStrategy: "doi > pmid > pmcid > url > normalized_title",
   });
@@ -374,6 +392,7 @@ export async function runResearchOsPipeline({
 
   const workflowRulesForQualityGate = loadWorkflowRules();
   const llmReviewConfig = { ...(workflowRulesForQualityGate?.config?.llm_review || {}) };
+  if (radarProfile) llmReviewConfig.eligible_rule_grades = ["A", "B", "C"];
   const llmRuntime = resolveLlmRuntime();
   const llmCachePath = path.join(pipeDir, "llm_cache.json");
   let maxGradeReviewItemsSource = "default";
@@ -476,7 +495,7 @@ export async function runResearchOsPipeline({
 
   // ─── Rule Suggestion Generation ──────────────────────────────────────
   const ruleSuggestionsStarted = Date.now();
-  const ruleSuggestionsReport = await runRuleSuggestionStep({
+  const ruleSuggestionsReport = radarProfile ? { status: "skipped", reason: "radar_profile", standards_rule_suggestions_count: 0 } : await runRuleSuggestionStep({
     reviewRoot: REVIEW_ROOT,
     root: ROOT,
     pipeDir,
@@ -487,7 +506,7 @@ export async function runResearchOsPipeline({
   report.steps.standards_rule_suggestions = ruleSuggestionsReport;
 
   // ─── Screening Standards Sync Summary ────────────────────────────────
-  const screeningStandardsSyncSummary = runScreeningStandardsSyncStep({
+  const screeningStandardsSyncSummary = radarProfile ? { status: "skipped", reason: "radar_profile" } : runScreeningStandardsSyncStep({
     ruleSuggestionsReport,
     manualStandardEvaluation: report.steps.manual_standard_evaluation,
     medQueryLearning: report.steps.med_query_learning,
@@ -516,6 +535,8 @@ export async function runResearchOsPipeline({
     translationCachePath: RUNTIME.translationCachePath,
     feedbackActionSink,
     normalizedFeedbackRows: normalizedFeedbackRows || [],
+    skipItemActions: radarProfile,
+    noWriteback: radarProfile,
   });
   lastKnownPhase = feedbackActionsResult.lastKnownPhase;
   const { writebackReady, triaged, abcAllItems, translationConfig } = feedbackActionsResult;
@@ -547,7 +568,7 @@ export async function runResearchOsPipeline({
     pipelineDir: pipeDir,
     mode: "completed",
     written: "planned",
-    retrievalWritten: Boolean(retrievalAuditPath),
+    retrievalWritten: radarProfile ? false : Boolean(retrievalAuditPath),
   });
   const finalArtifactWritesStarted = Date.now();
   await writeStage1CompletedArtifacts({
@@ -564,6 +585,20 @@ export async function runResearchOsPipeline({
     abcAllItems,
     preferenceAuditWithImpact,
   });
+  const radarResult = radarProfile ? await finalizeRadarStage1({
+    projectRoot: ROOT,
+    artifactDir: radarPreparation.artifactDir,
+    runId,
+    triagedItems: triagedAll,
+    llmGradeReport,
+    retrievalTransaction,
+    paths: radarPreparation.paths,
+  }) : null;
+  if (radarResult) {
+    report.profile = "radar";
+    report.steps.radar = radarResult.audit;
+    report.radar_artifact_path = radarResult.auditPath;
+  }
   recordTiming("final_artifact_writes", finalArtifactWritesStarted, {
     artifact_count_before_final_report: 11,
   });
@@ -589,12 +624,12 @@ export async function runResearchOsPipeline({
     pipelineDir: pipeDir,
     mode: "completed",
     written: true,
-    retrievalWritten: Boolean(retrievalAuditPath),
+    retrievalWritten: radarProfile ? Boolean(radarResult?.audit?.watermarkCommitted) : Boolean(retrievalAuditPath),
   });
   await fs.writeFile(path.join(pipeDir, "run_report.json"), JSON.stringify(report, null, 2), "utf8");
 
   console.log(JSON.stringify({ ok: true, output_dir: pipeDir, counts: report.counts, connector_ok: report.steps.connector.ok }, null, 2));
-  return { ok: true, pipeDir, report, triagedAll, writebackReady, abcAllItems };
+  return { ok: true, pipeDir, report, triagedAll, writebackReady, abcAllItems, radar: radarResult };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {

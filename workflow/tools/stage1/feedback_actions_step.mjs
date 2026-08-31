@@ -38,12 +38,16 @@ export async function runFeedbackActionsAndWriteback({
   translationCachePath,
   feedbackActionSink = null,
   normalizedFeedbackRows = [],
+  skipItemActions = false,
+  noWriteback = false,
 }) {
   const { recordTiming, flushTimingDiagnostics, lastKnownPhase } = timingContext;
 
   // Feedback item actions
   const applyItemActions = /^(1|true|yes)$/i.test(String(process.env.APPLY_FEEDBACK_ITEM_ACTIONS ?? "true"));
-  const feedbackItemActionsResult = typeof feedbackActionSink === "function"
+  const feedbackItemActionsResult = skipItemActions
+    ? { feedbackItemActionsReport: { status: "skipped", reason: "radar_profile", planned_actions_count: 0, executed_actions_count: 0, feedback_used_for_item_actions: false, feedback_item_actions_default_enabled: false, feedback_item_actions_mode: "disabled", collection_scope_blocked_count: 0, collection_scope_blocked_samples: [] }, lastKnownPhase }
+    : typeof feedbackActionSink === "function"
     ? {
         feedbackItemActionsReport: await feedbackActionSink(normalizedFeedbackRows),
         lastKnownPhase,
@@ -76,7 +80,9 @@ export async function runFeedbackActionsAndWriteback({
 
   // Writeback preparation
   const translationCache = await loadTranslationCache(translationCachePath);
-  const writebackReadyArtifact = buildWritebackReadyArtifact(triagedAll, { translationCache, exportLimit });
+  const writebackReadyArtifact = noWriteback
+    ? { items: [] }
+    : buildWritebackReadyArtifact(triagedAll, { translationCache, exportLimit });
   const writebackReady = writebackReadyArtifact.items;
 
   // Update triage summary
@@ -90,7 +96,7 @@ export async function runFeedbackActionsAndWriteback({
   report.steps.triage.triage_summary = updatedTriageSummary;
 
   const triaged = writebackReady;
-  const abcAllItems = triagedAll.filter((it) => it && it.grade && it.grade !== "D" && it.pre_llm_skip_writeback !== true);
+  const abcAllItems = noWriteback ? [] : triagedAll.filter((it) => it && it.grade && it.grade !== "D" && it.pre_llm_skip_writeback !== true);
   const translationConfig = getTranslationConfig();
 
   return {

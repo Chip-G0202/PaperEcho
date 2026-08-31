@@ -408,6 +408,18 @@ function startupRuntimeConfig() {
   };
 }
 
+async function claimFixtureScheduleDecision({ weeklyDue, runId }) {
+  return {
+    decision: weeklyDue ? "weekly_takeover" : "radar",
+    businessRunId: runId,
+    duplicateTrigger: false,
+  };
+}
+
+function runStartupFixture(options) {
+  return runZoteroLiteratureFilter({ scheduleDecisionClaimer: claimFixtureScheduleDecision, ...options });
+}
+
 function scheduledRunMode() {
   return {
     triggerMode: "scheduled",
@@ -484,7 +496,7 @@ describe("runZoteroLiteratureFilter startup bootstrap", () => {
       review_results_RUN_INTERVAL_DAYS: "2",
       review_results_FORCE_RUN: undefined,
       FORCE_review_results_RUN: undefined,
-    }, () => runZoteroLiteratureFilter({
+    }, () => runStartupFixture({
         config: startupRuntimeConfig(),
         triggerMode: "scheduled",
         runMode: scheduledRunMode(),
@@ -534,7 +546,7 @@ describe("runZoteroLiteratureFilter startup bootstrap", () => {
     const report = await withEnv({
       review_results_FORCE_RUN: undefined,
       FORCE_review_results_RUN: undefined,
-    }, () => runZoteroLiteratureFilter({
+    }, () => runStartupFixture({
         config: startupRuntimeConfig(),
         triggerMode: "manual",
         runMode: manualRunMode(),
@@ -569,7 +581,7 @@ describe("runZoteroLiteratureFilter startup bootstrap", () => {
     const report = await withEnv({
       review_results_FORCE_RUN: "true",
       FORCE_review_results_RUN: undefined,
-    }, () => runZoteroLiteratureFilter({
+    }, () => runStartupFixture({
         config: startupRuntimeConfig(),
         triggerMode: "scheduled",
         runMode: forceScheduledRunMode(),
@@ -601,7 +613,7 @@ describe("runZoteroLiteratureFilter startup bootstrap", () => {
   it("records scheduled due-run diagnostics before continuing existing path", async () => {
     const testStartedAt = new Date("2026-06-04T07:17:00.000Z");
 
-    const report = await runZoteroLiteratureFilter({
+    const report = await runStartupFixture({
       config: startupRuntimeConfig(),
       triggerMode: "scheduled",
       runMode: scheduledRunMode(),
@@ -631,7 +643,7 @@ describe("runZoteroLiteratureFilter startup bootstrap", () => {
   });
 
   it("records no-previous-run diagnostics without reporting interval skip", async () => {
-    const report = await runZoteroLiteratureFilter({
+    const report = await runStartupFixture({
       config: startupRuntimeConfig(),
       triggerMode: "scheduled",
       runMode: scheduledRunMode(),
@@ -662,7 +674,7 @@ describe("runZoteroLiteratureFilter startup bootstrap", () => {
     let capturedReport = null;
     const testStartedAt = new Date("2026-06-04T07:17:00.000Z");
 
-    const report = await runZoteroLiteratureFilter({
+    const report = await runStartupFixture({
       config: startupRuntimeConfig(),
       triggerMode: "scheduled",
       runMode: scheduledRunMode(),
@@ -705,7 +717,7 @@ describe("runZoteroLiteratureFilter startup bootstrap", () => {
       review_results_DRY_RUN: "true",
       review_results_FORCE_RUN: undefined,
       FORCE_review_results_RUN: undefined,
-    }, () => runZoteroLiteratureFilter({
+    }, () => runStartupFixture({
         config: startupRuntimeConfig(),
         triggerMode: "manual",
         runMode: manualRunMode(),
@@ -761,7 +773,7 @@ describe("runZoteroLiteratureFilter startup bootstrap", () => {
   });
 
   it("reports startup failureClass for automation fallback decisions", async () => {
-    const report = await runZoteroLiteratureFilter({
+    const report = await runStartupFixture({
       config: startupRuntimeConfig(),
       triggerMode: "scheduled",
       runMode: scheduledRunMode(),
@@ -789,7 +801,7 @@ describe("runZoteroLiteratureFilter startup bootstrap", () => {
 
   it("reports stage1_artifact_reason=stage1_artifacts_missing when writeback_ready_items.json does not exist", async () => {
     const testStartedAt = new Date("2026-06-04T07:17:00.000Z");
-    const report = await runZoteroLiteratureFilter({
+    const report = await runStartupFixture({
       config: startupRuntimeConfig(),
       triggerMode: "scheduled",
       runMode: scheduledRunMode(),
@@ -820,7 +832,7 @@ describe("runZoteroLiteratureFilter startup bootstrap", () => {
 
   it("reports stage1_artifact_reason=stage1_artifacts_stale when writeback_ready_items.json is stale", async () => {
     const testStartedAt = new Date("2026-06-04T07:17:00.000Z");
-    const report = await runZoteroLiteratureFilter({
+    const report = await runStartupFixture({
       config: startupRuntimeConfig(),
       triggerMode: "scheduled",
       runMode: scheduledRunMode(),
@@ -851,7 +863,7 @@ describe("runZoteroLiteratureFilter startup bootstrap", () => {
 
   it("reports stage1_artifact_reason=stage1_internal_skip when run_skip_report.json confirms skip", async () => {
     const testStartedAt = new Date("2026-06-04T07:17:00.000Z");
-    const report = await runZoteroLiteratureFilter({
+    const report = await runStartupFixture({
       config: startupRuntimeConfig(),
       triggerMode: "scheduled",
       runMode: scheduledRunMode(),

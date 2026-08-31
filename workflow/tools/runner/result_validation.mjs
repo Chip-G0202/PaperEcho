@@ -93,12 +93,21 @@ export async function validateProductionResult({ options, plan, processResult, f
     if (report.status !== "completed") return { ok: false, reason: "resume_incomplete", runId, recoveryStatus: report.status, exitCode: 6 };
     return { ok: true, exitCode: 0, runId, resume: true, manifest: { schemaVersion: manifest.schemaVersion, status: manifest.status, pipelineMode: manifest.pipelineMode }, recoveryStatus: report.status };
   }
+  const radarProfile = options.profile === "radar";
   const stages = stageSummary(options.mode, report);
   if (Object.values(stages).includes("FAILED") || Object.values(stages).includes("MISSING")) return { ok: false, reason: "required_stage_failed", runId, stages, exitCode: 6 };
   const stage5 = stage5State(report);
-  if (!["SENT", "SKIPPED"].includes(stage5) || ((plan.emailRequested || options.email) && stage5 !== "SENT")) return { ok: false, reason: "stage5_requirement_failed", runId, stages, stage5, exitCode: 6 };
+  const stage5Accepted = radarProfile
+    ? ["ACCEPTED", "SKIPPED"].includes(stage5)
+    : ["SENT", "SKIPPED"].includes(stage5) && (!(plan.emailRequested || options.email) || stage5 === "SENT");
+  if (!stage5Accepted) return { ok: false, reason: "stage5_requirement_failed", runId, stages, stage5, exitCode: 6 };
   const xlsxRegistered = (manifest.artifacts || []).some((artifact) => artifact.kind === "weekly_export" && artifact.retention === "30d");
-  if (!xlsxRegistered) return { ok: false, reason: "xlsx_not_registered", runId, exitCode: 6 };
+  if (radarProfile && xlsxRegistered) return { ok: false, reason: "radar_xlsx_registered", runId, exitCode: 6 };
+  if (!radarProfile && !xlsxRegistered) return { ok: false, reason: "xlsx_not_registered", runId, exitCode: 6 };
+  const radarAudit = report?.artifacts?.radar_audit;
+  if (radarProfile && (!radarAudit?.currentRun || radarAudit?.data?.zoteroWriteCount !== 0 || radarAudit?.data?.xlsxWriteCount !== 0)) {
+    return { ok: false, reason: "radar_audit_unverified", runId, exitCode: 6 };
+  }
   const llmEvidence = options.requireLlm ? inspectLlmEvidence(report) : null;
   if (options.requireLlm && (!llmEvidence.observed || llmEvidence.fallback)) return { ok: false, reason: "real_llm_result_unverified_or_fallback", runId, exitCode: 6 };
   const housekeeping = report.housekeeping || {};
@@ -110,7 +119,7 @@ export async function validateProductionResult({ options, plan, processResult, f
     stages,
     stage5,
     xlsxRegistered,
-    monthly: monthlyState(options.mode, report),
+    monthly: radarProfile ? "NOT_APPLICABLE" : monthlyState(options.mode, report),
     housekeeping: { warnings: housekeeping.warnings || [] },
     ephemeralCleanup: {
       failedCount: Number(housekeeping.immediateFailedCount || 0),

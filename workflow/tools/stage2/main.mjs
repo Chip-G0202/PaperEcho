@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { assertProfileCapability, runtimeProfile } from "../lib/profile_capabilities.mjs";
 import {
   cleanupSignatureTags,
 } from "../lib/writeback_support.mjs";
@@ -117,6 +118,7 @@ export async function migrateRatedItems({ rootKey, worthyKey, now, zoteroBackend
   });
 }
 export async function runZoteroWriteback({ argv = process.argv, recovery = null, launchDesktop } = {}) {
+  assertProfileCapability(runtimeProfile(), "zoteroWrite");
   // Rebuild runtime config to pick up any env var changes (e.g., ZOTERO_PROJECT_ROOT)
   const RUNTIME = buildRuntimeConfig({ argv });
   const ROOT = RUNTIME.projectRoot;

@@ -27,7 +27,11 @@ export async function createRunRecoveryCoordinator({ runRoot, runId, mode, profi
     configHash,
     inputHash,
     artifactPath,
-    stages: mode === "local" ? ["stage1", "state_persist", "stage4_exports", "stage5_notification"] : ["stage1", "stage2_writeback", "stage3_translation", "stage4_exports", "stage5_notification"],
+    stages: profile === "radar"
+      ? ["stage1", "stage2_writeback", "stage3_translation", "stage4_exports", "stage5_notification"]
+      : mode === "local"
+        ? ["stage1", "state_persist", "stage4_exports", "stage5_notification"]
+        : ["stage1", "stage2_writeback", "stage3_translation", "stage4_exports", "stage5_notification"],
   }, dependencies);
   return new RunRecoveryCoordinator(store, dependencies);
 }

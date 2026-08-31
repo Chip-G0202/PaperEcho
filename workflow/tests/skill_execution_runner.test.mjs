@@ -94,6 +94,7 @@ test("launcher passes spaced arguments as an argv array without shell and preser
 test("runner argument parser enforces one action and resolves Local paths from invocation cwd", () => {
   const parsed = parseRunnerArgs(["--mode", "local", "--run", "--input", "folder/input.json", "--output-root", "out folder"], { cwd: "C:\\invocation" });
   assert.equal(parsed.profile, "standard");
+  assert.equal(parseRunnerArgs(["--mode", "desktop", "--run", "--profile", "radar"]).profile, "radar");
   assert.equal(parsed.input, path.resolve("C:\\invocation", "folder/input.json"));
   assert.throws(() => parseRunnerArgs(["--mode", "web", "--check", "--run"]), /EXACTLY_ONE/);
   assert.throws(() => parseRunnerArgs(["--mode", "desktop", "--run", "--input", "x"]), /LOCAL_ARGUMENT/);
@@ -179,6 +180,26 @@ test("preflight resolves the shared Stage0 entry for Desktop/Web and Local entry
   assert.equal(local.canRun, true);
 });
 
+test("Radar preflight keeps the shared Stage0 entry without requiring a Zotero backend", async (t) => {
+  const paths = await fixture();
+  t.after(() => fs.rm(paths.root, { recursive: true, force: true }));
+  let desktopChecks = 0;
+  const radar = await runPreflight(
+    { ...localOptions(paths), mode: "desktop", input: "", outputRoot: "", llmMode: "", profile: "radar" },
+    {
+      env: {},
+      entries: entries(paths.entry),
+      existsSync: (value) => value === paths.entry,
+      desktopApplicationImpl: () => { desktopChecks += 1; return "zotero"; },
+      findExecutableImpl: () => { desktopChecks += 1; return "zotero-cli"; },
+      resolveLlmRuntimeImpl: () => ({ apiKeyConfigured: false }),
+    },
+  );
+  assert.equal(radar.canRun, true);
+  assert.equal(desktopChecks, 0);
+  assert.equal(radar.readiness.some((item) => item.name === "radar_no_writeback" && item.status === "ready"), true);
+});
+
 test("Local preflight ignores poisoned Zotero config and plan strips Zotero backend variables", async (t) => {
   const paths = await fixture();
   t.after(() => fs.rm(paths.root, { recursive: true, force: true }));
@@ -262,6 +283,32 @@ test("result validation reads only the exact current run-group and reports NOT_D
   assert.equal(result.xlsxRegistered, true);
   assert.deepEqual(reads, [path.join(plan.runRoot, report.runId, "run_group.json")]);
   assert.deepEqual(result.housekeeping.warnings, ["fixture warning"]);
+});
+
+test("Radar current-run validation requires a fresh zero-write audit and no weekly export", async () => {
+  const runId = "radar-run-1";
+  const report = {
+    runId,
+    status: "completed",
+    stages: [
+      { name: "stage1", exitCode: 0, status: "success" },
+      { name: "stage2_writeback", exitCode: 0, status: "skipped" },
+      { name: "stage3_translation", exitCode: 0, status: "skipped" },
+      { name: "stage4_exports", exitCode: 0, status: "skipped" },
+    ],
+    steps: { stage5_notification: { status: "accepted" } },
+    artifacts: { radar_audit: { currentRun: true, data: { zoteroWriteCount: 0, xlsxWriteCount: 0 } } },
+    housekeeping: {},
+  };
+  const manifest = { schemaVersion: 1, runId, pipelineMode: "desktop", status: "completed", artifacts: [{ kind: "run_state", retention: "30d" }] };
+  const base = { options: { mode: "desktop", profile: "radar" }, plan: { runRoot: "runs" }, fsApi: { async readFile() { return JSON.stringify(manifest); } } };
+  const accepted = await validateProductionResult({ ...base, processResult: { code: 0, signal: null, stdout: JSON.stringify(report) } });
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.xlsxRegistered, false);
+  assert.equal(accepted.monthly, "NOT_APPLICABLE");
+  report.steps.stage5_notification.status = "unknown";
+  const unknown = await validateProductionResult({ ...base, processResult: { code: 0, signal: null, stdout: JSON.stringify(report) } });
+  assert.equal(unknown.reason, "stage5_requirement_failed");
 });
 
 test("Local validation marks Stage2/3 and Zotero NOT_APPLICABLE", async () => {

@@ -12,4 +12,4 @@ export const EXIT_CODES = Object.freeze({
 });
 
 export const MODES = new Set(["desktop", "web", "local"]);
-export const PROFILES = new Set(["standard", "complete"]);
+export const PROFILES = new Set(["standard", "complete", "radar"]);

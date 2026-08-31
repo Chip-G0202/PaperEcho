@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { assertProfileCapability, runtimeProfile } from "../lib/profile_capabilities.mjs";
 
 import "../lib/env_file_bootstrap.mjs";
 import { ensureZoteroBackendReady } from "../lib/ensure_zotero_backend_ready.mjs";
@@ -44,6 +45,7 @@ async function ensureZoteroBackendReadyForBackfill() {
 }
 
 export async function runZoteroTranslationBackfill({ argv = process.argv, recovery = null } = {}) {
+  assertProfileCapability(runtimeProfile(), "zoteroWrite");
   const stageStarted = Date.now();
   await ensureZoteroBackendReadyForBackfill();
   const dateStr = fmtDateRfc(TODAY);
