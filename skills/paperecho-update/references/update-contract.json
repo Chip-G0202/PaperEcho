@@ -42,6 +42,7 @@
     "sourceStateSchemaVersions": [1],
     "operationLedgerSchemaVersions": [1],
     "notificationReceiptSchemaVersions": [1, 2],
+    "literatureIndexSchemaVersions": [2],
     "updaterStateSchemaVersions": [1]
   },
   "runtime": {

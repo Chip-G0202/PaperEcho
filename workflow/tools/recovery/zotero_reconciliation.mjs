@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 
 import { getLiteratureIdentityKeys } from "../lib/literature_identity.mjs";
-import { normalizeLiveIndexItem, readZoteroLibraryIndex, writeZoteroLibraryIndex } from "../lib/zotero_library_index_store.mjs";
+import { normalizeLiveIndexItem, readZoteroLibraryIndex, updateIntegrityMonitoringState, writeZoteroLibraryIndex } from "../lib/zotero_library_index_store.mjs";
 import { createZoteroBackendClient } from "../lib/zotero_backend_client.mjs";
 import { buildCreateItemRequest } from "../stage2/item_payload.mjs";
 import { hashFile } from "./operation_ledger.mjs";
@@ -213,6 +213,44 @@ export async function buildZoteroRecoveryReconcilers({ store, artifact, exportEx
     async execute() { throw new Error("RECOVERY_COLLECTION_ENSURE_RETRY_REQUIRES_STAGE2_RECEIPT"); },
     async verify(operation) { return this.observe(operation); },
   };
+  const tagAdd = {
+    async observe(operation) {
+      const key = resolveOperationItemKey(operation, store);
+      const item = await readItem(adapter, key);
+      if (!item) return { state: "conflict", evidence: { itemKey: key, reason: "item_missing" } };
+      const tags = new Set((item.data?.tags || item.tags || []).map((tag) => String(tag?.tag || tag?.name || tag)));
+      return tags.has(String(operation.target.tag)) ? { state: "match", evidence: { itemKey: key, tag: operation.target.tag, version: itemVersion(item) } } : { state: "absent", evidence: { itemKey: key, version: itemVersion(item) } };
+    },
+    async execute(operation) {
+      const key = resolveOperationItemKey(operation, store);
+      const raw = await adapter.writeTagsBatch([{ action: "add", itemKey: key, tags: [operation.target.tag] }], { stage: "recovery_integrity_tag" });
+      if ((raw?.failed || []).length || (raw?.missing || []).length) throw new Error(raw.failed?.[0]?.error || "RECOVERY_INTEGRITY_TAG_FAILED");
+      return { evidence: { itemKey: key, tag: operation.target.tag } };
+    },
+    async verify(operation) { return this.observe(operation); },
+  };
+  const integrityStateCommit = {
+    async observe(operation) {
+      const read = await readZoteroLibraryIndex(operation.target.path);
+      if (!read.usable) return { state: "conflict", evidence: { reason: read.reason } };
+      const application = read.index.records?.[operation.target.canonicalId]?.integrity?.application || {};
+      const expectedState = operation.intent?.applicationState || "applied";
+      const stateMatches = expectedState === "pending_delete" ? ["pending_delete", "applied"].includes(application.state) : application.state === expectedState;
+      return application.targetFingerprint === operation.intent?.targetFingerprint && stateMatches
+        ? { state: "match", evidence: { canonicalId: operation.target.canonicalId, targetFingerprint: application.targetFingerprint } }
+        : { state: "absent", evidence: { canonicalId: operation.target.canonicalId } };
+    },
+    async execute(operation) {
+      const read = await readZoteroLibraryIndex(operation.target.path);
+      if (!read.usable) throw new Error(`INTEGRITY_INDEX_UNUSABLE:${read.reason}`);
+      const record = read.index.records?.[operation.target.canonicalId];
+      if (!record?.integrity) throw new Error("INTEGRITY_RECORD_MISSING");
+      const result = await updateIntegrityMonitoringState(operation.target.path, { recordUpdates: [{ canonicalId: operation.target.canonicalId, integrity: { ...record.integrity, application: { targetFingerprint: operation.intent.targetFingerprint, state: operation.intent.applicationState || "applied", lastAppliedAt: new Date().toISOString(), ledgerOperationId: operation.idempotencyKey } } }] });
+      if (!result.ok) throw new Error(`INTEGRITY_STATE_COMMIT_FAILED:${result.reason}`);
+      return { evidence: { canonicalId: operation.target.canonicalId, targetFingerprint: operation.intent.targetFingerprint } };
+    },
+    async verify(operation) { return this.observe(operation); },
+  };
   const radarQueueConsume = {
     async observe(operation) {
       try {
@@ -257,6 +295,8 @@ export async function buildZoteroRecoveryReconcilers({ store, artifact, exportEx
     zotero_collection_add: membership(true),
     zotero_collection_remove: membership(false),
     zotero_metadata: metadata,
+    zotero_tag_add: tagAdd,
+    integrity_state_commit: integrityStateCommit,
     shared_index: sharedIndex,
     radar_queue_consume: radarQueueConsume,
     export: exportReconciler,

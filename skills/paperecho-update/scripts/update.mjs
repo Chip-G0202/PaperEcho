@@ -397,16 +397,17 @@ export async function validateCompatibility(root, contract) {
     ["config/paperecho.config.json", "configSchemaVersions"],
     ["review_results/source_state.json", "sourceStateSchemaVersions"],
     ["review_results/operation_ledger.json", "operationLedgerSchemaVersions"],
-    ["review_results/notification_receipt.json", "notificationReceiptSchemaVersions"],
+    ["review_results/notification_receipt.json", "notificationReceiptSchemaVersions", "schemaVersion"],
+    ["review_results/shared/current_literature_index.json", "literatureIndexSchemaVersions", "schema_version"],
   ];
   const checked = [];
-  for (const [relative, key] of probes) {
+  for (const [relative, key, versionField = "schemaVersion"] of probes) {
     const file = path.join(root, ...relative.split("/"));
     if (!existsSync(file)) continue;
     const stat = await fs.stat(file);
     if (stat.size > 1024 * 1024) throw Object.assign(new Error(`STATE_TOO_LARGE_${relative}`), { code: "state_unverifiable" });
     const value = JSON.parse(await fs.readFile(file, "utf8"));
-    if (!contract.compatibility[key].includes(value.schemaVersion)) throw Object.assign(new Error(`SCHEMA_INCOMPATIBLE_${relative}`), { code: "schema_incompatible" });
+    if (!Array.isArray(contract.compatibility[key]) || !contract.compatibility[key].includes(value[versionField])) throw Object.assign(new Error(`SCHEMA_INCOMPATIBLE_${relative}`), { code: "schema_incompatible" });
     checked.push(relative);
   }
   return { compatible: true, checked };

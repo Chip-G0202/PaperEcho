@@ -71,20 +71,23 @@ export async function addItemToWorthyCollectionWithGuard({
   collectionScopeBlocks = null,
   apply = true,
   dryRun = !apply,
+  role = "worthy_target",
+  phase = "add_to_worthy",
+  verify = false,
 } = {}) {
   const callZotero = zoteroBackendCall || mcpToolCall;
   const contractBackend = zoteroBackend || callZotero?.adapter || null;
   const operation = {
     action: "add_items_to_collection",
-    role: "worthy_target",
-    phase: "add_to_worthy",
+    role,
+    phase,
     collectionKey: worthyKey,
     itemKey,
     itemKeys: [itemKey],
   };
   let contractResult = null;
   const guardCheck = collectionGuard
-    ? collectionGuard.checkCollectionKey(worthyKey, { action: "add_items_to_collection", role: "worthy_target" })
+    ? collectionGuard.checkCollectionKey(worthyKey, { action: "add_items_to_collection", role })
     : { ok: true };
 
   const result = await runGuardedBulkWritebackMutation({
@@ -96,7 +99,7 @@ export async function addItemToWorthyCollectionWithGuard({
       if (typeof contractBackend?.addItemsToCollections === "function") {
         const operations = [{ collectionKey: op.collectionKey, itemKeys: op.itemKeys, role: op.role, phase: op.phase }];
         try {
-          const raw = await contractBackend.addItemsToCollections(operations, { verify: false, stage: "stage2_worthy_migration_add", id });
+          const raw = await contractBackend.addItemsToCollections(operations, { verify, stage: phase, id });
           const applied = [
             ...(Array.isArray(raw?.added) ? raw.added : []),
             ...(Array.isArray(raw?.already) ? raw.already : []),
@@ -131,7 +134,7 @@ export async function addItemToWorthyCollectionWithGuard({
       itemKey: failure.itemKey || itemKey,
       collectionKey: failure.collectionKey || worthyKey,
       error: failure.error || "add_items_to_collection_failed",
-      phase: "add_to_worthy",
+      phase,
       operation,
       blocked: Boolean(failure.blocked),
       missing: Boolean(failure.missing),
@@ -143,7 +146,7 @@ export async function addItemToWorthyCollectionWithGuard({
       if (failure.blocked) {
         return recordCollectionScopeBlock(collectionScopeBlocks, guardCheck, {
           itemKey,
-          phase: "add_to_worthy",
+          phase,
           error: `collection_scope_blocked:${guardCheck?.reason || "guard_blocked"}`,
         });
       }
@@ -161,6 +164,15 @@ export async function addItemToWorthyCollectionWithGuard({
   return result;
 }
 
+export async function addItemToCollectionWithGuard(options = {}) {
+  return addItemToWorthyCollectionWithGuard({
+    ...options,
+    worthyKey: options.collectionKey || options.worthyKey,
+    role: options.role || "managed_collection",
+    phase: options.phase || "add_to_collection",
+  });
+}
+
 export async function writeTagSetWithGuard({
   itemKey = "",
   tags = [],
@@ -171,12 +183,14 @@ export async function writeTagSetWithGuard({
   apply = true,
   dryRun = !apply,
   guardCheck = { ok: true },
+  action = "set",
+  phase = "tag_cleanup",
 } = {}) {
   const callZotero = zoteroBackendCall || mcpToolCall;
   const contractBackend = zoteroBackend || callZotero?.adapter || null;
   const operation = {
     action: "write_tag",
-    tagAction: "set",
+    tagAction: action,
     itemKey,
     tags: Array.isArray(tags) ? tags : [],
   };
@@ -189,9 +203,9 @@ export async function writeTagSetWithGuard({
     guardCheck,
     writer: async (op) => {
       if (typeof contractBackend?.writeTagsBatch === "function") {
-        const operations = [{ action: "set", itemKey: op.itemKey, tags: op.tags }];
+        const operations = [{ action, itemKey: op.itemKey, tags: op.tags }];
         try {
-          const raw = await contractBackend.writeTagsBatch(operations, { stage: "stage2_tag_cleanup", id });
+          const raw = await contractBackend.writeTagsBatch(operations, { stage: phase, id });
           contractResult = normalizeStage2MembershipMutationResult({
             method: "writeTagsBatch",
             operations,
@@ -209,7 +223,7 @@ export async function writeTagSetWithGuard({
         return;
       }
       if (typeof callZotero !== "function") throw new Error("bulk_writeback_zotero_writer_required");
-      await callZotero("write_tag", { action: "set", itemKey: op.itemKey, tags: op.tags }, id);
+      await callZotero("write_tag", { action, itemKey: op.itemKey, tags: op.tags }, id);
     },
   });
 
@@ -220,7 +234,7 @@ export async function writeTagSetWithGuard({
     result.write_failures = contractResult.failures.map((failure) => ({
       itemKey: failure.itemKey || itemKey,
       error: failure.error || "write_tag_failed",
-      phase: "tag_cleanup",
+      phase,
       operation,
       blocked: Boolean(failure.blocked),
       missing: Boolean(failure.missing),
@@ -231,7 +245,7 @@ export async function writeTagSetWithGuard({
     result.write_failures = result.write_failures.map((failure) => ({
       itemKey: failure.itemKey || itemKey,
       error: failure.error,
-      phase: "tag_cleanup",
+      phase,
       operation: failure.operation,
       blocked: Boolean(failure.blocked),
       missing: Boolean(failure.missing),

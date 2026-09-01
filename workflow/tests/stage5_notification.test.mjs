@@ -206,6 +206,16 @@ test("report hides empty regions, preserves grade zeroes, and folds warnings", (
   assert.match(missing.html, /另有 1 条提醒/);
 });
 
+test("weekly report shows only current integrity changes and separates confirmed from applied", async () => {
+  const base = (await fixture()).summary;
+  const changed = formatStage5Report({ ...base, integrity: { newlyConfirmedRetractions: 2, appliedRetractions: 1, pendingDelete: 1, newCorrections: 1, newExpressionsOfConcern: 0, confirmedNotApplied: 0, unresolvedConflicts: 0 } });
+  assert.match(changed.text, /新确认撤稿：2 篇/);
+  assert.match(changed.text, /撤稿处置已应用：1 篇/);
+  assert.match(changed.text, /仍需继续清理：1 篇/);
+  const unchanged = formatStage5Report({ ...base, integrity: { newlyConfirmedRetractions: 0, appliedRetractions: 0, pendingDelete: 0, newCorrections: 0, newExpressionsOfConcern: 0, confirmedNotApplied: 0, unresolvedConflicts: 0 } });
+  assert.doesNotMatch(unchanged.text, /文献完整性变化/);
+});
+
 test("report turns review and pending-rule counts into concise action reminders", () => {
   const summary = {
     schemaVersion: 1, runId: "attention", pipelineMode: "local", status: "success",

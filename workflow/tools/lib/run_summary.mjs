@@ -74,6 +74,9 @@ export function buildRunSummary({
   outputRoot = "",
 } = {}) {
   const writeback = writebackSummary?.writeback_side_effect_summary || {};
+  const integrityWriteback = writebackSummary?.integrity || {};
+  const integrityReport = runReport?.steps?.literature_integrity || {};
+  const integrityResults = Array.isArray(integrityWriteback.results) ? integrityWriteback.results : [];
   return validateRunSummary({
     schemaVersion: RUN_SUMMARY_SCHEMA_VERSION,
     runId: String(runId || "").trim(),
@@ -96,6 +99,15 @@ export function buildRunSummary({
     attention: {
       humanReviewCount: finiteOrNull(humanReviewCount, runReport?.steps?.semantic_grading?.items_needing_human_review),
       pendingRuleCount: finiteOrNull(pendingRuleCount, runReport?.steps?.standards_rule_suggestions?.standards_rule_suggestions_pending_count),
+    },
+    integrity: {
+      newlyConfirmedRetractions: finiteOrNull(integrityReport.newly_confirmed_retraction_count) ?? 0,
+      newCorrections: finiteOrNull(integrityReport.new_correction_count) ?? 0,
+      newExpressionsOfConcern: finiteOrNull(integrityReport.new_expression_of_concern_count) ?? 0,
+      appliedRetractions: integrityResults.filter((item) => item.targetStatus === "retraction" && item.status === "applied").length,
+      pendingDelete: integrityResults.filter((item) => item.targetStatus === "retraction" && item.status === "pending_delete").length,
+      confirmedNotApplied: integrityResults.filter((item) => item.status === "confirmed_not_applied" || item.status === "blocked").length,
+      unresolvedConflicts: finiteOrNull(integrityReport.conflict_count) ?? 0,
     },
     artifacts: artifacts.filter((artifact) => MAIL_ARTIFACT_KINDS.has(artifact?.kind)),
     outputRoot: path.resolve(String(outputRoot || ".")),

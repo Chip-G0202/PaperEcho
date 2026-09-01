@@ -233,7 +233,7 @@ test("schema v2 enables only configured notification capabilities with safe defa
     common: {
       sourceState: { root: "source-state" },
       notifications: { failure: { enabled: true }, health: { enabled: true, consecutiveThreshold: 2 }, receiptStore: { root: "receipts", retryFailed: true, unknownPolicy: "hold" } },
-      radar: { enabled: true }, integrity: { enabled: true },
+      radar: { enabled: true }, integrity: { enabled: true, bootstrapBatchSize: 25, crossrefConcurrency: 2, pubmedBatchSize: 180, cacheTtlDays: 7 },
     },
   });
   await writeConfig(paths.configPath, config);
@@ -244,9 +244,12 @@ test("schema v2 enables only configured notification capabilities with safe defa
   assert.equal(resolved.env.PAPERECHO_NOTIFICATION_UNKNOWN_POLICY, "hold");
   assert.equal(resolved.env.SMTP_HOST, undefined);
   assert.equal(resolved.env.PAPERECHO_RADAR_ENABLED, "true");
-  assert.equal("PAPERECHO_INTEGRITY_ENABLED" in resolved.env, false);
-  assert.equal(resolved.warnings.length, 1);
-  assert.match(resolved.warnings[0], /integrity monitoring remains disabled/);
+  assert.equal(resolved.env.PAPERECHO_INTEGRITY_ENABLED, "true");
+  assert.equal(resolved.env.PAPERECHO_INTEGRITY_BOOTSTRAP_BATCH_SIZE, "25");
+  assert.equal(resolved.env.PAPERECHO_INTEGRITY_CROSSREF_CONCURRENCY, "2");
+  assert.equal(resolved.env.PAPERECHO_INTEGRITY_PUBMED_BATCH_SIZE, "180");
+  assert.equal(resolved.env.PAPERECHO_INTEGRITY_CACHE_TTL_DAYS, "7");
+  assert.equal(resolved.warnings.length, 0);
 });
 
 test("schema v2 canonical hash excludes secret values", async (t) => {

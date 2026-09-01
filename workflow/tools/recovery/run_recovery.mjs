@@ -144,6 +144,12 @@ export class RunRecoveryCoordinator {
     return this.stage2;
   }
 
+  async persistIntegrityPlan(plan = {}) {
+    const filePath = path.join(path.dirname(this.store.filePath), "integrity_plan.json");
+    await writeAtomicJson(filePath, plan, { fsApi: this.fsApi });
+    return filePath;
+  }
+
   async completeStage2({ summary, indexPath, failedCollectionItemKeys = [], onVerifiedWrites = null }) {
     if (!this.stage2) throw new Error("RECOVERY_STAGE2_NOT_PREPARED");
     const byIdentity = new Map(this.stage2.records.map((record) => [record.identity, record]));
@@ -275,6 +281,74 @@ export class RunRecoveryCoordinator {
     else {
       const current = this.store.ledger.operations.find((item) => item.idempotencyKey === operation.idempotencyKey);
       if (current.status === "started") await this.store.transition(current.idempotencyKey, "failed", { error: error || "COLLECTION_MUTATION_NOT_VERIFIED" });
+    }
+  }
+
+  async prepareIntegrityOperations({ plan = [], indexPath }) {
+    const records = [];
+    for (const entry of plan) {
+      const target = entry?.target || {};
+      if (!entry?.canonicalId || !target.required || target.blocked) {
+        records.push({ entry, operations: [], commit: null });
+        continue;
+      }
+      const operations = [];
+      let trashAdd = null;
+      let pendingCommit = null;
+      if (target.status === "retraction") {
+        trashAdd = await this.store.planOperation({
+          type: "zotero_collection_add", identity: entry.canonicalId,
+          target: { id: target.addCollectionId, collectionId: target.addCollectionId, itemKey: target.itemKey },
+          input: { role: "trash", itemKey: target.itemKey, collectionId: target.addCollectionId },
+          inputVersion: target.itemVersion || "backend_version_guard", intent: { role: "trash", integrity: true },
+        });
+        operations.push(trashAdd);
+        pendingCommit = await this.store.planOperation({
+          type: "integrity_state_commit", identity: entry.canonicalId,
+          target: { id: `${path.resolve(indexPath)}#${entry.canonicalId}:pending_delete`, path: path.resolve(indexPath), canonicalId: entry.canonicalId },
+          input: { targetFingerprint: target.targetFingerprint, status: target.status, applicationState: "pending_delete" },
+          inputVersion: entry.evidenceFingerprint || "integrity-evidence-v1", scope: "identity",
+          dependsOn: [trashAdd.idempotencyKey], intent: { targetFingerprint: target.targetFingerprint, status: target.status, applicationState: "pending_delete" },
+        });
+        for (const collectionId of target.removeCollectionIds || []) operations.push(await this.store.planOperation({
+          type: "zotero_collection_remove", identity: entry.canonicalId,
+          target: { id: collectionId, collectionId, itemKey: target.itemKey },
+          input: { role: "integrity_managed_removal", itemKey: target.itemKey, collectionId },
+          inputVersion: target.itemVersion || "backend_version_guard", dependsOn: [trashAdd.idempotencyKey], intent: { role: "integrity_managed_removal", integrity: true },
+        }));
+      }
+      for (const tag of target.addTags || []) operations.push(await this.store.planOperation({
+        type: "zotero_tag_add", identity: entry.canonicalId,
+        target: { id: `${target.itemKey}:tag:${tag}`, itemKey: target.itemKey, tag },
+        input: { itemKey: target.itemKey, tag }, inputVersion: target.itemVersion || "backend_version_guard",
+        dependsOn: trashAdd ? [trashAdd.idempotencyKey] : [], intent: { action: "add", tags: [tag], integrity: true },
+      }));
+      const commit = await this.store.planOperation({
+        type: "integrity_state_commit", identity: entry.canonicalId,
+        target: { id: `${path.resolve(indexPath)}#${entry.canonicalId}:applied`, path: path.resolve(indexPath), canonicalId: entry.canonicalId },
+        input: { targetFingerprint: target.targetFingerprint, status: target.status, applicationState: "applied" },
+        inputVersion: entry.evidenceFingerprint || "integrity-evidence-v1", scope: "identity",
+        dependsOn: operations.map((operation) => operation.idempotencyKey),
+        intent: { targetFingerprint: target.targetFingerprint, status: target.status, applicationState: "applied" },
+      });
+      records.push({ entry, operations, pendingCommit, commit });
+    }
+    return records;
+  }
+
+  async startOperation(operation) {
+    const current = this.store.ledger.operations.find((item) => item.idempotencyKey === operation.idempotencyKey);
+    if (current.status === "pending" || current.status === "failed") await this.store.transition(current.idempotencyKey, "started");
+    return this.store.ledger.operations.find((item) => item.idempotencyKey === operation.idempotencyKey);
+  }
+
+  async completeOperation(operation, ok, verification = {}, error = "") {
+    if (ok) await transitionToVerified(this.store, operation, { verification });
+    else {
+      const current = this.store.ledger.operations.find((item) => item.idempotencyKey === operation.idempotencyKey);
+      if (current.status === "pending") await this.store.transition(current.idempotencyKey, "started");
+      const started = this.store.ledger.operations.find((item) => item.idempotencyKey === operation.idempotencyKey);
+      if (started.status === "started") await this.store.transition(started.idempotencyKey, "failed", { error: error || "INTEGRITY_MUTATION_NOT_VERIFIED", verification });
     }
   }
 

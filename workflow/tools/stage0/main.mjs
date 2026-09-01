@@ -575,6 +575,12 @@ export async function runZoteroLiteratureFilter({
   if (recoveryCoordinator) {
     let artifactItems = Array.isArray(stage1Artifacts.data) ? stage1Artifacts.data : [];
     await recoveryCoordinator.persistArtifact(stage1Artifacts.data, artifactItems);
+    try {
+      const integrityPlan = await readJson(path.join(config.pipelineDir, "integrity_plan.json"));
+      if (integrityPlan?.schemaVersion === 1 && Array.isArray(integrityPlan.operations)) {
+        await recoveryCoordinator.persistIntegrityPlan(integrityPlan);
+      }
+    } catch {}
     if (!radarProfile) {
       const claimPreparation = await claimWeeklyRadarWritebackCandidates({ items: artifactItems, runId });
       artifacts.weekly_radar_claims = {
@@ -866,11 +872,17 @@ async function main() {
         beforeReconcile: async ({ store, artifact }) => {
           const items = Array.isArray(artifact) ? artifact : [];
           const hasRadarClaimIntent = items.some((item) => item?.weekly_radar_queue_claim_intent || item?.weekly_radar_queue_claim);
-          const hasStage2Operations = store.ledger.operations.some((operation) => ["zotero_item_create", "zotero_collection_add", "radar_queue_consume"].includes(operation.type));
-          if (!hasRadarClaimIntent || hasStage2Operations) return { artifact: items };
+          let hasIntegrityPlan = false;
+          try {
+            const plan = JSON.parse(await fs.readFile(path.join(path.dirname(store.filePath), "integrity_plan.json"), "utf8"));
+            hasIntegrityPlan = plan?.schemaVersion === 1 && Array.isArray(plan.operations) && plan.operations.length > 0;
+            if (hasIntegrityPlan) await fs.copyFile(path.join(path.dirname(store.filePath), "integrity_plan.json"), path.join(config.pipelineDir, "integrity_plan.json"));
+          } catch {}
+          const hasStage2Operations = store.ledger.operations.some((operation) => ["zotero_item_create", "zotero_collection_add", "zotero_collection_remove", "zotero_tag_add", "integrity_state_commit", "radar_queue_consume"].includes(operation.type));
+          if ((!hasRadarClaimIntent && !hasIntegrityPlan) || hasStage2Operations) return { artifact: items };
           const coordinator = new RunRecoveryCoordinator(store);
-          const claimPreparation = await claimWeeklyRadarWritebackCandidates({ items, runId: resumeRunId });
-          await coordinator.persistArtifact(claimPreparation.items, claimPreparation.items);
+          const claimPreparation = hasRadarClaimIntent ? await claimWeeklyRadarWritebackCandidates({ items, runId: resumeRunId }) : { items };
+          if (hasRadarClaimIntent) await coordinator.persistArtifact(claimPreparation.items, claimPreparation.items);
           await runZoteroWriteback({ argv: [...process.argv, `--input-file=${store.ledger.artifact.path}`], recovery: coordinator });
           return { artifact: claimPreparation.items };
         },

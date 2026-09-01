@@ -68,11 +68,11 @@ function responseHeader(response, name) {
   return response?.headers?.get?.(name) || "";
 }
 
-export async function fetchResponse(url, { timeoutMs = 15000, headers = {}, fetchImpl = globalThis.fetch } = {}) {
+export async function fetchResponse(url, { timeoutMs = 15000, headers = {}, method = "GET", body, fetchImpl = globalThis.fetch } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(url, { signal: controller.signal, redirect: "follow", headers });
+    const response = await fetchImpl(url, { signal: controller.signal, redirect: "follow", headers, method, ...(body === undefined ? {} : { body }) });
     if (!response.ok && response.status !== 304) {
       const error = new Error(`HTTP_${response.status}`);
       error.status = response.status;
@@ -80,14 +80,14 @@ export async function fetchResponse(url, { timeoutMs = 15000, headers = {}, fetc
       error.backoffMs = parseServerDelayMs(responseHeader(response, "Backoff"));
       throw error;
     }
-    const body = response.status === 304 ? "" : await response.text();
-    return { ok: response.ok, status: response.status, headers: response.headers, text: async () => body };
+    const responseBody = response.status === 304 ? "" : await response.text();
+    return { ok: response.ok, status: response.status, headers: response.headers, text: async () => responseBody };
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function fetchResponseWithRetry(url, options = {}, attempts = 3) {
+export async function fetchResponseWithRetry(url, options = {}, attempts = 3) {
   let lastError;
   const retryDelayMs = options.retryDelayMs ?? (options.fetchImpl === globalThis.fetch ? 600 : 0);
   const concurrencyController = options.concurrencyController || null;
@@ -340,6 +340,22 @@ export function parseNcbiDetails(xml, database) {
   }
   const root = document?.PubmedArticleSet || document;
   return [...asArray(root?.PubmedArticle), ...asArray(root?.PubmedBookArticle)].map(pubmedRecord);
+}
+
+export function parsePubMedIntegrityRecords(xml) {
+  const document = parseXml(xml, "PUBMED_INTEGRITY");
+  const root = document?.PubmedArticleSet || document;
+  return [...asArray(root?.PubmedArticle), ...asArray(root?.PubmedBookArticle)].map((article) => {
+    const citation = article?.MedlineCitation || article?.BookDocument || {};
+    const identifiers = article?.PubmedData?.ArticleIdList?.ArticleId;
+    const pmid = xmlText(citation.PMID) || articleId(identifiers, "pubmed");
+    const relations = asArray(citation?.CommentsCorrectionsList?.CommentsCorrections).map((relation) => ({
+      refType: cleanText(relation?.["@_RefType"]),
+      targetPmid: xmlText(relation?.PMID),
+      note: xmlText(relation?.Note),
+    })).filter((relation) => relation.refType || relation.targetPmid);
+    return { pmid, relations };
+  }).filter((record) => record.pmid);
 }
 
 function ncbiIdentity(database, item) {

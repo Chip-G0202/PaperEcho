@@ -14,11 +14,14 @@ import { dayLabel as monthlyDayLabel, monthLabel } from "../lib/report_period_su
 import { fmtDateRfc, isoWeek, yyMd } from "../lib/date_label_support.mjs";
 import { migrateRatedItems as runStarMigration } from "./star_migration.mjs";
 import {
+  addItemToCollectionWithGuard,
   addItemToWorthyCollectionWithGuard,
   removeItemFromCollectionWithGuard,
   runGuardedBulkWritebackMutation,
   writeTagSetWithGuard,
 } from "./mutation_guard.mjs";
+import { fingerprintIntegrityTarget } from "../integrity/mutation_plan.mjs";
+import { runIntegrityMutationStep } from "./integrity_mutation_step.mjs";
 import { parseStarMigrationConfig, resolveWritebackMcpReadyOptions } from "./runtime_options.mjs";
 import { buildWritebackSideEffectSummary } from "./side_effect_summary.mjs";
 import {
@@ -49,6 +52,7 @@ export {
 } from "../lib/zotero_date_collections.mjs";
 export { createItemWithDedupeRetry } from "./item_create_retry.mjs";
 export {
+  addItemToCollectionWithGuard,
   addItemToWorthyCollectionWithGuard,
   removeItemFromCollectionWithGuard,
   runGuardedBulkWritebackMutation,
@@ -138,6 +142,7 @@ export async function runZoteroWriteback({ argv = process.argv, recovery = null,
   const summaryPath = path.join(pipelineDir, "zotero_writeback_summary.json");
   const dryRunSummaryPath = path.join(pipelineDir, "zotero_writeback_dry_run_summary.json");
   const runReportPath = path.join(pipelineDir, "run_report.json");
+  const integrityPlanPath = path.join(pipelineDir, "integrity_plan.json");
 
   const limitArg = argv.find((x) => x.startsWith("--limit="));
   const limit = limitArg ? Number(limitArg.split("=")[1]) : null;
@@ -151,6 +156,11 @@ export async function runZoteroWriteback({ argv = process.argv, recovery = null,
   const triaged = inputFile
     ? JSON.parse(await fs.readFile(inputFile, "utf8"))
     : JSON.parse(await fs.readFile(triagedPath, "utf8"));
+  let integrityPlan = [];
+  try {
+    const artifact = JSON.parse(await fs.readFile(integrityPlanPath, "utf8"));
+    if (artifact?.schemaVersion === 1 && Array.isArray(artifact.operations)) integrityPlan = artifact.operations;
+  } catch {}
   let stage1RunReport = {};
   try {
     stage1RunReport = JSON.parse(await fs.readFile(runReportPath, "utf8"));
@@ -158,7 +168,7 @@ export async function runZoteroWriteback({ argv = process.argv, recovery = null,
   const itemsAll = (limit ? triaged.slice(offset, offset + limit) : triaged.slice(offset));
   const items = itemsAll.filter((x) => x.grade !== "D");
   console.log("[Stage2] Items to writeback:", items.length);
-  if (items.length === 0) {
+  if (items.length === 0 && integrityPlan.length === 0) {
     console.log("[Stage2] No ABC items to writeback, skipping writeback");
     const emptySummary = {
       status: "skipped",
@@ -192,6 +202,7 @@ export async function runZoteroWriteback({ argv = process.argv, recovery = null,
       dry_run_summary_path: dryRunSummaryPath,
       items_planned_count: items.length,
       would_write_items_count: items.length,
+      would_apply_integrity_count: integrityPlan.length,
       actual_write_items_count: 0,
       external_write_performed: false,
       mcp_probe_attempted: false,
@@ -226,6 +237,12 @@ export async function runZoteroWriteback({ argv = process.argv, recovery = null,
     currentCollections,
   } = managedCollections;
   let { collectionGuard } = managedCollections;
+  integrityPlan = integrityPlan.map((entry) => {
+    if (entry.target?.status !== "retraction" || !entry.target?.needsManagedTrashResolution || !trashKey) return entry;
+    const target = { ...entry.target, addCollectionId: trashKey, needsManagedTrashResolution: false, reason: "" };
+    target.targetFingerprint = fingerprintIntegrityTarget({ status: target.status, itemKey: target.itemKey, addCollectionId: target.addCollectionId, removeCollectionIds: target.removeCollectionIds || [], addTags: target.addTags || [] });
+    return { ...entry, target };
+  });
   const dedupeContext = await buildWritebackDedupeContext({
     indexPath: ZOTERO_LIBRARY_INDEX_PATH,
     root,
@@ -401,6 +418,14 @@ export async function runZoteroWriteback({ argv = process.argv, recovery = null,
     workflowDay: day,
     mcpUrl: RUNTIME.mcpUrl,
   });
+  const integrityMutationResult = await runIntegrityMutationStep({
+    plan: integrityPlan,
+    indexPath: ZOTERO_LIBRARY_INDEX_PATH,
+    zoteroBackend,
+    collectionGuard,
+    collectionScopeBlocks,
+    recovery,
+  });
   const zoteroBackendCallsByTool = Object.fromEntries(zoteroBackendCallCounters);
   const summary = await writeStage2WritebackReports({
     summaryPath,
@@ -466,6 +491,8 @@ export async function runZoteroWriteback({ argv = process.argv, recovery = null,
     worthyItemCount,
     historyCollectionModificationForbidden: HISTORY_COLLECTION_MODIFICATION_FORBIDDEN,
   });
+  summary.integrity = integrityMutationResult;
+  await writeAtomicJson(summaryPath, summary);
   if (typeof recovery?.completeStage2 === "function") {
     const verified = await recovery.completeStage2({
       summary,

@@ -24,7 +24,7 @@ const SECTION_KEYS = Object.freeze({
   health: new Set(["enabled", "consecutiveThreshold"]),
   receiptStore: new Set(["root", "retryFailed", "unknownPolicy"]),
   radar: new Set(["enabled", "dailyTime", "retentionDays"]),
-  integrity: new Set(["enabled"]),
+  integrity: new Set(["enabled", "bootstrapBatchSize", "crossrefConcurrency", "pubmedBatchSize", "cacheTtlDays"]),
 });
 const V2_COMMON_KEYS = new Set(["sourceState", "notifications", "radar", "integrity"]);
 
@@ -138,6 +138,11 @@ function validateCommon(common, schemaVersion = 1) {
         optionalString(reserved.dailyTime, "common.radar.dailyTime");
         if (reserved.dailyTime != null && reserved.dailyTime !== "15:00") fail("CONFIG_VALUE_INVALID", "common.radar.dailyTime must be 15:00", { field: "common.radar.dailyTime" });
         optionalInteger(reserved.retentionDays, "common.radar.retentionDays", { min: 0, max: 36500 });
+      } else {
+        optionalInteger(reserved.bootstrapBatchSize, "common.integrity.bootstrapBatchSize", { min: 1, max: 500 });
+        optionalInteger(reserved.crossrefConcurrency, "common.integrity.crossrefConcurrency", { min: 1, max: 4 });
+        optionalInteger(reserved.pubmedBatchSize, "common.integrity.pubmedBatchSize", { min: 1, max: 200 });
+        optionalInteger(reserved.cacheTtlDays, "common.integrity.cacheTtlDays", { min: 1, max: 365 });
       }
     }
   }
@@ -262,7 +267,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   const effectiveEnv = { ...env };
   const secretStatus = {};
   effectiveEnv.PAPERECHO_CONFIG_SCHEMA_VERSION = String(configSchemaVersion);
-  for (const name of ["PAPERECHO_FAILURE_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_DEGRADATION_THRESHOLD", "PAPERECHO_NOTIFICATION_RECEIPT_ROOT", "PAPERECHO_NOTIFICATION_HEALTH_ROOT", "PAPERECHO_NOTIFICATION_RETRY_FAILED", "PAPERECHO_NOTIFICATION_UNKNOWN_POLICY", "PAPERECHO_SOURCE_STATE_ROOT"]) delete effectiveEnv[name];
+  for (const name of ["PAPERECHO_FAILURE_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_DEGRADATION_THRESHOLD", "PAPERECHO_NOTIFICATION_RECEIPT_ROOT", "PAPERECHO_NOTIFICATION_HEALTH_ROOT", "PAPERECHO_NOTIFICATION_RETRY_FAILED", "PAPERECHO_NOTIFICATION_UNKNOWN_POLICY", "PAPERECHO_SOURCE_STATE_ROOT", "PAPERECHO_INTEGRITY_ENABLED", "PAPERECHO_INTEGRITY_BOOTSTRAP_BATCH_SIZE", "PAPERECHO_INTEGRITY_CROSSREF_CONCURRENCY", "PAPERECHO_INTEGRITY_PUBMED_BATCH_SIZE", "PAPERECHO_INTEGRITY_CACHE_TTL_DAYS"]) delete effectiveEnv[name];
 
   if (has(common.value, "projectRoot") && common.value.projectRoot) effectiveEnv.ZOTERO_PROJECT_ROOT = resolveRelative(common.value.projectRoot, configDir);
   if (has(common.cleanup, "enabled")) setEnvValue(effectiveEnv, "PAPERFLOW_CLEANUP_ENABLED", common.cleanup.enabled);
@@ -279,7 +284,11 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
     setEnvValue(effectiveEnv, "PAPERECHO_RADAR_ENABLED", common.value.radar?.enabled === true);
     if (common.value.radar?.dailyTime) setEnvValue(effectiveEnv, "PAPERECHO_RADAR_DAILY_TIME", common.value.radar.dailyTime);
     if (has(common.value.radar, "retentionDays")) setEnvValue(effectiveEnv, "PAPERECHO_RADAR_RETENTION_DAYS", common.value.radar.retentionDays);
-    if (common.value.integrity?.enabled === true) warnings.push("common.integrity is reserved; integrity monitoring remains disabled in v2.1");
+    setEnvValue(effectiveEnv, "PAPERECHO_INTEGRITY_ENABLED", common.value.integrity?.enabled === true);
+    if (has(common.value.integrity, "bootstrapBatchSize")) setEnvValue(effectiveEnv, "PAPERECHO_INTEGRITY_BOOTSTRAP_BATCH_SIZE", common.value.integrity.bootstrapBatchSize);
+    if (has(common.value.integrity, "crossrefConcurrency")) setEnvValue(effectiveEnv, "PAPERECHO_INTEGRITY_CROSSREF_CONCURRENCY", common.value.integrity.crossrefConcurrency);
+    if (has(common.value.integrity, "pubmedBatchSize")) setEnvValue(effectiveEnv, "PAPERECHO_INTEGRITY_PUBMED_BATCH_SIZE", common.value.integrity.pubmedBatchSize);
+    if (has(common.value.integrity, "cacheTtlDays")) setEnvValue(effectiveEnv, "PAPERECHO_INTEGRITY_CACHE_TTL_DAYS", common.value.integrity.cacheTtlDays);
   }
   if (has(common.value, "journalQualityApiKeyEnv")) {
     mapSecretReference({ target: effectiveEnv, sourceEnv: env, canonicalName: "EASYSCHOLAR_SECRET_KEY", envName: common.value.journalQualityApiKeyEnv, secretStatus });

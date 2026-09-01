@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">100</PMID>
+      <Article><ArticleTitle>Original record</ArticleTitle></Article>
+      <CommentsCorrectionsList>
+        <CommentsCorrections RefType="RetractionIn"><PMID Version="1">200</PMID></CommentsCorrections>
+        <CommentsCorrections RefType="ErratumIn"><PMID Version="1">201</PMID></CommentsCorrections>
+      </CommentsCorrectionsList>
+    </MedlineCitation>
+  </PubmedArticle>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">200</PMID>
+      <Article><ArticleTitle>Retraction notice</ArticleTitle></Article>
+      <CommentsCorrectionsList>
+        <CommentsCorrections RefType="RetractionOf"><PMID Version="1">100</PMID></CommentsCorrections>
+      </CommentsCorrectionsList>
+    </MedlineCitation>
+  </PubmedArticle>
+</PubmedArticleSet>

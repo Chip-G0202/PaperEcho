@@ -51,7 +51,11 @@
       "enabled": false
     },
     "integrity": {
-      "enabled": false
+      "enabled": false,
+      "bootstrapBatchSize": 50,
+      "crossrefConcurrency": 2,
+      "pubmedBatchSize": 180,
+      "cacheTtlDays": 7
     }
   },
   "desktop": {

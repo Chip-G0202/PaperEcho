@@ -71,6 +71,7 @@ export function emptyZoteroLibraryIndex({ generatedAt = nowIso(), workflowDay = 
       title: {},
     },
     collections: {},
+    integrity_monitoring: { schema_version: 1, bootstrap: {} },
     stats: {},
   };
 }
@@ -103,6 +104,7 @@ export function normalizeLiveIndexItem(item = {}) {
     favorite: item.favorite === true || item.favorite === 1,
     dateAdded: cleanString(item.dateAdded || item.date_added),
     dateModified: cleanString(item.dateModified || item.date_modified),
+    version: Number(item.version || item.data?.version || 0) || 0,
     indexed_at: cleanString(item.indexed_at) || nowIso(),
   };
 }
@@ -201,6 +203,7 @@ function recordFromZoteroItem(item = {}, previous = {}) {
         favorite: normalized.favorite,
         dateAdded: normalized.dateAdded,
         dateModified: normalized.dateModified,
+        version: normalized.version,
       },
     },
     ...(previous.radar_notification ? { radar_notification: previous.radar_notification } : {}),
@@ -231,6 +234,9 @@ export function normalizeZoteroLibraryIndex(index = {}) {
   normalized.stats = index.stats && typeof index.stats === "object" && !Array.isArray(index.stats)
     ? index.stats
     : {};
+  normalized.integrity_monitoring = index.integrity_monitoring && typeof index.integrity_monitoring === "object" && !Array.isArray(index.integrity_monitoring)
+    ? index.integrity_monitoring
+    : normalized.integrity_monitoring;
   normalized.coverage = index.coverage && typeof index.coverage === "object"
     ? index.coverage
     : normalized.coverage;
@@ -356,6 +362,14 @@ export async function writeZoteroLibraryIndex(filePath, index) {
     const current = await readZoteroLibraryIndex(filePath);
     const normalized = normalizeZoteroLibraryIndex(index);
     if (current.usable) {
+      normalized.integrity_monitoring = {
+        ...(current.index.integrity_monitoring || {}),
+        ...(normalized.integrity_monitoring || {}),
+        bootstrap: {
+          ...(current.index.integrity_monitoring?.bootstrap || {}),
+          ...(normalized.integrity_monitoring?.bootstrap || {}),
+        },
+      };
       if (normalized.coverage?.zotero?.complete !== true) {
         normalized.live_items = { ...(current.index.live_items || {}), ...(normalized.live_items || {}) };
         normalized.tombstones = { ...(current.index.tombstones || {}), ...(normalized.tombstones || {}) };
@@ -363,12 +377,46 @@ export async function writeZoteroLibraryIndex(filePath, index) {
         normalized.records = rebuildRecords({ ...normalized, records: current.index.records });
       }
       for (const [canonicalId, record] of Object.entries(current.index.records || {})) {
+        if (record.integrity && !normalized.records[canonicalId]?.integrity) {
+          normalized.records[canonicalId] = { ...(normalized.records[canonicalId] || record), integrity: record.integrity };
+        }
         if (!record.presence?.local) continue;
         const target = normalized.records[canonicalId] || record;
         normalized.records[canonicalId] = { ...target, presence: { ...(target.presence || {}), local: record.presence.local } };
       }
     }
     return writeIndexUnlocked(filePath, normalized);
+  });
+}
+
+export async function updateIntegrityMonitoringState(filePath, { recordUpdates = [], monitoring = {} } = {}, { generatedAt = nowIso() } = {}) {
+  return withIndexLock(filePath, async () => {
+    const read = await readZoteroLibraryIndex(filePath);
+    if (!read.usable) return { ok: false, reason: read.reason, updated_count: 0 };
+    const index = normalizeZoteroLibraryIndex(read.index);
+    let updatedCount = 0;
+    for (const update of recordUpdates) {
+      const canonicalId = cleanString(update?.canonicalId || update?.canonical_id);
+      if (!canonicalId || !index.records[canonicalId]) continue;
+      index.records[canonicalId] = {
+        ...index.records[canonicalId],
+        integrity: update.integrity,
+        last_seen_at: index.records[canonicalId].last_seen_at || generatedAt,
+      };
+      updatedCount += 1;
+    }
+    index.integrity_monitoring = {
+      ...(index.integrity_monitoring || {}),
+      ...monitoring,
+      schema_version: 1,
+      bootstrap: {
+        ...(index.integrity_monitoring?.bootstrap || {}),
+        ...(monitoring.bootstrap || {}),
+      },
+    };
+    index.generated_at = generatedAt;
+    await writeIndexUnlocked(filePath, index);
+    return { ok: true, reason: "", updated_count: updatedCount, index };
   });
 }
 

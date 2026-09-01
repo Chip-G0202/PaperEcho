@@ -50,6 +50,19 @@ test("summary maps human-review and pending-rule attention without reading expor
   assert.deepEqual(summary.attention, { humanReviewCount: 2, pendingRuleCount: 3 });
 });
 
+test("summary distinguishes current integrity confirmations from applied mutations", () => {
+  const summary = buildRunSummary({
+    runId: "r-integrity", pipelineMode: "desktop", status: "success",
+    runReport: { steps: { literature_integrity: { newly_confirmed_retraction_count: 2, new_correction_count: 1, new_expression_of_concern_count: 1, conflict_count: 3 } } },
+    writebackSummary: { integrity: { results: [
+      { targetStatus: "retraction", status: "applied" },
+      { targetStatus: "retraction", status: "pending_delete" },
+      { targetStatus: "correction", status: "confirmed_not_applied" },
+    ] } },
+  });
+  assert.deepEqual(summary.integrity, { newlyConfirmedRetractions: 2, newCorrections: 1, newExpressionsOfConcern: 1, appliedRetractions: 1, pendingDelete: 1, confirmedNotApplied: 1, unresolvedConflicts: 3 });
+});
+
 test("export manifest uses only explicit current-run xlsx and docx paths", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperflow-manifest-"));
   const xlsx = path.join(root, "周报.xlsx");

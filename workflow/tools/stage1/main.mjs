@@ -43,6 +43,9 @@ import {
 } from "./radar_step.mjs";
 import { buildClassificationContext } from "./classification_fingerprint.mjs";
 import { buildLlmRuleContextSummary } from "./llm_rule_context.mjs";
+import { getDefaultZoteroLibraryIndexPath } from "../lib/zotero_library_index_store.mjs";
+import { runWeeklyIntegrityMonitor } from "../integrity/main.mjs";
+import { excludeConfirmedRetractionsFromWeekly } from "../integrity/mutation_plan.mjs";
 import {
   applyWeeklyClassificationReuse,
   ensureWeeklyRadarClassificationCoverage,
@@ -588,7 +591,31 @@ export async function runResearchOsPipeline({
     noWriteback: radarProfile,
   });
   lastKnownPhase = feedbackActionsResult.lastKnownPhase;
-  const { writebackReady, triaged, abcAllItems, translationConfig } = feedbackActionsResult;
+  let { writebackReady } = feedbackActionsResult;
+  const { triaged, abcAllItems, translationConfig } = feedbackActionsResult;
+  let integrityResult;
+  try {
+    integrityResult = await runWeeklyIntegrityMonitor({
+      profile: runProfile,
+      indexPath: getDefaultZoteroLibraryIndexPath(ROOT),
+      pipeDir,
+      now,
+    });
+    if (integrityResult.updatedIndex) writebackReady = excludeConfirmedRetractionsFromWeekly(writebackReady, integrityResult.updatedIndex);
+  } catch (error) {
+    integrityResult = { status: "degraded", reason: String(error?.message || error).slice(0, 200), checkedCount: 0, plan: [] };
+  }
+  report.steps.literature_integrity = {
+    status: integrityResult.status,
+    reason: integrityResult.reason || "",
+    checked_count: Number(integrityResult.checkedCount || 0),
+    newly_confirmed_retraction_count: Number(integrityResult.newlyConfirmedRetractionCount || 0),
+    changed_count: Number(integrityResult.changedCount || 0),
+    conflict_count: Number(integrityResult.conflictCount || 0),
+    new_correction_count: (integrityResult.changes || []).filter((change) => change.toStatus === "correction").length,
+    new_expression_of_concern_count: (integrityResult.changes || []).filter((change) => change.toStatus === "expression_of_concern").length,
+    mutation_plan_count: Array.isArray(integrityResult.plan) ? integrityResult.plan.length : 0,
+  };
 
   report = buildCompletedStage1RunReport({
     report,
