@@ -42,7 +42,7 @@
 - 真实 RSS/PubMed/OpenAlex smoke 尚未执行：仓库没有已提交的安全窄查询 acceptance 配置。
 - 在线 `npm audit --omit=dev --json` 报告 3 个 production-tree advisory（2 moderate、1 high）。high `brace-expansion` 位于 `exceljs -> archiver/readdir-glob -> minimatch` 传递路径；当前 PaperEcho 入口未发现受影响 glob pattern expansion 的可达触发面。`uuid` advisory 对应的受影响 API 未被当前仅使用 `uuid.v4` 的路径调用。v2.1 接受该已知风险，未升级依赖，也未执行 `npm audit fix`；这些 advisory 未被修复。
 - 真实 SMTP、Zotero 写入及其他外部服务副作用未纳入本次 RC 在线验收。
-- v2.3 尚未开始；本版本不包含每日 Radar、Weekly queue merge、撤稿/勘误/关注声明监测、PDF 下载、全文分析或内容总结。v2.2 性能优化见下节。
+- 本版本不包含每日 Radar、Weekly queue merge、撤稿/勘误/关注声明监测、PDF 下载、全文分析或内容总结。v2.2 性能优化见下节。
 
 ## PaperEcho v2.2 — Performance Release
 
@@ -82,4 +82,44 @@
 - literature identity、retrieval results、dedupe、A/B/C grading、metadata、Zotero mutation plan、collections、exports、notification decisions、source watermark 与 schema v1/v2 行为保持不变；v2.1 的 operation ledger、`--resume <runId>`、reconciliation、conflict protection、lease 和 notification receipt 继续有效。
 - 真实 Zotero、真实 SMTP、真实生产检索来源以及真实网络限流条件下的 adaptive concurrency 尚未执行 production acceptance；本次 release 不使用生产配置补做压测。
 - 当前依赖树仍存在 2 moderate、1 high advisory；本版本未处理依赖升级，未执行 `npm audit fix`，这些 advisory 未被修复。
-- v2.3 尚未开始。本版本不包含每日 Radar、Weekly queue merge、撤稿/勘误/关注声明、PDF 下载、全文分析或内容总结。
+- 本版本不包含每日 Radar、Weekly queue merge、撤稿/勘误/关注声明、PDF 下载、全文分析或内容总结。
+
+## PaperEcho v2.3 — Radar and Integrity Release
+
+状态：Daily Radar、Weekly 接管与文献完整性监测已完成本地 release gate；真实有副作用的生产验收仍保留为已知风险。
+
+### Daily Radar
+
+- Radar 使用 Asia/Shanghai 每天 15:00 的计划时隙，周末和节假日照常决策；Weekly 到期日由 Weekly 接管，同一天不会再开启独立 Radar 业务运行。
+- Daily 与 Weekly 使用隔离的 watermark。Radar 只负责发现、判断和提醒，Zotero write 与 XLSX write 均为 0。
+- urgent A 需要可靠 grading。LLM 不可用时不以 rule-only A 触发业务告警，而是进入独立 review backlog；review backlog 与 urgent queue 分开保存和处理。
+- 通知按稳定身份和 fingerprint 去重；仅完整性状态变化不会重新触发 Daily Radar 通知。
+
+### Weekly Merge
+
+- Weekly 保持独立 retrieval，并按 canonical literature identity 合并 urgent queue、review backlog 与本轮候选；不会用 Daily 候选替代 Weekly 检索。
+- classification fingerprint 的任一语义因素变化或缺失都会重新 grading，旧 Radar A 不能覆盖当前 Weekly 结果。
+- queue claim 只表示本轮取得处理权，不等于 consume。只有 Zotero business write 与 operation ledger 均已验证后才消费；重复调度和 crash/resume 不重复创建文献。
+- Weekly report 的数据范围只包含 verified business writes，报告身份集合必须与 verified write 身份集合一致。
+
+### Literature Integrity Monitoring
+
+- 只监测 shared index 中具有活动 `presence.zotero` 且至少有 DOI 或 PMID 的记录。Crossref 使用 production REST 的结构化更新关系，PubMed 使用 `CommentsCorrections` 结构化关系；不根据标题、自由文本或 LLM 猜测撤稿。
+- relation direction 已按 subject/object 归一化：指向原文的 `updated-by` / PubMed `*In` 才能更新原文状态；notice 自身的 `update-to` / `*Of`、`*For`、`*From` 不会被误判为被撤稿对象。
+- Retraction Watch 同 record-id 的矛盾证据 fail-closed；独立 publisher 或 PubMed 证据仍可确认。已确认撤稿默认保持 sticky，不会因空结果、来源故障或后续冲突自动反转；retracted-and-republished 进入人工复核。
+- 撤稿处置先使用稳定 item/collection ID 验证加入 `文献池/待删除`，再移除其他 PaperEcho-managed collection ID。用户 collection/tag、Zotero item、note、attachment 与 PDF 均保留；部分移除失败保留 `pending_delete` 并由原 operation ledger/reconcile/resume 继续处理。
+- correction 与 expression of concern 只追加状态标签，不覆盖用户标签。证据状态与 mutation application 状态分别记录；本周新增确认、已应用和待继续处理的完整性变化只进入 Weekly summary。
+- Bootstrap 有界、可 checkpoint、可恢复且幂等；成功空结果与 provider outage/timeout/parse/partial 明确区分，只有成功检查才推进 `lastCheckedAt`。
+
+### Updater and Compatibility
+
+- v2.2 的 `paperecho-update` 可按既有 stable-tag/update-contract 路径安全升级到 v2.3。Radar 与 Integrity runtime state 位于 persistent/protected 范围。
+- 用户 `.env`、真实 config、source state、shared index、operation ledger、notification receipt 和输出不会被 updater 覆盖；managed 文件冲突、活动任务或 schema 不兼容仍会阻塞升级。
+- unified config schema v1 不能静默启用 Radar/Integrity；schema v2 只有显式开启时才启用，缺省保持关闭。
+
+### 已验证边界
+
+- 已验证：Phase A/B/C fixture 与定向测试；Radar no-Zotero-write/no-XLSX；Weekly takeover、verified-before-consume、代表性 crash/resume 与重复创建防护；Crossref production REST 只读解析；PubMed production EFetch 只读解析；Retraction Watch 冲突保护；updater v2.2→v2.3 fixture；配置 v1/v2 兼容。
+- Crossref/PubMed production acceptance 仅验证公开接口的真实结构化响应可被 parser 正确归一化，没有执行 Zotero mutation，也不等同于生产写入验收。
+- 未验证：真实 Zotero write、真实 SMTP、真实 LLM Radar、长期实际 OS scheduler、真实长期 rate-limit 环境。不得据此宣称“生产环境已全面验证”。
+- 本版本不包含 PDF 下载、全文阅读或内容总结。

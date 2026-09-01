@@ -2,7 +2,7 @@
 
 一个面向多学科研究的文献工作流：持续发现、筛选和整理新文献，并按需交付到 Zotero 或本地报告。
 
-[快速开始](#快速开始) | [V2.2 更新](#更新内容) | [目录结构](#目录结构) | [English](#english-version)
+[快速开始](#快速开始) | [V2.3 更新](#更新内容) | [目录结构](#目录结构) | [English](#english-version)
 
 ## 这是什么
 
@@ -17,6 +17,17 @@ PaperEcho 是一套面向长期科研工作的文献追踪与整理工具。它�
 PaperEcho 不替代研究者作出判断。它负责整理不断传来的文献回声，把更多时间留给阅读、思考，以及下一步研究。
 
 ## 更新内容
+
+**PaperEcho V2.3** 新增 Daily Radar、Weekly 接管与文献完整性监测，同时沿用同一套身份、恢复和安全更新边界。
+
+- **Daily Radar 每天发现重要变化。** 默认按 Asia/Shanghai 每天 15:00 决策，周末和节假日照常；Weekly 到期日由 Weekly 接管。Radar 使用独立 watermark，只发现、判断和提醒，不写 Zotero，也不生成 XLSX。urgent A 依赖可靠 grading；LLM 不可用时进入独立 review backlog，不使用 rule-only 结果告警。
+- **Weekly 安全接管 Radar 队列。** Weekly 保持自己的 retrieval，并按 canonical identity 合并 urgent queue、review backlog 与本轮候选。classification fingerprint 变化或缺失会重新 grading；claim 不等于 consume，只有 Zotero 写入及 operation ledger 验证后才消费队列。恢复执行不会重复创建，周报只使用 verified business writes。
+- **监测撤稿、更正和关注声明。** 监测范围仅包括 shared index 中仍存在于 Zotero 且有 DOI 或 PMID 的文献；证据只来自 Crossref REST 和 PubMed structured relations，不按标题或自由文本猜测。撤稿先验证加入 `文献池/待删除`，再移除其他 PaperEcho-managed collection ID；用户集合、标签、item 和附件保留。更正与关注声明只追加状态标签，完整性变化仅进入 Weekly summary。
+- **安全升级边界延续到 V2.3。** `paperecho-update` 可从 V2.2 安全升级；Radar 与 Integrity 运行状态属于 persistent/protected，用户 `.env`、配置、state、ledger 和 receipt 不会被发布文件覆盖。
+
+本版本已通过本地定向测试、no-write/no-XLSX、crash/resume、updater fixture，以及 Crossref/PubMed 生产接口只读验收。真实 Zotero 写入、真实 SMTP、真实 LLM Radar、长期 OS scheduler 和长期 rate-limit 环境尚未验收。V2.3 仍不包含 PDF 下载、全文阅读或内容总结。
+
+### V2.2
 
 **PaperEcho V2.2** 聚焦三条路径的可验证性能改进，并新增安全更新能力。
 
@@ -247,6 +258,17 @@ Choose Zotero Desktop, Zotero Web API, or the fully independent Standalone Local
 PaperEcho does not make research judgments for you. It handles the recurring organization work, leaving more time for reading, thinking, and deciding what to study next.
 
 ## Update
+
+**PaperEcho V2.3** adds a daily Radar, verified Weekly takeover, and structured literature-integrity monitoring while preserving the existing identity, recovery, and update boundaries.
+
+- **Daily Radar:** runs on the 15:00 Asia/Shanghai decision slot, including weekends and holidays, while Weekly takes over on due days. Radar has an isolated watermark and performs discovery, grading, and notification only—no Zotero or XLSX writes. Unavailable LLM grading goes to a separate review backlog rather than producing a rule-only urgent alert.
+- **Verified Weekly takeover:** Weekly keeps its own retrieval and merges Radar queue/backlog entries by canonical identity. Changed or missing classification fingerprints trigger regrading. A claim is consumed only after verified Zotero and ledger evidence; resume does not duplicate creation, and reports use verified business writes.
+- **Structured integrity monitoring:** only active Zotero records with a DOI or PMID are checked through Crossref REST and PubMed structured relations. Retractions are verified into `文献池/待删除` before other PaperEcho-managed memberships are removed. User collections, tags, items, and attachments remain intact; corrections and expressions of concern use additive tags.
+- **Safe V2.2 → V2.3 updates:** Radar and integrity runtime state remain persistent/protected alongside user configuration, state, ledgers, and receipts.
+
+Local targeted tests, no-write/no-XLSX behavior, crash/resume, updater fixtures, and read-only production Crossref/PubMed parsing have been validated. Real Zotero writes, SMTP, LLM Radar, long-running OS scheduling, and sustained real-world rate limits remain unverified. V2.3 does not include PDF download, full-text reading, or content summarization.
+
+### V2.2
 
 **PaperEcho V2.2** focuses on measurable performance improvements across the three paths and adds a safe update mechanism.
 
