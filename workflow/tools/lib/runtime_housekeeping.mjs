@@ -21,6 +21,11 @@ const PROTECTED_NAMES = new Set([
   "events.jsonl",
   "translation_cache.json",
   "runtime_state.json",
+  "urgent_queue.json",
+  "review_backlog.json",
+  "operation_ledger.json",
+  "email_receipt.json",
+  "notification_receipt.json",
   ".env",
   ".git",
   "config",
@@ -195,7 +200,7 @@ async function containsProtected(candidate, fsApi) {
     const stat = await fsApi.lstat(current);
     if (stat.isSymbolicLink()) throw new Error("HOUSEKEEPING_SYMLINK_BLOCKED");
     const name = path.basename(current);
-    if (PROTECTED_NAMES.has(name) || /^月报-.*\.docx$/i.test(name)) return true;
+    if (PROTECTED_NAMES.has(name) || /^nr-[a-f0-9]{32}\.json$/i.test(name) || /^月报-.*\.docx$/i.test(name)) return true;
     if (!stat.isDirectory()) continue;
     for (const entry of await fsApi.readdir(current, { withFileTypes: true })) stack.push(path.join(current, entry.name));
   }

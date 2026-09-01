@@ -7,6 +7,7 @@ import { buildCreateItemRequest } from "../stage2/item_payload.mjs";
 import { hashFile } from "./operation_ledger.mjs";
 import { createWorkbookReconciler } from "./reconciliation.mjs";
 import { writeNotificationReceipt } from "../stage5/email_receipt.mjs";
+import { findRadarQueueStateItem, loadRadarUrgentQueue, transitionRadarQueueItem } from "../radar/state.mjs";
 
 function itemKey(item = {}) {
   return String(item.itemKey || item.key || item.data?.itemKey || item.data?.key || "");
@@ -212,6 +213,44 @@ export async function buildZoteroRecoveryReconcilers({ store, artifact, exportEx
     async execute() { throw new Error("RECOVERY_COLLECTION_ENSURE_RETRY_REQUIRES_STAGE2_RECEIPT"); },
     async verify(operation) { return this.observe(operation); },
   };
+  const radarQueueConsume = {
+    async observe(operation) {
+      try {
+        const state = await loadRadarUrgentQueue(operation.target.path, { fsApi });
+        const found = findRadarQueueStateItem(state, operation.target.queueIdentity || operation.identity);
+        if (!found) return { state: "conflict", evidence: { reason: "queue_item_missing" } };
+        if (found.item.state === "consumed") {
+          const evidence = found.item.verifiedWriteEvidence || {};
+          return evidence.verified === true && evidence.ledgerOperationId === operation.idempotencyKey
+            ? { state: "match", evidence }
+            : { state: "conflict", evidence: { reason: "queue_consumed_by_different_evidence" } };
+        }
+        if (found.item.state === "claimed" && found.item.claimedByWeeklyRunId === store.ledger.runId) return { state: "absent", evidence: { claimed: true, weeklyRunId: store.ledger.runId } };
+        return { state: "conflict", evidence: { reason: `queue_state_${found.item.state}`, claimedByWeeklyRunId: found.item.claimedByWeeklyRunId || "" } };
+      } catch (error) {
+        return { state: "conflict", evidence: { reason: String(error?.message || error).slice(0, 200) } };
+      }
+    },
+    async execute(operation) {
+      const createDependency = (operation.dependsOn || []).map((key) => store.ledger.operations.find((item) => item.idempotencyKey === key)).find((item) => item?.type === "zotero_item_create");
+      const evidence = {
+        verified: true,
+        kind: createDependency?.verification?.notApplicable ? "preexisting_zotero_state" : "zotero_write",
+        weeklyRunId: store.ledger.runId,
+        ledgerOperationId: operation.idempotencyKey,
+        dependencyOperationIds: operation.dependsOn || [],
+        finalGrade: operation.intent?.finalGrade || "",
+        outcome: operation.intent?.outcome || "weekly_verified_write",
+      };
+      await transitionRadarQueueItem(operation.target.path, operation.target.queueIdentity || operation.identity, "consumed", {
+        weeklyRunId: store.ledger.runId,
+        verifiedWriteEvidence: evidence,
+        fsApi,
+      });
+      return { evidence };
+    },
+    async verify(operation) { return this.observe(operation); },
+  };
   return {
     zotero_collection_ensure: collectionEnsure,
     zotero_item_create: create,
@@ -219,6 +258,7 @@ export async function buildZoteroRecoveryReconcilers({ store, artifact, exportEx
     zotero_collection_remove: membership(false),
     zotero_metadata: metadata,
     shared_index: sharedIndex,
+    radar_queue_consume: radarQueueConsume,
     export: exportReconciler,
     notification: {
       async observe(operation) {

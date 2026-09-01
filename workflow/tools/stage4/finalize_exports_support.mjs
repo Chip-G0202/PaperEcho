@@ -2,6 +2,7 @@ import { resolveCachedTranslation } from "../lib/title_translation_support.mjs";
 import {
   buildStage1WritebackCorrelationKey,
   filterDesktopReviewSourceByWritebackSummary,
+  resolveVerifiedWritebackItems,
 } from "../lib/pipeline_stage_support.mjs";
 
 export function buildStage4StandaloneExportSource({
@@ -26,9 +27,10 @@ export function buildFinalExportPayload({
   backfillReport = {},
   reportContext = {},
   translationCache = null,
-  allAbcItems = [],
+  allAbcItems = null,
 } = {}) {
-  const successfulWritebackItems = Array.isArray(writebackSummary?.writeback_items) ? writebackSummary.writeback_items : [];
+  const verifiedResolution = resolveVerifiedWritebackItems(writebackSummary);
+  const successfulWritebackItems = verifiedResolution.ok ? verifiedResolution.items : [];
   // Uses the same correlation key as filterDesktopReviewSourceByWritebackSummary
   // to ensure consistency across orchestrator (Stage 2→desktop source) and Stage 4 export.
   const itemKeyByStage1Key = new Map();
@@ -44,9 +46,9 @@ export function buildFinalExportPayload({
   const writebackItemKeys = new Set(successfulWritebackItems.map((it) => it.itemKey).filter(Boolean));
 
   // allAbcItems is expected to be pre-filtered by the orchestrator to only include
-  // items actually written back by Stage 2 (from zotero_writeback_summary.writeback_items).
-  // Fall back to writebackReady subset if allAbcItems is empty.
-  const baseItems = (allAbcItems.length ? allAbcItems : writebackReady).filter((item) => {
+  // items backed by Stage 2 verified execution evidence. An explicitly empty array
+  // must remain empty; only a missing value uses writebackReady for legacy callers.
+  const baseItems = (Array.isArray(allAbcItems) ? allAbcItems : writebackReady).filter((item) => {
     const grade = String(item?.final_grade || item?.grade || item?.rule_grade || item?.["推荐等级"] || "");
     return grade && grade !== "D" && grade !== "D无关";
   });

@@ -30,8 +30,9 @@ import { canonicalQueryHash } from "../stage1/source_state.mjs";
 import { claimScheduleDayDecision } from "../lib/schedule_support.mjs";
 import { getDefaultZoteroLibraryIndexPath } from "../lib/zotero_library_index_store.mjs";
 import { recordRadarNotificationOutcome, selectRadarNotificationCandidates } from "../radar/state.mjs";
+import { claimWeeklyRadarWritebackCandidates } from "../stage1/weekly_merge_step.mjs";
 import { radarNotificationReceiptPath, sendRadarAggregateNotification } from "../stage5/radar_notification.mjs";
-import { createRunRecoveryCoordinator, resumeRunFromLedger } from "../recovery/run_recovery.mjs";
+import { createRunRecoveryCoordinator, resumeRunFromLedger, RunRecoveryCoordinator } from "../recovery/run_recovery.mjs";
 import { acquireWorkflowLease, releaseRunLease } from "../recovery/operation_ledger.mjs";
 import { buildZoteroRecoveryReconcilers } from "../recovery/zotero_reconciliation.mjs";
 import { dayLabel, monthLabel } from "../lib/report_period_support.mjs";
@@ -241,7 +242,7 @@ export async function runZoteroLiteratureFilter({
   const restoreEphemeralRegistry = activateEphemeralRegistry(ephemeralRegistry);
   let ephemeralCleanupDone = false;
   const runArtifacts = [
-    { kind: "run_state", rootKey: "runs", path: runId, retention: "30d" },
+    { kind: "run_state", rootKey: "runs", path: runId, retention: "protected" },
     { kind: "pipeline", rootKey: "research", path: path.relative(config.researchRoot, config.pipelineDir), retention: "30d" },
     ...(!radarProfile ? [{ kind: "weekly_export", rootKey: "review", path: path.join(monthLabel(config.now), dayLabel(config.now)), retention: "30d" }] : []),
   ];
@@ -572,8 +573,22 @@ export async function runZoteroLiteratureFilter({
     return await completeRunGroup(report);
   }
   if (recoveryCoordinator) {
-    const artifactItems = Array.isArray(stage1Artifacts.data) ? stage1Artifacts.data : [];
+    let artifactItems = Array.isArray(stage1Artifacts.data) ? stage1Artifacts.data : [];
     await recoveryCoordinator.persistArtifact(stage1Artifacts.data, artifactItems);
+    if (!radarProfile) {
+      const claimPreparation = await claimWeeklyRadarWritebackCandidates({ items: artifactItems, runId });
+      artifacts.weekly_radar_claims = {
+        claimedCount: claimPreparation.claimedCount,
+        conflictCount: claimPreparation.conflictCount,
+        conflicts: claimPreparation.conflicts.slice(0, 20),
+      };
+      if (claimPreparation.claimedCount || claimPreparation.conflictCount) {
+        artifactItems = claimPreparation.items;
+        stage1Artifacts.data = artifactItems;
+        await writeJson(stage1Artifacts.path, artifactItems);
+        await recoveryCoordinator.persistArtifact(artifactItems, artifactItems);
+      }
+    }
     await recoveryCoordinator.store.setStage("stage1", "verified", { artifactHash: recoveryCoordinator.store.ledger.artifact.hash, identityCount: artifactItems.length });
   }
 
@@ -848,6 +863,17 @@ async function main() {
         profile,
         configHash,
         inputHash: "",
+        beforeReconcile: async ({ store, artifact }) => {
+          const items = Array.isArray(artifact) ? artifact : [];
+          const hasRadarClaimIntent = items.some((item) => item?.weekly_radar_queue_claim_intent || item?.weekly_radar_queue_claim);
+          const hasStage2Operations = store.ledger.operations.some((operation) => ["zotero_item_create", "zotero_collection_add", "radar_queue_consume"].includes(operation.type));
+          if (!hasRadarClaimIntent || hasStage2Operations) return { artifact: items };
+          const coordinator = new RunRecoveryCoordinator(store);
+          const claimPreparation = await claimWeeklyRadarWritebackCandidates({ items, runId: resumeRunId });
+          await coordinator.persistArtifact(claimPreparation.items, claimPreparation.items);
+          await runZoteroWriteback({ argv: [...process.argv, `--input-file=${store.ledger.artifact.path}`], recovery: coordinator });
+          return { artifact: claimPreparation.items };
+        },
         buildReconcilers: async ({ store, artifact }) => {
           await ensureWorkflowStartupReady();
           return buildZoteroRecoveryReconcilers({ store, artifact, exportExecutor: () => finalizeResearchOsExports() });

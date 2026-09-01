@@ -30,7 +30,7 @@ import { formatStage1Date, resolveStage1ManualTrigger } from "./runtime_context.
 import { evaluateStage1IntervalGate } from "./interval_gate_step.mjs";
 import { runRuleSuggestionStep } from "./rule_suggestions_step.mjs";
 import { runScreeningStandardsSyncStep } from "./screening_standards_sync_step.mjs";
-import { buildLlmReviewCandidates, resolveEligibleRuleGrades } from "./llm_grade_reviewer.mjs";
+import { buildLlmReviewCandidates, gradeReviewPromptContractHash, resolveEligibleRuleGrades } from "./llm_grade_reviewer.mjs";
 import { runSourceSelectionAndFetch } from "./source_selection_step.mjs";
 import { runPreferenceLearningPhase } from "./preference_learning_step.mjs";
 import { runFeedbackActionsAndWriteback } from "./feedback_actions_step.mjs";
@@ -41,6 +41,14 @@ import {
   radarPreferenceLearningPlaceholder,
   radarRunArtifactDir,
 } from "./radar_step.mjs";
+import { buildClassificationContext } from "./classification_fingerprint.mjs";
+import { buildLlmRuleContextSummary } from "./llm_rule_context.mjs";
+import {
+  applyWeeklyClassificationReuse,
+  ensureWeeklyRadarClassificationCoverage,
+  finalizeWeeklyRadarReview,
+  prepareWeeklyCandidatePool,
+} from "./weekly_merge_step.mjs";
 
 
 export { dedupWithDiagnostics } from "./dedupe_step.mjs";
@@ -318,10 +326,15 @@ export async function runResearchOsPipeline({
   };
 
   const rawCandidates = [...rss.items, ...db.items, ...openalex.items];
+  const llmRuntime = resolveLlmRuntime();
+  const weeklyRadarMergeEnabled = !radarProfile && !zoteroSkipped && Boolean(runId);
   const radarPreparation = radarProfile
     ? await prepareRadarCandidatePool({ projectRoot: ROOT, reviewRoot: REVIEW_ROOT, runId, currentCandidates: rawCandidates })
     : null;
-  const dedupeInput = radarPreparation?.candidates || rawCandidates;
+  const weeklyPreparation = weeklyRadarMergeEnabled
+    ? await prepareWeeklyCandidatePool({ projectRoot: ROOT, runId, currentCandidates: rawCandidates, llmRuntime })
+    : null;
+  const dedupeInput = radarPreparation?.candidates || weeklyPreparation?.candidates || rawCandidates;
   const dedupeStarted = Date.now();
   const dedupeResult = dedupWithDiagnostics(dedupeInput);
   const merged = dedupeResult.items;
@@ -393,7 +406,21 @@ export async function runResearchOsPipeline({
   const workflowRulesForQualityGate = loadWorkflowRules();
   const llmReviewConfig = { ...(workflowRulesForQualityGate?.config?.llm_review || {}) };
   if (radarProfile) llmReviewConfig.eligible_rule_grades = ["A", "B", "C"];
-  const llmRuntime = resolveLlmRuntime();
+  let classificationRuleContext = null;
+  try {
+    classificationRuleContext = await buildLlmRuleContextSummary({ root: ROOT, reviewRoot: REVIEW_ROOT });
+  } catch {
+    classificationRuleContext = null;
+  }
+  const classificationContext = buildClassificationContext({
+    workflowRules: workflowRulesForQualityGate,
+    screeningStandards: triageStandards,
+    feedbackLearning: report.steps.feedback_learning,
+    promptHash: gradeReviewPromptContractHash(),
+    ruleContextHash: classificationRuleContext?.context_hash || "",
+    runtime: llmRuntime,
+    classifierCodeVersion: TRIAGE_VERSION,
+  });
   const llmCachePath = path.join(pipeDir, "llm_cache.json");
   let maxGradeReviewItemsSource = "default";
   let effectiveMaxGradeReviewItems = llmReviewConfig.max_grade_review_items || 50;
@@ -408,6 +435,10 @@ export async function runResearchOsPipeline({
     cachePath: path.join(RESEARCH_ROOT, "journal_quality_cache.json"),
   });
   triagedAll = qualityGate.items;
+  const weeklyReuse = weeklyRadarMergeEnabled
+    ? applyWeeklyClassificationReuse(triagedAll, classificationContext)
+    : { decisions: [], reusedCount: 0, regradeCount: 0 };
+  if (weeklyPreparation) report.steps.weekly_radar_merge = { ...weeklyPreparation.audit, classification: weeklyReuse };
   const llmReviewCandidateTelemetry = buildLlmReviewCandidates(triagedAll, {
     eligibleRuleGrades: resolveEligibleRuleGrades(llmReviewConfig),
     duplicateRemovedCount: report.steps.dedupe.duplicate_removed_count ?? 0,
@@ -438,7 +469,15 @@ export async function runResearchOsPipeline({
   });
   const preLlmExistingDedupe = preLlmDedupeStep.preLlmExistingDedupe;
   const llmReviewCandidateSelection = preLlmDedupeStep.llmReviewCandidateSelection;
-  const llmReviewItems = preLlmDedupeStep.llmReviewItems;
+  const weeklyClassificationCoverage = weeklyPreparation
+    ? ensureWeeklyRadarClassificationCoverage({ items: triagedAll, llmReviewItems: preLlmDedupeStep.llmReviewItems })
+    : { llmReviewItems: preLlmDedupeStep.llmReviewItems, restoredExistingCount: 0, forcedReviewCount: 0 };
+  const llmReviewItems = weeklyClassificationCoverage.llmReviewItems;
+  if (weeklyPreparation) report.steps.weekly_radar_merge.classification_coverage = {
+    restoredExistingCount: weeklyClassificationCoverage.restoredExistingCount,
+    forcedReviewCount: weeklyClassificationCoverage.forcedReviewCount,
+    llmReviewItemCount: llmReviewItems.length,
+  };
   if (maxGradeReviewItemsSource === "full_coverage") {
     llmReviewConfig.max_grade_review_items = Math.max(1, llmReviewItems.length);
     effectiveMaxGradeReviewItems = Number(llmReviewConfig.max_grade_review_items);
@@ -483,7 +522,17 @@ export async function runResearchOsPipeline({
     root: ROOT,
     reviewRoot: REVIEW_ROOT,
     mergedCount: merged.length,
+    ruleContextSummary: classificationRuleContext,
   });
+  if (weeklyPreparation) {
+    const weeklyFinalize = await finalizeWeeklyRadarReview({
+      items: triagedAll,
+      classificationContext,
+      runId,
+      paths: weeklyPreparation.paths,
+    });
+    report.steps.weekly_radar_merge = { ...report.steps.weekly_radar_merge, lifecycle: weeklyFinalize };
+  }
   const preferenceAuditStarted = Date.now();
   await fs.writeFile(preferenceAuditPath, JSON.stringify(preferenceAuditWithImpact, null, 2), "utf8");
   recordTiming("preference_audit", preferenceAuditStarted, {
@@ -591,6 +640,7 @@ export async function runResearchOsPipeline({
     runId,
     triagedItems: triagedAll,
     llmGradeReport,
+    classificationContext,
     retrievalTransaction,
     paths: radarPreparation.paths,
   }) : null;

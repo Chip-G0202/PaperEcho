@@ -83,6 +83,7 @@ export async function finalizeRadarStage1({
   runId,
   triagedItems = [],
   llmGradeReport = {},
+  classificationContext = {},
   retrievalTransaction = null,
   paths = radarStatePaths(projectRoot),
   fsApi = fs,
@@ -96,7 +97,7 @@ export async function finalizeRadarStage1({
   if (unresolved.length) await storeRadarBacklog(paths.backlog, unresolved, { runId, reason: llmGradeReport.skipped_reason || "llm_unavailable", fsApi, clock });
   if (resolved.length) await resolveRadarBacklog(paths.backlog, resolved, { fsApi, clock });
   const urgentItems = resolved.filter(isUrgentA);
-  const queueResult = await enqueueRadarUrgent(paths.urgentQueue, urgentItems, { runId, fsApi, clock });
+  const queueResult = await enqueueRadarUrgent(paths.urgentQueue, urgentItems, { runId, classificationContext, fsApi, clock });
   const auditPath = path.join(artifactDir, "radar_audit.json");
   const audit = {
     schemaVersion: 1,

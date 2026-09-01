@@ -66,7 +66,7 @@ test("pre-LLM Zotero dedupe skips strong-key existing duplicates and keeps new c
     { id: "new", title: "New paper", doi: "10.0000/example.004", grade: "B", rule_grade: "B" },
   ];
   const { mcpToolCall } = makeCollectionMcp({
-    poolItems: [{ key: "EXIST1", DOI: "10.0000/example.005", title: "Duplicate paper" }],
+    poolItems: [{ key: "EXIST1", DOI: "10.0000/example.001bc", title: "Duplicate paper" }],
   });
 
   const result = await classifyPreLlmZoteroExistingDuplicates(candidates, { mcpToolCall, localIndexPath: MISSING_LOCAL_INDEX_PATH });

@@ -12,6 +12,7 @@ import {
   validateRecoveryRunId,
 } from "./operation_ledger.mjs";
 import { reconcileOperationLedger } from "./reconciliation.mjs";
+import { transitionRadarQueueItem } from "../radar/state.mjs";
 
 export function literatureIdentity(item = {}) {
   return getLiteratureIdentityKeys(item)[0] || `title:${normalizeTitleForExistingDedupe(item.title || "")}`;
@@ -117,30 +118,56 @@ export class RunRecoveryCoordinator {
       inputVersion: indexInputVersion,
       scope: "global",
     });
+    const queueConsumes = [];
+    for (const record of records) {
+      const claim = record.item?.weekly_radar_queue_claim;
+      if (!claim?.claimed || !claim.queuePath || !claim.identity) continue;
+      queueConsumes.push(await this.store.planOperation({
+        type: "radar_queue_consume",
+        identity: record.identity,
+        target: { id: `radar-queue:${claim.identity}`, path: path.resolve(claim.queuePath), queueIdentity: claim.identity },
+        input: {
+          weeklyRunId: this.store.ledger.runId,
+          classificationFingerprint: claim.classificationFingerprint || "",
+          priorClassificationFingerprint: claim.priorClassificationFingerprint || "",
+          finalGrade: claim.finalGrade || record.item.final_grade || record.item.grade || "",
+        },
+        dependsOn: [record.create.idempotencyKey, ...record.memberships.map((operation) => operation.idempotencyKey), index.idempotencyKey],
+        intent: { outcome: claim.outcome || "weekly_verified_write", finalGrade: claim.finalGrade || record.item.final_grade || record.item.grade || "" },
+      }));
+    }
     for (const operation of [...records.flatMap((record) => [record.create, ...record.memberships]), index]) {
       if (operation.status === "pending" || operation.status === "failed") await this.store.transition(operation.idempotencyKey, "started");
     }
     await this.store.setStage("stage2_writeback", "started");
-    this.stage2 = { records, index };
+    this.stage2 = { records, index, queueConsumes };
     return this.stage2;
   }
 
-  async completeStage2({ summary, indexPath }) {
+  async completeStage2({ summary, indexPath, failedCollectionItemKeys = [], onVerifiedWrites = null }) {
     if (!this.stage2) throw new Error("RECOVERY_STAGE2_NOT_PREPARED");
+    const byIdentity = new Map(this.stage2.records.map((record) => [record.identity, record]));
     const byTitle = new Map(this.stage2.records.map((record) => [normalizeTitleForExistingDedupe(record.item.title || ""), record]));
+    const resolveRecord = (item) => byIdentity.get(literatureIdentity(item)) || byTitle.get(normalizeTitleForExistingDedupe(item.title || ""));
+    const failedCollectionKeys = new Set([...failedCollectionItemKeys].map(String));
     const completed = new Set();
     for (const item of summary?.writeback_items || []) {
-      const record = byTitle.get(normalizeTitleForExistingDedupe(item.title || ""));
+      const record = resolveRecord(item);
       if (!record || !item.itemKey) continue;
       completed.add(record.identity);
       await transitionToVerified(this.store, record.create, { target: { itemKey: item.itemKey, actualId: item.itemKey }, verification: { itemKey: item.itemKey, evidence: "stage2_writeback_verified" } });
-      const attachFailed = Number(summary?.current_date_add_failed || 0) > 0;
+      const attachFailed = failedCollectionKeys.size ? failedCollectionKeys.has(String(item.itemKey)) : Number(summary?.current_date_add_failed || 0) > 0;
       if (!attachFailed) {
         for (const operation of record.memberships) await transitionToVerified(this.store, operation, { target: { itemKey: item.itemKey }, verification: { itemKey: item.itemKey, collectionId: operation.target.collectionId, evidence: "stage2_collection_postcheck" } });
+      } else {
+        for (const operation of record.memberships) {
+          const current = this.store.ledger.operations.find((entry) => entry.idempotencyKey === operation.idempotencyKey);
+          if (current.status === "started") await this.store.transition(current.idempotencyKey, "failed", { error: "STAGE2_COLLECTION_NOT_VERIFIED" });
+        }
       }
     }
     for (const duplicate of summary?.duplicate_records || []) {
-      const record = byTitle.get(normalizeTitleForExistingDedupe(duplicate.title || ""));
+      const record = resolveRecord(duplicate);
       const existingKey = String(duplicate.matched_pool_item_key || "");
       if (!record || !existingKey || completed.has(record.identity)) continue;
       completed.add(record.identity);
@@ -153,7 +180,48 @@ export class RunRecoveryCoordinator {
     }
     const outputHash = await hashFile(indexPath, { fsApi: this.fsApi });
     await transitionToVerified(this.store, this.stage2.index, { target: { outputHash }, verification: { outputHash } });
-    await this.store.setStage("stage2_writeback", "verified", { created: completed.size });
+    const verifiedWriteItems = [];
+    for (const item of summary?.writeback_items || []) {
+      const record = resolveRecord(item);
+      if (!record) continue;
+      const create = this.store.ledger.operations.find((entry) => entry.idempotencyKey === record.create.idempotencyKey);
+      const memberships = record.memberships.map((planned) => this.store.ledger.operations.find((entry) => entry.idempotencyKey === planned.idempotencyKey));
+      if (create?.status === "verified" && create.verification?.notApplicable !== true && memberships.every((entry) => entry?.status === "verified")) {
+        verifiedWriteItems.push({ ...item, verified_identity: record.identity });
+      }
+    }
+    const verifiedBusinessWriteIdentities = [...new Set(verifiedWriteItems.map((item) => item.verified_identity).filter(Boolean))].sort();
+    if (typeof onVerifiedWrites === "function") {
+      await onVerifiedWrites({ verifiedWriteItems, verifiedBusinessWriteIdentities });
+    }
+    const queueResults = [];
+    for (const planned of this.stage2.queueConsumes || []) {
+      const operation = this.store.ledger.operations.find((item) => item.idempotencyKey === planned.idempotencyKey);
+      const dependencies = operation.dependsOn.map((key) => this.store.ledger.operations.find((item) => item.idempotencyKey === key)).filter(Boolean);
+      if (dependencies.every((item) => item.status === "verified")) {
+        if (operation.status === "pending" || operation.status === "failed") await this.store.transition(operation.idempotencyKey, "started");
+        const evidence = {
+          verified: true,
+          kind: dependencies.find((item) => item.type === "zotero_item_create")?.verification?.notApplicable ? "preexisting_zotero_state" : "zotero_write",
+          weeklyRunId: this.store.ledger.runId,
+          ledgerOperationId: operation.idempotencyKey,
+          dependencyOperationIds: operation.dependsOn,
+          finalGrade: operation.intent?.finalGrade || "",
+          outcome: operation.intent?.outcome || "weekly_verified_write",
+        };
+        await transitionRadarQueueItem(operation.target.path, operation.target.queueIdentity, "consumed", { weeklyRunId: this.store.ledger.runId, verifiedWriteEvidence: evidence, fsApi: this.fsApi });
+        await this.store.transition(operation.idempotencyKey, "remote_observed", { verification: evidence });
+        await this.store.transition(operation.idempotencyKey, "verified", { verification: evidence });
+        queueResults.push({ identity: operation.identity, status: "consumed" });
+      } else {
+        const reason = dependencies.some((item) => item.status === "conflict") ? "dependent_operation_conflict" : "dependent_operation_not_verified";
+        await transitionRadarQueueItem(operation.target.path, operation.target.queueIdentity, "conflict", { weeklyRunId: this.store.ledger.runId, verifiedWriteEvidence: { reason }, fsApi: this.fsApi });
+        await this.store.transition(operation.idempotencyKey, "conflict", { error: reason, verification: { reason } });
+        queueResults.push({ identity: operation.identity, status: "conflict", reason });
+      }
+    }
+    await this.store.setStage("stage2_writeback", "verified", { created: completed.size, verifiedBusinessWrites: verifiedBusinessWriteIdentities.length, queueResults });
+    return { verifiedWriteItems, verifiedBusinessWriteIdentities, queueResults };
   }
 
   async prepareMetadata(updates = []) {
@@ -228,7 +296,7 @@ export class RunRecoveryCoordinator {
   }
 }
 
-export async function resumeRunFromLedger({ runRoot, runId, mode, profile, configHash, inputHash = "", buildReconcilers, context = {} }, dependencies = {}) {
+export async function resumeRunFromLedger({ runRoot, runId, mode, profile, configHash, inputHash = "", buildReconcilers, beforeReconcile = null, context = {} }, dependencies = {}) {
   const safeRunId = validateRecoveryRunId(runId);
   const lease = await acquireRunLease({ runRoot, runId: safeRunId, ttlMs: dependencies.ttlMs || 60_000 }, dependencies);
   if (!lease.acquired) return { runId: safeRunId, run_id: safeRunId, resume: true, status: "blocked", reason: lease.reason || "active_lease" };
@@ -254,7 +322,11 @@ export async function resumeRunFromLedger({ runRoot, runId, mode, profile, confi
     const actualArtifactHash = await hashFile(store.ledger.artifact.path, { fsApi });
     if (actualArtifactHash !== store.ledger.artifact.hash) throw new Error("RECOVERY_ARTIFACT_HASH_MISMATCH");
     if (store.ledger.inputHash !== actualArtifactHash) throw new Error("RECOVERY_INPUT_ARTIFACT_HASH_MISMATCH");
-    const artifact = JSON.parse(await fsApi.readFile(store.ledger.artifact.path, "utf8"));
+    let artifact = JSON.parse(await fsApi.readFile(store.ledger.artifact.path, "utf8"));
+    if (typeof beforeReconcile === "function") {
+      const prepared = await beforeReconcile({ store, artifact, context });
+      if (prepared?.artifact) artifact = prepared.artifact;
+    }
     const reconcilers = await buildReconcilers({ store, artifact, context });
     const recovery = await reconcileOperationLedger({ store, reconcilers, context: { ...context, artifact } });
     if (recovery.status === "completed") {

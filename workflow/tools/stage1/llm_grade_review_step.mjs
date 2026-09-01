@@ -43,6 +43,7 @@ export async function runLlmGradeReviewStep({
   root,
   reviewRoot,
   mergedCount,
+  ruleContextSummary: providedRuleContextSummary = null,
 }) {
   const {
     effectiveMaxGradeReviewItems,
@@ -60,9 +61,9 @@ export async function runLlmGradeReviewStep({
   }
 
   const llmRuleContextStarted = Date.now();
-  let ruleContextSummary = null;
+  let ruleContextSummary = providedRuleContextSummary;
   try {
-    ruleContextSummary = await buildLlmRuleContextSummary({ root, reviewRoot });
+    ruleContextSummary ||= await buildLlmRuleContextSummary({ root, reviewRoot });
     report.steps.llm_rule_context = {
       ok: true,
       context_hash: ruleContextSummary.context_hash || "",

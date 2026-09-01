@@ -1,5 +1,6 @@
 import { LABELS } from "./grade_primitives.mjs";
 import { resolveCachedTranslation } from "./title_translation_support.mjs";
+import { getLiteratureIdentityKeys } from "./literature_identity.mjs";
 
 /**
  * Deterministic normalization for correlation key components.
@@ -28,6 +29,27 @@ export function buildStage1WritebackCorrelationKey(item) {
     item?.grade ?? item?.grade_label ?? item?.["推荐等级"],
   );
   return `${title}||${sourceChannel}||${grade}`;
+}
+
+function verifiedBusinessIdentity(item = {}) {
+  return String(item.verified_identity || getLiteratureIdentityKeys(item)[0] || "");
+}
+
+export function resolveVerifiedWritebackItems(writebackSummary) {
+  if (!writebackSummary || typeof writebackSummary !== "object") return { ok: false, reason: "missing_writeback_summary", items: [] };
+  const evidenceRequired = writebackSummary.verified_write_evidence_required === true;
+  const verifiedItems = Array.isArray(writebackSummary.verified_write_items) ? writebackSummary.verified_write_items : null;
+  if (evidenceRequired && !verifiedItems) return { ok: false, reason: "verified_write_items_missing", items: [], evidenceRequired };
+  const items = verifiedItems || (Array.isArray(writebackSummary.writeback_items) ? writebackSummary.writeback_items : null);
+  if (!items) return { ok: false, reason: "writeback_items_missing", items: [], evidenceRequired };
+  if (!evidenceRequired) return { ok: true, reason: "legacy_writeback_summary", items, evidenceRequired: false, identitySetMatch: null };
+  const expected = [...new Set((writebackSummary.verified_business_write_identities || []).map(String).filter(Boolean))].sort();
+  const actual = [...new Set(items.map(verifiedBusinessIdentity).filter(Boolean))].sort();
+  const identitySetMatch = expected.length === actual.length && expected.every((value, index) => value === actual[index]);
+  if (!identitySetMatch || writebackSummary.verified_write_identity_set_match !== true) {
+    return { ok: false, reason: "verified_write_identity_set_mismatch", items: [], evidenceRequired: true, identitySetMatch: false, expected, actual };
+  }
+  return { ok: true, reason: "verified_execution_evidence", items, evidenceRequired: true, identitySetMatch: true, expected, actual };
 }
 
 export function buildWritebackReadyItems(triagedItems, { translationCache = null } = {}) {
@@ -132,14 +154,12 @@ export function filterDesktopReviewSourceByWritebackSummary(desktopSource, write
     };
   }
 
-  const writebackItems = Array.isArray(writebackSummary.writeback_items)
-    ? writebackSummary.writeback_items
-    : null;
-  if (!writebackItems) {
+  const verifiedResolution = resolveVerifiedWritebackItems(writebackSummary);
+  if (!verifiedResolution.ok) {
     return {
       source: { ...desktopSource, triaged: [] },
-      status: "degraded_writeback_items_missing",
-      warning: "writeback_items missing from writeback summary; refusing to export full candidate pool",
+      status: verifiedResolution.reason === "writeback_items_missing" ? "degraded_writeback_items_missing" : `degraded_${verifiedResolution.reason}`,
+      warning: `${verifiedResolution.reason}; refusing to export unverified candidate rows`,
       candidateCount: candidates.length,
       writebackItemCount: 0,
       keptCount: 0,
@@ -147,8 +167,11 @@ export function filterDesktopReviewSourceByWritebackSummary(desktopSource, write
       unmatchedWritebackCount: 0,
       ambiguousCandidateKeyCount: 0,
       ambiguousWritebackKeyCount: 0,
+      verifiedEvidenceRequired: Boolean(verifiedResolution.evidenceRequired),
+      verifiedIdentitySetMatch: verifiedResolution.identitySetMatch ?? null,
     };
   }
+  const writebackItems = verifiedResolution.items;
 
   if (writebackItems.length === 0) {
     return {
@@ -162,6 +185,8 @@ export function filterDesktopReviewSourceByWritebackSummary(desktopSource, write
       unmatchedWritebackCount: 0,
       ambiguousCandidateKeyCount: 0,
       ambiguousWritebackKeyCount: 0,
+      verifiedEvidenceRequired: Boolean(verifiedResolution.evidenceRequired),
+      verifiedIdentitySetMatch: verifiedResolution.identitySetMatch ?? null,
     };
   }
 
@@ -209,9 +234,36 @@ export function filterDesktopReviewSourceByWritebackSummary(desktopSource, write
       kept.push({
         ...candidates[idx],
         itemKey: wbItem.itemKey,
+        ...(wbItem.verified_identity ? { verified_identity: wbItem.verified_identity } : {}),
         写回状态: "已写回",
       });
     }
+  }
+
+  const verifiedBusinessWriteIdentities = verifiedResolution.expected || [];
+  const reportedBusinessWriteIdentities = [...new Set(kept.map(verifiedBusinessIdentity).filter(Boolean))].sort();
+  const verifiedReportIdentitySetMatch = !verifiedResolution.evidenceRequired
+    ? null
+    : verifiedBusinessWriteIdentities.length === reportedBusinessWriteIdentities.length
+      && verifiedBusinessWriteIdentities.every((value, index) => value === reportedBusinessWriteIdentities[index]);
+  if (verifiedResolution.evidenceRequired && !verifiedReportIdentitySetMatch) {
+    return {
+      source: { ...desktopSource, triaged: [] },
+      status: "degraded_verified_report_identity_set_mismatch",
+      warning: "report rows do not equal ledger-verified business write identities",
+      candidateCount: candidates.length,
+      writebackItemCount: writebackItems.length,
+      keptCount: 0,
+      unmatchedCandidateCount: candidates.length,
+      unmatchedWritebackCount: writebackItems.length,
+      ambiguousCandidateKeyCount: candAmbiguousKeys.size,
+      ambiguousWritebackKeyCount: wbAmbiguousKeys.size,
+      verifiedEvidenceRequired: true,
+      verifiedIdentitySetMatch: true,
+      verifiedBusinessWriteIdentities,
+      reportedBusinessWriteIdentities,
+      verifiedReportIdentitySetMatch: false,
+    };
   }
 
   return {
@@ -225,5 +277,10 @@ export function filterDesktopReviewSourceByWritebackSummary(desktopSource, write
     unmatchedWritebackCount: writebackItems.length - [...wbKeyToItem.keys()].filter((k) => candKeyToIndices.has(k) && !candAmbiguousKeys.has(k)).length,
     ambiguousCandidateKeyCount: candAmbiguousKeys.size,
     ambiguousWritebackKeyCount: wbAmbiguousKeys.size,
+    verifiedEvidenceRequired: Boolean(verifiedResolution.evidenceRequired),
+    verifiedIdentitySetMatch: verifiedResolution.identitySetMatch ?? null,
+    verifiedBusinessWriteIdentities,
+    reportedBusinessWriteIdentities,
+    verifiedReportIdentitySetMatch,
   };
 }

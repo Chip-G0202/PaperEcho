@@ -40,6 +40,7 @@ import {
   refreshStage2LibraryIndex,
 } from "./library_index_refresh_step.mjs";
 import { writeStage2WritebackReports } from "./writeback_report_step.mjs";
+import { writeAtomicJson } from "../lib/atomic_json.mjs";
 
 export {
   collectRecentDateCollectionNodes,
@@ -465,7 +466,26 @@ export async function runZoteroWriteback({ argv = process.argv, recovery = null,
     worthyItemCount,
     historyCollectionModificationForbidden: HISTORY_COLLECTION_MODIFICATION_FORBIDDEN,
   });
-  if (typeof recovery?.completeStage2 === "function") await recovery.completeStage2({ summary, indexPath: ZOTERO_LIBRARY_INDEX_PATH });
+  if (typeof recovery?.completeStage2 === "function") {
+    const verified = await recovery.completeStage2({
+      summary,
+      indexPath: ZOTERO_LIBRARY_INDEX_PATH,
+      failedCollectionItemKeys: [...dailyAttachFailureKeys],
+      onVerifiedWrites: async ({ verifiedWriteItems, verifiedBusinessWriteIdentities }) => {
+        summary.verified_write_evidence_required = true;
+        summary.verified_write_items = verifiedWriteItems;
+        summary.verified_business_write_identities = verifiedBusinessWriteIdentities;
+        summary.verified_write_identity_set_match = true;
+        await writeAtomicJson(summaryPath, summary);
+      },
+    });
+    summary.verified_write_evidence_required = true;
+    summary.verified_write_items = verified.verifiedWriteItems;
+    summary.verified_business_write_identities = verified.verifiedBusinessWriteIdentities;
+    summary.verified_write_identity_set_match = true;
+    summary.radar_queue_results = verified.queueResults;
+    await writeAtomicJson(summaryPath, summary);
+  }
   console.log(JSON.stringify(summary, null, 2));
   return summary;
 }

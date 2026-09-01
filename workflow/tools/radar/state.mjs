@@ -9,6 +9,10 @@ import {
   readZoteroLibraryIndex,
   updateSharedLiteratureRecordState,
 } from "../lib/zotero_library_index_store.mjs";
+import {
+  buildClassificationFingerprintRecord,
+  buildClassificationSnapshot,
+} from "../stage1/classification_fingerprint.mjs";
 
 export const RADAR_STATE_SCHEMA_VERSION = 1;
 export const RADAR_QUEUE_STATES = new Set(["queued", "claimed", "consumed", "conflict"]);
@@ -43,6 +47,17 @@ export function radarCoreMetadata(item = {}) {
     openalex: clean(item.openalex || item.openalex_id),
     url: clean(item.url || item.URL),
     source: clean(item.source || item.source_channel),
+  };
+}
+
+export function radarReviewMetadata(item = {}) {
+  return {
+    authors: Array.isArray(item.authors || item.creators) ? (item.authors || item.creators) : clean(item.author),
+    abstract: clean(item.abstract || item.abstractNote || item.summary),
+    publication_type: clean(item.publication_type || item.publicationType || item.itemType),
+    source_channel: clean(item.source_channel),
+    source_platform: clean(item.source_platform),
+    pubdate: clean(item.pubdate || item.date),
   };
 }
 
@@ -114,6 +129,10 @@ export function mergeRadarCandidates(items = []) {
         target.metadata = mergeMetadata(target.metadata, other.metadata);
         groups[otherIndex] = null;
       }
+      target.aliases.sort((left, right) => {
+        const order = { doi: 0, pmid: 1, pmcid: 2, arxiv: 3, openalex: 4, url: 5, title: 6 };
+        return (order[left.split(":", 1)[0]] ?? 99) - (order[right.split(":", 1)[0]] ?? 99);
+      });
       target.canonicalIdentity = target.aliases[0];
       target.metadataFingerprint = canonicalQueryHash(target.metadata);
     }
@@ -123,7 +142,7 @@ export function mergeRadarCandidates(items = []) {
 }
 
 function emptyState(kind) {
-  return { schemaVersion: RADAR_STATE_SCHEMA_VERSION, kind, items: {}, updatedAt: null };
+  return { schemaVersion: RADAR_STATE_SCHEMA_VERSION, kind, items: {}, resolved: {}, updatedAt: null };
 }
 
 async function readState(filePath, kind, fsApi = fs) {
@@ -162,6 +181,11 @@ function findByAliases(items, aliases) {
   return Object.entries(items).find(([, item]) => (item.aliases || []).some((alias) => wanted.has(alias)));
 }
 
+export function findRadarQueueStateItem(state = {}, identity = "") {
+  const found = findByAliases(state.items || {}, [identity]);
+  return found ? { key: found[0], item: found[1] } : null;
+}
+
 export async function persistRadarCandidates(filePath, candidates, { runId = "", generatedAt = new Date().toISOString(), atomicWriter = writeAtomicJson, fsApi = fs } = {}) {
   const normalized = mergeRadarCandidates(candidates).map((item) => minimalRadarCandidate(item.metadata || item, { sourceRunId: runId, observedAt: generatedAt }));
   const artifact = { schemaVersion: 1, profile: "radar", runId, generatedAt, candidateCount: normalized.length, candidates: normalized };
@@ -174,11 +198,15 @@ export async function storeRadarBacklog(filePath, candidates, { runId = "", reas
     const saved = [];
     for (const candidate of mergeRadarCandidates(candidates)) {
       const minimal = candidate.metadata ? candidate : minimalRadarCandidate(candidate, { sourceRunId: runId, observedAt: nowIso(options.clock) });
+      const aliases = new Set(candidate.aliases || minimal.aliases || []);
+      const sourceItems = candidates.filter((item) => getLiteratureIdentityKeys(item).some((alias) => aliases.has(alias)));
+      const reviewMetadata = sourceItems.reduce((merged, item) => ({ ...merged, ...Object.fromEntries(Object.entries(radarReviewMetadata(item)).filter(([, value]) => value != null && value !== "")) }), {});
       const found = findByAliases(state.items, minimal.aliases);
       const key = found?.[0] || minimal.canonicalIdentity;
       state.items[key] = {
         ...(found?.[1] || {}),
         ...minimal,
+        reviewMetadata,
         reason,
         sourceRunId: runId || minimal.sourceRunId,
         lastSeenAt: nowIso(options.clock),
@@ -191,22 +219,36 @@ export async function storeRadarBacklog(filePath, candidates, { runId = "", reas
 
 export async function resolveRadarBacklog(filePath, assessedItems, options = {}) {
   return mutateState(filePath, "review_backlog", (state) => {
+    state.resolved ||= {};
     const removed = [];
     for (const item of assessedItems) {
       const aliases = getLiteratureIdentityKeys(item);
       const found = findByAliases(state.items, aliases);
-      if (found) { delete state.items[found[0]]; removed.push(found[0]); }
+      if (found) {
+        const [key, entry] = found;
+        state.resolved[key] = {
+          canonicalIdentity: entry.canonicalIdentity || key,
+          aliases: entry.aliases || aliases,
+          resolvedAt: nowIso(options.clock),
+          weeklyRunId: clean(options.weeklyRunId),
+          outcome: clean(options.outcome || "review_completed"),
+          finalGrade: clean(item.final_grade || item.grade).toUpperCase(),
+        };
+        delete state.items[key];
+        removed.push(key);
+      }
     }
     return { removed };
   }, options);
 }
 
-export async function enqueueRadarUrgent(filePath, items, { runId = "", ...options } = {}) {
+export async function enqueueRadarUrgent(filePath, items, { runId = "", classificationContext = {}, ...options } = {}) {
   return mutateState(filePath, "urgent_queue", (state) => {
     const queued = [];
     for (const item of items.filter(isUrgentA)) {
       const minimal = minimalRadarCandidate(item, { sourceRunId: runId, observedAt: nowIso(options.clock) });
-      const classificationFingerprint = radarClassificationFingerprint(item);
+      const classification = buildClassificationFingerprintRecord(item, classificationContext);
+      const classificationFingerprint = classification.complete ? classification.fingerprint : radarClassificationFingerprint(item);
       const found = findByAliases(state.items, minimal.aliases);
       const key = found?.[0] || minimal.canonicalIdentity;
       const previous = found?.[1];
@@ -217,7 +259,12 @@ export async function enqueueRadarUrgent(filePath, items, { runId = "", ...optio
       state.items[key] = {
         canonicalIdentity: minimal.canonicalIdentity,
         aliases: minimal.aliases,
+        metadata: minimal.metadata,
+        reviewMetadata: radarReviewMetadata(item),
         classificationFingerprint,
+        classificationFingerprintComplete: classification.complete,
+        classificationContext: classification.complete ? classificationContext : null,
+        classificationSnapshot: buildClassificationSnapshot(item),
         metadataFingerprint: minimal.metadataFingerprint,
         queuedAt: nowIso(options.clock),
         sourceRunId: runId,
@@ -242,12 +289,85 @@ export async function transitionRadarQueueItem(filePath, identity, nextState, {
     if (!found) throw new Error("RADAR_QUEUE_ITEM_MISSING");
     const [key, item] = found;
     const allowed = { queued: new Set(["claimed", "conflict"]), claimed: new Set(["consumed", "conflict", "queued"]), conflict: new Set(["claimed"]), consumed: new Set() };
+    if (nextState === "claimed" && item.state === "claimed" && item.claimedByWeeklyRunId !== clean(weeklyRunId)) throw new Error("RADAR_QUEUE_ITEM_ALREADY_CLAIMED");
+    if (nextState === "consumed" && item.state === "consumed") {
+      const priorOperation = clean(item.verifiedWriteEvidence?.ledgerOperationId);
+      const nextOperation = clean(verifiedWriteEvidence?.ledgerOperationId);
+      if (!priorOperation || priorOperation !== nextOperation) throw new Error("RADAR_QUEUE_ALREADY_CONSUMED");
+    }
     if (item.state !== nextState && !allowed[item.state]?.has(nextState)) throw new Error(`RADAR_QUEUE_TRANSITION_INVALID_${item.state}_TO_${nextState}`);
-    if (nextState === "consumed" && !verifiedWriteEvidence) throw new Error("RADAR_QUEUE_CONSUME_REQUIRES_VERIFIED_WRITE");
+    if (nextState === "consumed" && verifiedWriteEvidence?.verified !== true) throw new Error("RADAR_QUEUE_CONSUME_REQUIRES_VERIFIED_EVIDENCE");
     item.state = nextState;
-    if (nextState === "claimed") item.claimedByWeeklyRunId = clean(weeklyRunId);
+    if (nextState === "claimed") {
+      if (!clean(weeklyRunId)) throw new Error("RADAR_QUEUE_WEEKLY_RUN_ID_REQUIRED");
+      item.claimedByWeeklyRunId = clean(weeklyRunId);
+      item.claimedAt ||= nowIso(options.clock);
+    }
     if (nextState === "consumed") item.verifiedWriteEvidence = verifiedWriteEvidence;
+    if (nextState === "conflict") item.conflict = verifiedWriteEvidence || { reason: "unspecified_conflict" };
     item.updatedAt = nowIso(options.clock);
+    return { key, item: structuredClone(item) };
+  }, options);
+}
+
+export async function claimRadarQueueItems(filePath, claims = [], { weeklyRunId = "", ...options } = {}) {
+  const owner = clean(weeklyRunId);
+  if (!owner) throw new Error("RADAR_QUEUE_WEEKLY_RUN_ID_REQUIRED");
+  return mutateState(filePath, "urgent_queue", (state) => {
+    const claimed = [];
+    const conflicts = [];
+    for (const claim of claims) {
+      const aliases = [...new Set([claim.identity, ...(claim.aliases || [])].filter(Boolean))];
+      const found = findByAliases(state.items, aliases);
+      if (!found) { conflicts.push({ identity: claim.identity, reason: "queue_item_missing" }); continue; }
+      const [key, item] = found;
+      if (item.state === "claimed" && item.claimedByWeeklyRunId === owner) {
+        claimed.push({ key, duplicate: true, item: structuredClone(item) });
+        continue;
+      }
+      if (item.state !== "queued") {
+        conflicts.push({ key, identity: claim.identity, reason: item.state === "claimed" ? "claimed_by_other_run" : `queue_state_${item.state}` });
+        continue;
+      }
+      item.state = "claimed";
+      item.claimedByWeeklyRunId = owner;
+      item.claimedAt = nowIso(options.clock);
+      item.claimClassificationFingerprint = clean(claim.classificationFingerprint);
+      item.updatedAt = item.claimedAt;
+      claimed.push({ key, duplicate: false, item: structuredClone(item) });
+    }
+    return { claimed, conflicts };
+  }, options);
+}
+
+export async function settleRadarQueueClassification(filePath, identity, {
+  weeklyRunId = "",
+  finalGrade = "",
+  reason = "weekly_regraded_not_admitted",
+  classificationFingerprint = "",
+  ...options
+} = {}) {
+  const owner = clean(weeklyRunId);
+  if (!owner) throw new Error("RADAR_QUEUE_WEEKLY_RUN_ID_REQUIRED");
+  return mutateState(filePath, "urgent_queue", (state) => {
+    const found = findByAliases(state.items, [identity]);
+    if (!found) throw new Error("RADAR_QUEUE_ITEM_MISSING");
+    const [key, item] = found;
+    if (item.state === "claimed" && item.claimedByWeeklyRunId !== owner) throw new Error("RADAR_QUEUE_ITEM_ALREADY_CLAIMED");
+    if (!new Set(["queued", "claimed"]).has(item.state)) throw new Error(`RADAR_QUEUE_CLASSIFICATION_SETTLE_INVALID_${item.state}`);
+    const resolvedAt = nowIso(options.clock);
+    item.state = "consumed";
+    item.claimedByWeeklyRunId = owner;
+    item.claimedAt ||= resolvedAt;
+    item.verifiedWriteEvidence = {
+      verified: true,
+      kind: "classification_resolution",
+      reason,
+      finalGrade: clean(finalGrade).toUpperCase(),
+      classificationFingerprint: clean(classificationFingerprint),
+      resolvedAt,
+    };
+    item.updatedAt = resolvedAt;
     return { key, item: structuredClone(item) };
   }, options);
 }

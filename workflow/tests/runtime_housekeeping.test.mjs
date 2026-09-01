@@ -187,6 +187,7 @@ test("all permanent state names and monthly DOCX block retention deletion", asyn
     "screening_standards.docx", "screening_standards.backup.docx", "screening_standards.before_llm_refine.docx",
     "月报-2030-01.docx", "current_literature_index.json", "current_library_index.json", "papers.json",
     "dedupe-index.json", "learning-state.json", "events.jsonl", "translation_cache.json", "runtime_state.json",
+    "urgent_queue.json", "review_backlog.json", "operation_ledger.json", "email_receipt.json", "notification_receipt.json",
   ];
   for (const name of protectedNames) {
     const ctx = await sandbox(t);
@@ -195,6 +196,32 @@ test("all permanent state names and monthly DOCX block retention deletion", asyn
     const plan = await planRetentionCleanup(planOptions(ctx));
     assert.equal(plan.candidates.length, 0, name);
   }
+});
+
+test("cleanup deletes an owned old audit without touching queue backlog index source state ledger or receipt", async (t) => {
+  const ctx = await sandbox(t);
+  const old = await completedRun(ctx, "old-audit", "2029-01-01T00:00:00.000Z");
+  const durable = [
+    path.join(ctx.runtimeRoot, "radar", "urgent_queue.json"),
+    path.join(ctx.runtimeRoot, "radar", "review_backlog.json"),
+    path.join(ctx.runtimeRoot, "shared", "current_library_index.json"),
+    path.join(ctx.runtimeRoot, "source_state", "weekly-watermark.json"),
+    path.join(ctx.runtimeRoot, "recovery", "operation_ledger.json"),
+    path.join(ctx.runtimeRoot, "receipts", "nr-0123456789abcdef0123456789abcdef.json"),
+  ];
+  for (const filePath of durable) {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "keep", "utf8");
+  }
+  const result = await runRetentionCleanup({
+    ...planOptions(ctx),
+    dryRun: false,
+    force: true,
+    config: { valid: true, enabled: true, retentionDays: 30, warnings: [] },
+  });
+  assert.equal(result.deletedRuns, 1);
+  await assert.rejects(fs.stat(old.target), { code: "ENOENT" });
+  for (const filePath of durable) assert.equal(await fs.readFile(filePath, "utf8"), "keep");
 });
 
 test("registered candidates containing symlinks make the whole plan fail closed", async (t) => {

@@ -108,6 +108,10 @@ function buildPrompt(reviewItems, ruleContextSummary = null, { strictJsonRetry =
   ].join("\n");
 }
 
+export function gradeReviewPromptContractHash() {
+  return hashText(buildPrompt([], null));
+}
+
 function confidenceToScore(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (raw === "high") return 0.9;

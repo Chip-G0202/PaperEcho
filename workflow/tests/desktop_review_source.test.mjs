@@ -55,6 +55,20 @@ function writebackSummary(items) {
   return { writeback_items: items };
 }
 
+function verifiedWritebackSummary({ attempted = [], verified = [], identities = null, identitySetMatch = true } = {}) {
+  const verifiedItems = verified.map((item) => ({
+    ...item,
+    verified_identity: item.verified_identity || `doi:${String(item.doi || item.DOI || "").toLowerCase()}`,
+  }));
+  return {
+    writeback_items: attempted,
+    verified_write_evidence_required: true,
+    verified_write_items: verifiedItems,
+    verified_business_write_identities: identities || verifiedItems.map((item) => item.verified_identity),
+    verified_write_identity_set_match: identitySetMatch,
+  };
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("buildStage1WritebackCorrelationKey", () => {
@@ -468,5 +482,64 @@ describe("buildStage4StandaloneExportSource", () => {
     assert.equal(result.filter.ambiguousWritebackKeyCount, 1);
     assert.equal(result.filter.keptCount, 0);
     assert.equal(result.allAbcItems.length, 0);
+  });
+
+  it("reports exactly two verified writes when the third attempted item conflicted", () => {
+    const candidates = [
+      stage1Candidate({ title: "Verified A", doi: "10.3000/a" }),
+      stage1Candidate({ title: "Conflict B", doi: "10.3000/b" }),
+      stage1Candidate({ title: "Verified C", doi: "10.3000/c" }),
+    ];
+    const attempted = candidates.map((item, index) => writebackItem(`KEY-${index + 1}`, item));
+    const verified = [attempted[0], attempted[2]];
+    const result = buildStage4StandaloneExportSource({
+      desktopSource: desktopSource(candidates),
+      writebackReady: candidates,
+      writebackSummary: verifiedWritebackSummary({ attempted, verified }),
+    });
+    assert.equal(result.filter.status, "ok");
+    assert.equal(result.allAbcItems.length, 2);
+    assert.deepEqual(result.allAbcItems.map((item) => item.title), ["Verified A", "Verified C"]);
+    assert.deepEqual(
+      new Set(result.allAbcItems.map((item) => `doi:${item.doi}`)),
+      new Set(result.filter.verifiedBusinessWriteIdentities),
+    );
+  });
+
+  it("does not present a remote-unknown attempt as written", () => {
+    const candidate = stage1Candidate({ title: "Remote unknown", doi: "10.3000/unknown" });
+    const attempted = [writebackItem("UNKNOWN-1", candidate)];
+    const result = buildStage4StandaloneExportSource({
+      desktopSource: desktopSource([candidate]),
+      writebackReady: [candidate],
+      writebackSummary: verifiedWritebackSummary({ attempted, verified: [] }),
+    });
+    assert.equal(result.filter.status, "no_new_writeback_items");
+    assert.equal(result.allAbcItems.length, 0);
+  });
+
+  it("fails closed when the report identity set differs from ledger-verified identities", () => {
+    const candidate = stage1Candidate({ title: "Mismatch", doi: "10.3000/mismatch" });
+    const written = writebackItem("MISMATCH-1", candidate);
+    const result = buildStage4StandaloneExportSource({
+      desktopSource: desktopSource([candidate]),
+      writebackReady: [candidate],
+      writebackSummary: verifiedWritebackSummary({ attempted: [written], verified: [written], identities: ["doi:10.3000/other"] }),
+    });
+    assert.equal(result.filter.status, "degraded_verified_write_identity_set_mismatch");
+    assert.equal(result.allAbcItems.length, 0);
+  });
+
+  it("uses verified business evidence even when queue consumption still needs resume", () => {
+    const candidate = stage1Candidate({ title: "Verified before consume", doi: "10.3000/resume" });
+    const written = writebackItem("RESUME-1", candidate);
+    const summary = {
+      ...verifiedWritebackSummary({ attempted: [written], verified: [written] }),
+      radar_queue_results: [{ identity: "doi:10.3000/resume", status: "claimed" }],
+    };
+    const result = buildStage4StandaloneExportSource({ desktopSource: desktopSource([candidate]), writebackReady: [candidate], writebackSummary: summary });
+    assert.equal(result.filter.status, "ok");
+    assert.equal(result.allAbcItems.length, 1);
+    assert.equal(result.allAbcItems[0].itemKey, "RESUME-1");
   });
 });
