@@ -260,6 +260,10 @@ export async function runResearchOsPipeline({
         rss: { items: candidateSource, failed: [], config: { warnings: [] } },
         db: { items: [], failed: [], config: { databases: [], warnings: [] } },
         openalex: { items: [], failed: [], config: { warnings: [] }, skipped_reason: "local_input" },
+        semanticScholar: { items: [], failed: [], config: { warnings: [] }, skipped_reason: "local_input" },
+        crossref: { items: [], failed: [], config: { warnings: [] }, skipped_reason: "local_input" },
+        europePmc: { items: [], failed: [], config: { warnings: [] }, skipped_reason: "local_input" },
+        retrievalHealth: null,
       }
     : fixture.enabled
     ? {
@@ -280,6 +284,10 @@ export async function runResearchOsPipeline({
         rss: { items: fixture.items, failed: [], config: { enabled_count: 0, warnings: [], path: fixture.path } },
         db: { items: [], failed: [], config: { databases: [], warnings: [] } },
         openalex: { items: [], failed: [], config: { warnings: [] }, skipped_reason: "fixture_input" },
+        semanticScholar: { items: [], failed: [], config: { warnings: [] }, skipped_reason: "fixture_input" },
+        crossref: { items: [], failed: [], config: { warnings: [] }, skipped_reason: "fixture_input" },
+        europePmc: { items: [], failed: [], config: { warnings: [] }, skipped_reason: "fixture_input" },
+        retrievalHealth: null,
       }
     : await runSourceSelectionAndFetch({
         root: ROOT,
@@ -290,7 +298,7 @@ export async function runResearchOsPipeline({
         sourceStateRoot: process.env.PAPERECHO_SOURCE_STATE_ROOT || path.join(RESEARCH_ROOT, "source_state"),
         deferCommit: radarProfile,
       });
-  const { sourceSelection, sourceCollectionSummary, rss, db, openalex, retrievalAuditPath = "", retrievalTransaction = null } = sourceResult;
+  const { sourceSelection, sourceCollectionSummary, rss, db, openalex, semanticScholar, crossref, europePmc, retrievalHealth = null, retrievalAuditPath = "", retrievalTransaction = null } = sourceResult;
   const rssEnabled = sourceSelection.enabled_sources?.includes("rss") ?? false;
   const pubmedEnabled = sourceSelection.enabled_sources?.includes("pubmed_pmc") ?? false;
   const openalexEnabled = sourceSelection.enabled_sources?.includes("openalex") ?? false;
@@ -301,18 +309,30 @@ export async function runResearchOsPipeline({
   report.counts.rss_raw = rss.items.length;
   report.counts.db_raw = db.items.length;
   report.counts.openalex_raw = openalex.items.length;
+  report.counts.semantic_scholar_raw = semanticScholar.items.length;
+  report.counts.crossref_raw = crossref.items.length;
+  report.counts.europe_pmc_raw = europePmc.items.length;
   report.failures.push(...rss.failed.map((f) => ({ stage: "rss", ...f })));
   report.failures.push(...db.failed.map((f) => ({ stage: "pubmed", ...f })));
   report.failures.push(...openalex.failed.map((f) => ({ stage: "openalex", ...f })));
+  report.failures.push(...semanticScholar.failed.map((f) => ({ stage: "semantic_scholar", ...f })));
+  report.failures.push(...crossref.failed.map((f) => ({ stage: "crossref", ...f })));
+  report.failures.push(...europePmc.failed.map((f) => ({ stage: "europe_pmc", ...f })));
 
   report.steps.med_entry_parallel = {
     ok: true,
     rss_raw: rss.items.length,
     db_raw: db.items.length,
     openalex_raw: openalex.items.length,
+    semantic_scholar_raw: semanticScholar.items.length,
+    crossref_raw: crossref.items.length,
+    europe_pmc_raw: europePmc.items.length,
     rss_failures: rss.failed.length,
     db_failures: db.failed.length,
     openalex_failures: openalex.failed.length,
+    semantic_scholar_failures: semanticScholar.failed.length,
+    crossref_failures: crossref.failed.length,
+    europe_pmc_failures: europePmc.failed.length,
     rss_config_path: rss.config?.path || "",
     rss_sources_enabled: rss.config?.enabled_count || 0,
     pubmed_pmc_config_path: db.config?.path || "",
@@ -326,9 +346,11 @@ export async function runResearchOsPipeline({
     source_selection_enabled: sourceSelection.enabled_sources,
     source_selection_manual_confirmation: manualConfirmationRequired,
     source_collection_summary: sourceCollectionSummary,
+    retrieval_health: retrievalHealth,
   };
 
-  const rawCandidates = [...rss.items, ...db.items, ...openalex.items];
+  report.steps.retrieval_health = retrievalHealth;
+  const rawCandidates = [...rss.items, ...db.items, ...openalex.items, ...semanticScholar.items, ...crossref.items, ...europePmc.items];
   const llmRuntime = resolveLlmRuntime();
   const weeklyRadarMergeEnabled = !radarProfile && !zoteroSkipped && Boolean(runId);
   const radarPreparation = radarProfile

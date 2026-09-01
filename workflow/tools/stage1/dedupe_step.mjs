@@ -22,6 +22,12 @@ function dedupeKeysForItem(item = {}) {
   return getLiteratureIdentityKeys(item).map((key) => ({ type: key.slice(0, key.indexOf(":")), key }));
 }
 
+function provenanceSources(item = {}) {
+  const explicit = Array.isArray(item.retrieval_sources) ? item.retrieval_sources : [];
+  const fallback = item.source || item.source_platform || item.source_channel;
+  return [...new Set([...explicit, fallback].filter(Boolean).map(String))];
+}
+
 export function dedupWithDiagnostics(items = []) {
   const seen = new Map();
   const out = [];
@@ -43,13 +49,20 @@ export function dedupWithDiagnostics(items = []) {
       const kept = out[keptIndex];
       if (kept) {
         kept.dedupe_duplicate_count = Number(kept.dedupe_duplicate_count || 0) + 1;
-        const sources = new Set([kept.source, item.source].filter(Boolean).map(String));
-        if (sources.size) kept.dedupe_merged_sources = [...sources];
+        const sources = new Set([...provenanceSources(kept), ...provenanceSources(item)]);
+        if (sources.size) {
+          kept.retrieval_sources = [...sources];
+          kept.dedupe_merged_sources = [...sources];
+        }
+        // Preserve transitive identity links (for example DOI -> DOI+PMID -> PMID).
+        for (const entry of keys) seen.set(entry.key, keptIndex);
       }
       continue;
     }
     const keptIndex = out.length;
     for (const entry of keys) seen.set(entry.key, keptIndex);
+    const sources = provenanceSources(item);
+    if (sources.length) item.retrieval_sources = sources;
     out.push(item);
   }
   return {

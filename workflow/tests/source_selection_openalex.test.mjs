@@ -271,6 +271,26 @@ test("runSelectedRetrievalSources — enabled sources start concurrently", async
   assert.equal(result.openalex.items[0].title, "openalex");
 });
 
+test("runSelectedRetrievalSources — each retrieval source receives an independent concurrency controller", async () => {
+  const controllers = {};
+  const result = await runSelectedRetrievalSources({
+    root: fixturePath("source_selection_mixed"),
+    pubmedPmcConfig: { databases: ["pubmed"], warnings: [] },
+    openAlexConfig: { enabled: true, query: "graphene", filters: {}, warnings: [] },
+    searchIntent: { expression: { type: "term", value: "graphene", exact: false }, parseErrors: [], dateRange: {} },
+    semanticScholarConfig: { enabled: true },
+    plan: { rssEnabled: true, pubmedEnabled: true, openalexEnabled: true, semanticScholarEnabled: true },
+    fetchers: {
+      fetchRssAll: async (options) => { controllers.rss = options.sourceConcurrencyController; return { items: [], failed: [], config: { warnings: [] } }; },
+      fetchPubMed: async (_config, options) => { controllers.pubmed = options.sourceConcurrencyController; return { items: [], failed: [], config: { warnings: [] } }; },
+      fetchOpenAlex: async (_config, options) => { controllers.openalex = options.sourceConcurrencyController; return { items: [], failed: [], config: { warnings: [] } }; },
+      fetchSemanticScholar: async (_intent, _config, options) => { controllers.semanticScholar = options.controller; return { items: [], failed: [], config: { warnings: [] } }; },
+    },
+  });
+  assert.ok(result.semanticScholar);
+  assert.equal(new Set(Object.values(controllers)).size, 4);
+});
+
 test("dedupe — openalex items included without ReferenceError", async () => {
   const { dedupWithDiagnostics } = await import("../tools/stage1/dedupe_step.mjs");
   const rssItems = [{ title: "RSS Article", doi: "10.0000/example.003", source_channel: "rss" }];

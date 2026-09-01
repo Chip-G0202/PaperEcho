@@ -16,22 +16,24 @@
     "non_biomedical_stem": {
       "label": "传统理工 / 计算机 / 工程 / 材料 / 化学 / 物理 / 数学",
       "primary_sources": [
-        "openalex"
+        "openalex",
+        "semantic_scholar"
       ],
       "supplemental_sources": [
         "rss"
       ],
-      "notes": "默认 OpenAlex 为主检索源，RSS 为补充，PubMed/PMC 默认不启用"
+      "notes": "默认 OpenAlex 与 Semantic Scholar 为综合检索源，RSS 为补充，PubMed/PMC 默认不启用"
     },
     "education_social_science": {
       "label": "教育 / 社科 / 管理 / 人文 / 经济 / 心理",
       "primary_sources": [
-        "openalex"
+        "openalex",
+        "semantic_scholar"
       ],
       "supplemental_sources": [
         "rss"
       ],
-      "notes": "默认 OpenAlex 为主检索源，RSS 为补充，PubMed/PMC 默认不启用"
+      "notes": "默认 OpenAlex 与 Semantic Scholar 为综合检索源，RSS 为补充，PubMed/PMC 默认不启用"
     },
     "mixed_biomedical_technical": {
       "label": "混合领域 (medical AI / bioinformatics / health education / health informatics)",
@@ -40,6 +42,7 @@
         "openalex"
       ],
       "supplemental_sources": [
+        "semantic_scholar",
         "rss"
       ],
       "notes": "必须由配置显式声明 mixed，允许 PubMed/PMC + OpenAlex 混合检索"
@@ -55,5 +58,35 @@
   },
   "override_enabled_sources": null,
   "require_manual_confirmation": true,
+  "retrieval": {
+    "diagnostics": {
+      "enabled": true,
+      "low_yield_threshold": 5,
+      "probe_budget": 6
+    },
+    "openalex": {
+      "request_budget": 8,
+      "semantic_rescue_enabled": true,
+      "semantic_rescue_max_results": 25
+    },
+    "semantic_scholar": {
+      "request_budget": 4,
+      "concurrency": 1,
+      "max_encoded_url_length": 3800,
+      "max_query_characters": 3500
+    },
+    "crossref": {
+      "rescue_enabled": true,
+      "request_budget": 4,
+      "query_budget": 3
+    },
+    "europe_pmc": {
+      "rescue_enabled": true,
+      "validated_unique_recall": true,
+      "request_budget": 4,
+      "include_preprints": false,
+      "synonym": true
+    }
+  },
   "notes": "Select and review sources for your own research domain."
 }

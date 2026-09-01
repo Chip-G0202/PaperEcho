@@ -191,7 +191,7 @@ export function buildAdaptivePubMedQueryPlan(adaptiveQuery = {}, keywordGroups =
  * Pure function — does not read files, access network, or call APIs.
  *
  * @param {Object} sourceSelection - output of loadSourceSelectionConfig()
- * @returns {{ rssEnabled: boolean, pubmedEnabled: boolean, openalexEnabled: boolean, manualConfirmationRequired: boolean }}
+ * @returns {{ rssEnabled: boolean, pubmedEnabled: boolean, openalexEnabled: boolean, semanticScholarEnabled: boolean, manualConfirmationRequired: boolean }}
  */
 export function resolveRetrievalPlan(sourceSelection) {
   const enabled = sourceSelection?.enabled_sources || [];
@@ -199,6 +199,10 @@ export function resolveRetrievalPlan(sourceSelection) {
     rssEnabled: enabled.includes("rss"),
     pubmedEnabled: enabled.includes("pubmed_pmc"),
     openalexEnabled: enabled.includes("openalex"),
+    semanticScholarEnabled: enabled.includes("semantic_scholar"),
+    crossrefRescueEnabled: sourceSelection?.retrieval?.crossref?.rescue_enabled === true,
+    europePmcRescueEnabled: sourceSelection?.retrieval?.europe_pmc?.rescue_enabled === true
+      && sourceSelection?.retrieval?.europe_pmc?.validated_unique_recall === true,
     manualConfirmationRequired: sourceSelection?.require_manual_confirmation === true,
   };
 }
@@ -398,7 +402,7 @@ const VALID_DOMAINS = [
   "unknown",
 ];
 
-const VALID_SOURCES = ["rss", "pubmed_pmc", "openalex"];
+const VALID_SOURCES = ["rss", "pubmed_pmc", "openalex", "semantic_scholar"];
 
 export function loadSourceSelectionConfig({ root } = {}) {
   const filePath = configPath(root, "source_selection.json");
@@ -406,13 +410,14 @@ export function loadSourceSelectionConfig({ root } = {}) {
     research_domain: "biomedical",
     domain_options: {
       biomedical: { primary_sources: ["pubmed_pmc"], supplemental_sources: ["rss"] },
-      non_biomedical_stem: { primary_sources: ["openalex"], supplemental_sources: ["rss"] },
-      education_social_science: { primary_sources: ["openalex"], supplemental_sources: ["rss"] },
-      mixed_biomedical_technical: { primary_sources: ["pubmed_pmc", "openalex"], supplemental_sources: ["rss"] },
+      non_biomedical_stem: { primary_sources: ["openalex", "semantic_scholar"], supplemental_sources: ["rss"] },
+      education_social_science: { primary_sources: ["openalex", "semantic_scholar"], supplemental_sources: ["rss"] },
+      mixed_biomedical_technical: { primary_sources: ["pubmed_pmc", "openalex"], supplemental_sources: ["semantic_scholar", "rss"] },
       unknown: { primary_sources: [], supplemental_sources: ["rss"] },
     },
     override_enabled_sources: null,
     require_manual_confirmation: false,
+    retrieval: {},
   };
   const { config, path: resolvedPath, warnings } = readJsonConfig(filePath, fallback);
   const domain = VALID_DOMAINS.includes(config.research_domain) ? config.research_domain : "unknown";
@@ -439,6 +444,36 @@ export function loadSourceSelectionConfig({ root } = {}) {
     supplemental_sources: supplementalSources,
     enabled_sources: enabledSources,
     require_manual_confirmation: requireManualConfirmation,
+    retrieval: {
+      diagnostics: {
+        enabled: config.retrieval?.diagnostics?.enabled === true,
+        low_yield_threshold: safePositiveInteger(config.retrieval?.diagnostics?.low_yield_threshold, 5, warnings, "retrieval.diagnostics.low_yield_threshold"),
+        probe_budget: safePositiveInteger(config.retrieval?.diagnostics?.probe_budget, 6, warnings, "retrieval.diagnostics.probe_budget"),
+      },
+      openalex: {
+        request_budget: safePositiveInteger(config.retrieval?.openalex?.request_budget, 8, warnings, "retrieval.openalex.request_budget"),
+        semantic_rescue_enabled: config.retrieval?.openalex?.semantic_rescue_enabled === true,
+        semantic_rescue_max_results: safePositiveInteger(config.retrieval?.openalex?.semantic_rescue_max_results, 25, warnings, "retrieval.openalex.semantic_rescue_max_results"),
+      },
+      semantic_scholar: {
+        request_budget: safePositiveInteger(config.retrieval?.semantic_scholar?.request_budget, 4, warnings, "retrieval.semantic_scholar.request_budget"),
+        concurrency: safePositiveInteger(config.retrieval?.semantic_scholar?.concurrency, 1, warnings, "retrieval.semantic_scholar.concurrency"),
+        max_encoded_url_length: safePositiveInteger(config.retrieval?.semantic_scholar?.max_encoded_url_length, 3800, warnings, "retrieval.semantic_scholar.max_encoded_url_length"),
+        max_query_characters: safePositiveInteger(config.retrieval?.semantic_scholar?.max_query_characters, 3500, warnings, "retrieval.semantic_scholar.max_query_characters"),
+      },
+      crossref: {
+        rescue_enabled: config.retrieval?.crossref?.rescue_enabled === true,
+        request_budget: safePositiveInteger(config.retrieval?.crossref?.request_budget, 4, warnings, "retrieval.crossref.request_budget"),
+        query_budget: safePositiveInteger(config.retrieval?.crossref?.query_budget, 3, warnings, "retrieval.crossref.query_budget"),
+      },
+      europe_pmc: {
+        rescue_enabled: config.retrieval?.europe_pmc?.rescue_enabled === true,
+        validated_unique_recall: config.retrieval?.europe_pmc?.validated_unique_recall === true,
+        request_budget: safePositiveInteger(config.retrieval?.europe_pmc?.request_budget, 4, warnings, "retrieval.europe_pmc.request_budget"),
+        include_preprints: config.retrieval?.europe_pmc?.include_preprints === true,
+        synonym: config.retrieval?.europe_pmc?.synonym === true,
+      },
+    },
     warnings,
   };
 }
@@ -467,13 +502,14 @@ export function loadOpenAlexConfig({ root } = {}) {
   if (!enabled) {
     warnings.push("openalex_disabled");
   }
-  if (enabled && !query) {
+  if (enabled && !query && !(config.keyword_groups && typeof config.keyword_groups === "object")) {
     warnings.push("openalex_enabled_but_empty_query");
   }
   return {
     path: resolvedPath,
     enabled,
     query,
+    keyword_groups: config.keyword_groups && typeof config.keyword_groups === "object" ? config.keyword_groups : null,
     days_back: daysBack,
     overlap_days: overlapDays,
     per_page: Math.min(perPage, 200),
@@ -489,6 +525,11 @@ export function loadOpenAlexConfig({ root } = {}) {
     },
     sort: String(config.sort || fallback.sort),
     select: String(config.select || fallback.select),
+    request_budget: safePositiveInteger(config.request_budget, 8, warnings, "openalex.request_budget"),
+    max_query_characters: safePositiveInteger(config.max_query_characters, 1400, warnings, "openalex.max_query_characters"),
+    diagnostic_probe_budget: safePositiveInteger(config.diagnostic_probe_budget, 6, warnings, "openalex.diagnostic_probe_budget"),
+    semantic_rescue_enabled: config.semantic_rescue_enabled === true,
+    semantic_rescue_max_results: safePositiveInteger(config.semantic_rescue_max_results, 25, warnings, "openalex.semantic_rescue_max_results"),
     warnings,
   };
 }

@@ -2,6 +2,8 @@ import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { createServiceConcurrencyController, parseServerDelayMs } from "../lib/adaptive_concurrency.mjs";
 import { buildNcbiESearchUrl, loadOpenAlexConfig, loadPubMedPmcSearchConfig, loadRssSources } from "../lib/literature_config.mjs";
 import { cleanJournalName, inferJournalFromUrlSync } from "../lib/journal_name_cleaner.mjs";
+import { getLiteratureIdentityKeys } from "../lib/literature_identity.mjs";
+import { buildOpenAlexQueryPlan, buildQueryHealthProbes, buildSearchIntent, buildSemanticRescueText, openAlexSearchParameterForQuery } from "./search_intent.mjs";
 import {
   buildSourceState,
   canonicalQueryHash,
@@ -12,7 +14,7 @@ import {
 
 const RSS_ADAPTER_VERSION = "rss-fast-xml-parser-v1";
 const NCBI_ADAPTER_VERSION = "ncbi-esearch-efetch-v1";
-const OPENALEX_ADAPTER_VERSION = "openalex-cursor-v1";
+const OPENALEX_ADAPTER_VERSION = "openalex-intent-cursor-v2";
 const SOURCE_HTTP_MAX_CONCURRENCY = 4;
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -23,8 +25,8 @@ const xmlParser = new XMLParser({
   processEntities: true,
 });
 
-function resolveSourceHttpController(existing = null) {
-  return existing || createServiceConcurrencyController("source_http", {
+function resolveSourceHttpController(existing = null, service = "source_http") {
+  return existing || createServiceConcurrencyController(service, {
     minConcurrency: 1,
     initialConcurrency: SOURCE_HTTP_MAX_CONCURRENCY,
     maxConcurrency: SOURCE_HTTP_MAX_CONCURRENCY,
@@ -104,6 +106,7 @@ export async function fetchResponseWithRetry(url, options = {}, attempts = 3) {
       return response;
     } catch (error) {
       lastError = error;
+      options.onAttemptFailure?.({ attempt, error });
       const retryAfterMs = Math.max(0, Number(error?.retryAfterMs || 0));
       concurrencyController?.recordFailure(error);
       const delayMs = Math.max(retryAfterMs, retryDelayMs * attempt);
@@ -172,7 +175,7 @@ function rssNamespace(url) {
 
 export async function fetchRssAll({ root, profile = "weekly", stateRoot = "", fetchImpl = globalThis.fetch, now = new Date(), sourceConcurrencyController = null } = {}) {
   const rssConfig = loadRssSources({ root });
-  const controller = resolveSourceHttpController(sourceConcurrencyController);
+  const controller = resolveSourceHttpController(sourceConcurrencyController, "retrieval_rss");
   const feedResults = await controller.map(rssConfig.sources, async ({ url }) => {
     const checkedAt = new Date(now).toISOString();
     const namespace = rssNamespace(url);
@@ -363,7 +366,7 @@ function ncbiIdentity(database, item) {
 }
 
 export async function fetchNcbiDatabase(database, cfg, { profile = "weekly", stateRoot = "", fetchImpl = globalThis.fetch, now = new Date(), sourceConcurrencyController = null } = {}) {
-  const controller = resolveSourceHttpController(sourceConcurrencyController);
+  const controller = resolveSourceHttpController(sourceConcurrencyController, `retrieval_${database}`);
   const effectiveQuery = hasExplicitNcbiDateConstraint(cfg.query) ? cfg.query : (cfg.effective_query || cfg.query);
   const semanticConfig = {
     adapterVersion: NCBI_ADAPTER_VERSION,
@@ -457,12 +460,12 @@ export async function fetchNcbiDatabase(database, cfg, { profile = "weekly", sta
 
 export async function fetchPubMed(externalCfg, { root, profile = "weekly", stateRoot = "", fetchImpl = globalThis.fetch, now = new Date(), sourceConcurrencyController = null } = {}) {
   const cfg = externalCfg || loadPubMedPmcSearchConfig({ root, now });
-  const controller = resolveSourceHttpController(sourceConcurrencyController);
   const items = [];
   const failed = [];
   const audit = [];
   const stateUpdates = [];
   for (const database of cfg.databases) {
+    const controller = sourceConcurrencyController || resolveSourceHttpController(null, `retrieval_${database}`);
     const result = await fetchNcbiDatabase(database, cfg, { profile, stateRoot, fetchImpl, now, sourceConcurrencyController: controller });
     items.push(...result.items);
     failed.push(...result.failed);
@@ -499,6 +502,7 @@ export function normalizeOpenAlexItem(work) {
   const venue = extractVenue(work?.primary_location);
   const oaUrl = work?.open_access?.oa_url || "";
   return {
+    source: "openalex",
     source_channel: "openalex",
     source_platform: "openalex",
     item_type_hint: "journalArticle",
@@ -516,6 +520,7 @@ export function normalizeOpenAlexItem(work) {
     oa_url: oaUrl,
     pmid: "",
     pmcid: "",
+    retrieval_sources: ["openalex"],
   };
 }
 
@@ -532,9 +537,9 @@ function openAlexWindow(cfg, previous, now) {
 
 export function buildOpenAlexSearchParams(cfg, { cursor = "*", window = null, now = new Date() } = {}) {
   const params = new URLSearchParams();
-  if (cfg.query) params.set("search", cfg.query);
+  if (cfg.query) params.set(cfg.search_parameter || "search", cfg.query);
   params.set("per_page", String(cfg.per_page || 50));
-  params.set("cursor", cursor);
+  if (cfg.search_parameter !== "search.semantic") params.set("cursor", cursor);
   params.set("select", cfg.select || "id,doi,title,publication_year,publication_date,authorships,primary_location,abstract_inverted_index,open_access,type");
   if (cfg.mailto) params.set("mailto", cfg.mailto);
   const filters = [];
@@ -549,21 +554,56 @@ export function buildOpenAlexSearchParams(cfg, { cursor = "*", window = null, no
   return `https://api.openalex.org/works?${params}`;
 }
 
+function uniqueByCanonicalIdentity(items = []) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = getLiteratureIdentityKeys(item)[0];
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function latencyMetrics(values = []) {
+  if (!values.length) return { count: 0, minMs: null, medianMs: null, maxMs: null };
+  const ordered = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(ordered.length / 2);
+  const medianMs = ordered.length % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2;
+  return { count: values.length, minMs: ordered[0], medianMs, maxMs: ordered.at(-1) };
+}
+
 export async function fetchOpenAlex(externalCfg, { root, profile = "weekly", stateRoot = "", fetchImpl = globalThis.fetch, now = new Date(), sourceConcurrencyController = null } = {}) {
-  const controller = resolveSourceHttpController(sourceConcurrencyController);
+  const controller = resolveSourceHttpController(sourceConcurrencyController, "retrieval_openalex");
   const cfg = externalCfg || loadOpenAlexConfig({ root });
-  if (!cfg.enabled) return { items: [], failed: [], config: cfg, audit: [], stateUpdates: [], skipped_reason: "openalex_disabled" };
-  if (!cfg.query) return { items: [], failed: [], config: cfg, audit: [], stateUpdates: [], skipped_reason: "empty_query" };
+  const emptyMetrics = { source: "openalex", queryVariantCount: 0, requestCount: 0, totalReported: 0, fetched: 0, normalized: 0, uniqueAfterMerge: 0, duplicateCount: 0, errorCount: 0, "429Count": 0, zeroReason: "", degraded: false, latency: latencyMetrics() };
+  if (!cfg.enabled) return { items: [], failed: [], config: cfg, audit: [], stateUpdates: [], metrics: { ...emptyMetrics, zeroReason: "disabled" }, skipped_reason: "openalex_disabled" };
+  const intent = cfg.search_intent || buildSearchIntent({ query: cfg.query, keywordGroups: cfg.keyword_groups, publicationTypes: [cfg.filters?.type].filter(Boolean) });
+  if (!intent.expression) return { items: [], failed: [], config: cfg, audit: [], stateUpdates: [], metrics: { ...emptyMetrics, zeroReason: "empty_query" }, skipped_reason: "empty_query" };
+  const baseUrlLength = buildOpenAlexSearchParams({ ...cfg, query: "" }, { cursor: "*", now }).length;
+  const requestBudget = Math.max(1, Number(cfg.request_budget || cfg.max_pages || 8));
+  const queryPlan = buildOpenAlexQueryPlan(intent, { maxEncodedUrlLength: 4000, maxQueryCharacters: Number(cfg.max_query_characters || 1400), baseUrlLength, requestBudget });
+  if (!queryPlan.variants.length || queryPlan.errors.length) {
+    const error = queryPlan.errors.join(",") || "OPENALEX_QUERY_COMPILATION_FAILED";
+    return {
+      items: [],
+      failed: [{ source: "openalex", stage: "compiler", error }],
+      config: cfg,
+      audit: [{ source: "openalex", complete: false, pagesCompleted: 0, itemCount: 0, failureStage: "compiler", queryCompilerDegraded: true }],
+      stateUpdates: [],
+      metrics: { ...emptyMetrics, queryVariantCount: queryPlan.variants.length, errorCount: 1, zeroReason: "query_compiler_error", degraded: true },
+    };
+  }
   const semanticConfig = {
     adapterVersion: OPENALEX_ADAPTER_VERSION,
-    query: cfg.query,
+    queries: queryPlan.variants.map((variant) => variant.query),
     filters: cfg.filters,
     sort: cfg.sort || "",
     select: cfg.select || "",
     overlapDays: cfg.overlap_days || 3,
     initialDaysBack: cfg.days_back || 10,
     perPage: cfg.per_page || 50,
-    maxPages: cfg.max_pages || 10000,
+    requestBudget,
+    searchParameter: queryPlan.searchParameter,
     updateStrategy: "free_publication_date_overlap",
   };
   const queryHash = canonicalQueryHash(semanticConfig);
@@ -572,45 +612,96 @@ export async function fetchOpenAlex(externalCfg, { root, profile = "weekly", sta
   const checkedAt = new Date(now).toISOString();
   const window = openAlexWindow(cfg, previous, new Date(now));
   const items = [];
-  let cursor = "*";
+  const variantTotals = [];
+  const probeResults = [];
+  const latencies = [];
   let pagesCompleted = 0;
-  try {
-    while (cursor) {
-      if (pagesCompleted >= (cfg.max_pages || 10000)) throw new Error("OPENALEX_PAGE_LIMIT_EXCEEDED");
-      const json = JSON.parse(await fetchTextWithRetry(buildOpenAlexSearchParams(cfg, { cursor, window, now }), 3, 20000, fetchImpl, controller));
-      if (!Array.isArray(json?.results)) throw new Error("OPENALEX_RESULTS_INVALID");
-      const results = json.results;
-      for (const work of results) items.push(normalizeOpenAlexItem(work));
-      pagesCompleted += 1;
-      const nextCursor = json?.meta?.next_cursor || "";
-      if (!results.length || !nextCursor) break;
-      if (nextCursor === cursor) throw new Error("OPENALEX_CURSOR_STALLED");
-      cursor = nextCursor;
+  let requestCount = 0;
+  let count429 = 0;
+  let cursor = "";
+  let semanticRescueUsed = false;
+  const requestJson = async (url) => {
+    if (url.length > 4094) throw new Error("OPENALEX_URL_LIMIT_GUARD");
+    if (requestCount >= requestBudget) throw new Error("OPENALEX_REQUEST_BUDGET_EXCEEDED");
+    requestCount += 1;
+    const started = Date.now();
+    try {
+      const response = await fetchResponseWithRetry(url, {
+        timeoutMs: 20000,
+        fetchImpl,
+        concurrencyController: controller,
+        onAttemptFailure: ({ error }) => { if (Number(error?.status || 0) === 429) count429 += 1; },
+      }, 3);
+      return JSON.parse(await response.text());
+    } finally {
+      latencies.push(Date.now() - started);
     }
-    const proposal = {
-      complete: true,
-      itemCount: items.length,
-      committed: { committedThrough: isoDay(now), overlapDays: cfg.overlap_days || 3, strategy: window.strategy, terminalCursor: cursor || null },
-    };
-    const state = buildSourceState({ previous, profile, source: "openalex", queryHash, adapterVersion: OPENALEX_ADAPTER_VERSION, proposal, checkedAt });
-    return {
-      items,
-      failed: [],
-      config: cfg,
-      audit: [{ source: "openalex", queryHash, complete: true, pagesCompleted, itemCount: items.length, window, advancedUpdatedDateUsed: false }],
-      stateUpdates: filePath ? [{ path: filePath, state }] : [],
-    };
+  };
+  let failure = null;
+  try {
+    for (const variant of queryPlan.variants) {
+      cursor = "*";
+      let variantTotal = 0;
+      while (cursor) {
+        const json = await requestJson(buildOpenAlexSearchParams({ ...cfg, query: variant.query, search_parameter: queryPlan.searchParameter }, { cursor, window, now }));
+        if (!Array.isArray(json?.results)) throw new Error("OPENALEX_RESULTS_INVALID");
+        variantTotal = Math.max(variantTotal, Number(json?.meta?.count || 0));
+        const results = json.results;
+        items.push(...results.map(normalizeOpenAlexItem));
+        pagesCompleted += 1;
+        const nextCursor = String(json?.meta?.next_cursor || "");
+        if (!results.length || !nextCursor) cursor = "";
+        else if (nextCursor === cursor) throw new Error("OPENALEX_CURSOR_STALLED");
+        else cursor = nextCursor;
+      }
+      variantTotals.push({ kind: variant.kind, total: variantTotal });
+    }
+    const primaryTotal = variantTotals.reduce((sum, entry) => sum + entry.total, 0);
+    if (primaryTotal === 0 && items.length === 0 && cfg.diagnostics_enabled !== false) {
+      const probes = buildQueryHealthProbes(intent, { requestBudget: Math.min(Number(cfg.diagnostic_probe_budget || 6), Math.max(0, requestBudget - requestCount)) });
+      for (const probe of probes) {
+        const json = await requestJson(buildOpenAlexSearchParams({ ...cfg, query: probe.query, per_page: 1, search_parameter: openAlexSearchParameterForQuery(probe.query) }, { cursor: "*", window, now }));
+        probeResults.push({ kind: probe.kind, groupIds: probe.groupIds, total: Number(json?.meta?.count || 0) });
+      }
+    }
+    if (!items.length && cfg.semantic_rescue_enabled === true && requestCount < requestBudget) {
+      const semanticText = buildSemanticRescueText(intent, { maxChars: 2000 });
+      if (semanticText) {
+        const json = await requestJson(buildOpenAlexSearchParams({ ...cfg, query: semanticText, per_page: Math.min(50, Number(cfg.semantic_rescue_max_results || 25)), search_parameter: "search.semantic", sort: "" }, { cursor: "*", window, now }));
+        if (!Array.isArray(json?.results)) throw new Error("OPENALEX_SEMANTIC_RESULTS_INVALID");
+        items.push(...json.results.map(normalizeOpenAlexItem));
+        semanticRescueUsed = json.results.length > 0;
+      }
+    }
+    if (queryPlan.degradedReasons.includes("openalex_request_budget_truncated")) throw new Error("OPENALEX_QUERY_REQUEST_BUDGET_TRUNCATED");
   } catch (error) {
-    const proposal = { complete: false, failureStage: "paging", error: error.message };
-    const state = buildSourceState({ previous, profile, source: "openalex", queryHash, adapterVersion: OPENALEX_ADAPTER_VERSION, proposal, checkedAt });
-    return {
-      items,
-      failed: [{ source: "openalex", stage: "paging", error: String(error.message || error) }],
-      config: cfg,
-      audit: [{ source: "openalex", queryHash, complete: false, pagesCompleted, itemCount: items.length, failureStage: "paging", window, advancedUpdatedDateUsed: false }],
-      stateUpdates: filePath ? [{ path: filePath, state }] : [],
-    };
+    failure = error;
   }
+  const normalized = uniqueByCanonicalIdentity(items);
+  const requiredProbeResults = probeResults.filter((probe) => probe.kind === "required_group");
+  const queryOverConstrained = variantTotals.length > 0 && variantTotals.every((entry) => entry.total === 0) && requiredProbeResults.length > 0 && requiredProbeResults.every((probe) => probe.total > 0);
+  const coreGroupZero = requiredProbeResults.some((probe) => probe.total === 0);
+  const complete = !failure;
+  const proposal = complete
+    ? { complete: true, itemCount: normalized.length, committed: { committedThrough: isoDay(now), overlapDays: cfg.overlap_days || 3, strategy: window.strategy, terminalCursor: cursor || null } }
+    : { complete: false, failureStage: "paging", error: failure.message };
+  const state = buildSourceState({ previous, profile, source: "openalex", queryHash, adapterVersion: OPENALEX_ADAPTER_VERSION, proposal, checkedAt });
+  const totalReported = variantTotals.reduce((sum, entry) => sum + entry.total, 0);
+  const zeroReason = normalized.length
+    ? (semanticRescueUsed ? "primary_zero_rescued_semantic" : "")
+    : failure ? "source_failure"
+      : queryOverConstrained ? "query_over_constrained"
+        : coreGroupZero ? "term_database_coverage"
+          : "healthy_zero";
+  const failed = failure ? [{ source: "openalex", stage: "paging", error: String(failure.message || failure) }] : [];
+  return {
+    items: normalized,
+    failed,
+    config: cfg,
+    audit: [{ source: "openalex", queryHash, complete, pagesCompleted, itemCount: normalized.length, totalReported, queryVariantCount: queryPlan.variants.length, queryCompilerDegraded: queryPlan.queryDegraded, degradedReasons: queryPlan.degradedReasons, queryOverConstrained, semanticRescueUsed, probeResults, failureStage: complete ? undefined : "paging", window, advancedUpdatedDateUsed: false }],
+    stateUpdates: filePath ? [{ path: filePath, state }] : [],
+    metrics: { source: "openalex", queryVariantCount: queryPlan.variants.length, requestCount, totalReported, fetched: items.length, normalized: normalized.length, uniqueAfterMerge: 0, duplicateCount: Math.max(0, items.length - normalized.length), errorCount: failed.length, "429Count": count429, zeroReason, degraded: failed.length > 0 || queryPlan.queryDegraded, latency: latencyMetrics(latencies), queryOverConstrained, queryCompilerDegraded: queryPlan.queryDegraded, semanticRescueUsed },
+  };
 }
 
 function retrievalFailureResult(source, error) {
@@ -618,29 +709,40 @@ function retrievalFailureResult(source, error) {
   const audit = [{ source, complete: false, itemCount: 0, failureStage: "adapter" }];
   if (source === "rss") return { items: [], failed: [{ source: "rss", error: message }], config: { enabled_count: 0, warnings: [] }, audit, stateUpdates: [] };
   if (source === "pubmed") return { items: [], failed: [{ source: "pubmed", error: message }], config: { databases: [], warnings: [] }, audit, stateUpdates: [] };
-  return { items: [], failed: [{ source: "openalex", error: message }], config: { enabled: true, warnings: [] }, audit, stateUpdates: [] };
+  return {
+    items: [],
+    failed: [{ source, error: message }],
+    config: { enabled: true, warnings: [] },
+    audit,
+    stateUpdates: [],
+    metrics: { source, queryVariantCount: 0, requestCount: 0, totalReported: 0, fetched: 0, normalized: 0, uniqueAfterMerge: 0, duplicateCount: 0, errorCount: 1, "429Count": 0, zeroReason: "source_failure", degraded: true },
+  };
 }
 
 export async function runSelectedRetrievalSources({
   root,
   pubmedPmcConfig,
   openAlexConfig = null,
+  searchIntent = null,
+  semanticScholarConfig = {},
+  semanticScholarApiKey = "",
   plan = {},
   fetchers = {},
   profile = "weekly",
   stateRoot = "",
   now = new Date(),
 } = {}) {
-  const { rssEnabled = false, pubmedEnabled = false, openalexEnabled = false } = plan;
+  const { rssEnabled = false, pubmedEnabled = false, openalexEnabled = false, semanticScholarEnabled = false } = plan;
   const fetchRss = fetchers.fetchRssAll || fetchRssAll;
   const fetchPubmed = fetchers.fetchPubMed || fetchPubMed;
   const fetchOpenalex = fetchers.fetchOpenAlex || fetchOpenAlex;
-  const sourceConcurrencyController = resolveSourceHttpController();
-  const shared = { root, profile, stateRoot, now, sourceConcurrencyController };
+  const fetchSemanticScholar = fetchers.fetchSemanticScholar || (async () => { throw new Error("SEMANTIC_SCHOLAR_ADAPTER_UNAVAILABLE"); });
+  const shared = (source) => ({ root, profile, stateRoot, now, sourceConcurrencyController: resolveSourceHttpController(null, `retrieval_${source}`) });
   const tasks = [
-    { key: "rss", enabled: rssEnabled, disabled: { items: [], failed: [], config: { enabled_count: 0, warnings: [] }, audit: [], stateUpdates: [] }, run: () => fetchRss(shared) },
-    { key: "db", failureSource: "pubmed", enabled: pubmedEnabled, disabled: { items: [], failed: [], config: { databases: [], warnings: [] }, audit: [], stateUpdates: [] }, run: () => fetchPubmed(pubmedPmcConfig, shared) },
-    { key: "openalex", enabled: openalexEnabled, disabled: { items: [], failed: [], config: { enabled: false, warnings: [] }, audit: [], stateUpdates: [] }, run: () => fetchOpenalex(openAlexConfig || loadOpenAlexConfig({ root }), shared) },
+    { key: "rss", enabled: rssEnabled, disabled: { items: [], failed: [], config: { enabled_count: 0, warnings: [] }, audit: [], stateUpdates: [] }, run: () => fetchRss(shared("rss")) },
+    { key: "db", failureSource: "pubmed", enabled: pubmedEnabled, disabled: { items: [], failed: [], config: { databases: [], warnings: [] }, audit: [], stateUpdates: [] }, run: () => fetchPubmed(pubmedPmcConfig, shared("pubmed_pmc")) },
+    { key: "openalex", enabled: openalexEnabled, disabled: { items: [], failed: [], config: { enabled: false, warnings: [] }, audit: [], stateUpdates: [], metrics: { source: "openalex", normalized: 0, degraded: false, zeroReason: "disabled" } }, run: () => fetchOpenalex({ ...(openAlexConfig || loadOpenAlexConfig({ root })), ...(searchIntent ? { search_intent: searchIntent } : {}) }, shared("openalex")) },
+    { key: "semanticScholar", failureSource: "semantic_scholar", enabled: semanticScholarEnabled, disabled: { items: [], failed: [], config: { enabled: false, warnings: [] }, audit: [], stateUpdates: [], metrics: { source: "semantic_scholar", normalized: 0, degraded: false, zeroReason: "disabled" } }, run: () => fetchSemanticScholar(searchIntent, { ...semanticScholarConfig, enabled: true }, { profile, stateRoot, now, controller: resolveSourceHttpController(null, "retrieval_semantic_scholar"), apiKey: semanticScholarApiKey }) },
   ];
   const settled = await Promise.allSettled(tasks.map(async (task) => task.enabled ? [task.key, await task.run()] : [task.key, task.disabled]));
   const result = {};
