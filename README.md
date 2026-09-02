@@ -18,14 +18,15 @@ PaperEcho 不替代研究者作出判断。它负责整理不断传来的文献�
 
 ## 更新内容
 
-**PaperEcho V2.3** 新增 Daily Radar、Weekly 接管与文献完整性监测，同时沿用同一套身份、恢复和安全更新边界。
+**PaperEcho V2.3** 新增 Daily Radar、Weekly 接管、文献完整性监测与多源检索召回增强，同时沿用同一套身份、恢复和安全更新边界。
 
 - **Daily Radar 每天发现重要变化。** 默认按 Asia/Shanghai 每天 15:00 决策，周末和节假日照常；Weekly 到期日由 Weekly 接管。Radar 使用独立 watermark，只发现、判断和提醒，不写 Zotero，也不生成 XLSX。urgent A 依赖可靠 grading；LLM 不可用时进入独立 review backlog，不使用 rule-only 结果告警。
 - **Weekly 安全接管 Radar 队列。** Weekly 保持自己的 retrieval，并按 canonical identity 合并 urgent queue、review backlog 与本轮候选。classification fingerprint 变化或缺失会重新 grading；claim 不等于 consume，只有 Zotero 写入及 operation ledger 验证后才消费队列。恢复执行不会重复创建，周报只使用 verified business writes。
 - **监测撤稿、更正和关注声明。** 监测范围仅包括 shared index 中仍存在于 Zotero 且有 DOI 或 PMID 的文献；证据只来自 Crossref REST 和 PubMed structured relations，不按标题或自由文本猜测。撤稿先验证加入 `文献池/待删除`，再移除其他 PaperEcho-managed collection ID；用户集合、标签、item 和附件保留。更正与关注声明只追加状态标签，完整性变化仅进入 Weekly summary。
+- **多源检索强化召回。** 查询先归一化为统一 Search Intent，再按来源编译：通用主题以 OpenAlex 为主、Semantic Scholar 为补充，低召回时使用 Crossref 做书目信息救援；生物医学主题以 PubMed 为主，Europe PMC 仅作已验证有独立召回价值的补充。Unpaywall 不承担文献发现。单一来源返回 0 不再直接解释为“没有文献”，系统会记录来源级健康、过度约束、救援与多源零结果。
 - **安全升级边界延续到 V2.3。** `paperecho-update` 可从 V2.2 安全升级；Radar 与 Integrity 运行状态属于 persistent/protected，用户 `.env`、配置、state、ledger 和 receipt 不会被发布文件覆盖。
 
-本版本已通过本地定向测试、no-write/no-XLSX、crash/resume、updater fixture，以及 Crossref/PubMed 生产接口只读验收。真实 Zotero 写入、真实 SMTP、真实 LLM Radar、长期 OS scheduler 和长期 rate-limit 环境尚未验收。V2.3 仍不包含 PDF 下载、全文阅读或内容总结。
+本版本已通过本地定向测试、no-write/no-XLSX、crash/resume、updater fixture、Crossref/PubMed 生产接口只读验收，以及 45 组公开脏查询和 120 组确定性变体的多源召回门禁。真实 Zotero 写入、真实 SMTP、真实 LLM Radar、长期 OS scheduler 和长期 rate-limit 环境尚未验收；公开无 key 来源在持续压力下仍可能出现 429 或瞬时 5xx。V2.3 仍不包含 PDF 下载、全文阅读或内容总结，也不承诺检索绝对无遗漏。
 
 ### V2.2
 
@@ -259,14 +260,15 @@ PaperEcho does not make research judgments for you. It handles the recurring org
 
 ## Update
 
-**PaperEcho V2.3** adds a daily Radar, verified Weekly takeover, and structured literature-integrity monitoring while preserving the existing identity, recovery, and update boundaries.
+**PaperEcho V2.3** adds a daily Radar, verified Weekly takeover, structured literature-integrity monitoring, and multi-source retrieval recall hardening while preserving the existing identity, recovery, and update boundaries.
 
 - **Daily Radar:** runs on the 15:00 Asia/Shanghai decision slot, including weekends and holidays, while Weekly takes over on due days. Radar has an isolated watermark and performs discovery, grading, and notification only—no Zotero or XLSX writes. Unavailable LLM grading goes to a separate review backlog rather than producing a rule-only urgent alert.
 - **Verified Weekly takeover:** Weekly keeps its own retrieval and merges Radar queue/backlog entries by canonical identity. Changed or missing classification fingerprints trigger regrading. A claim is consumed only after verified Zotero and ledger evidence; resume does not duplicate creation, and reports use verified business writes.
 - **Structured integrity monitoring:** only active Zotero records with a DOI or PMID are checked through Crossref REST and PubMed structured relations. Retractions are verified into `文献池/待删除` before other PaperEcho-managed memberships are removed. User collections, tags, items, and attachments remain intact; corrections and expressions of concern use additive tags.
+- **Hardened multi-source retrieval:** queries are normalized into one Search Intent and compiled separately for each source. OpenAlex is the general-domain primary, Semantic Scholar supplements it, and Crossref provides bounded bibliographic rescue for low recall. PubMed is the biomedical primary; Europe PMC supplements it only where independent recall has been demonstrated. Unpaywall is not used for discovery. A zero result from one source is treated as a source-level signal, not proof that no literature exists, and the run records source health, overconstraint, rescue, and confirmed multi-source zero cases.
 - **Safe V2.2 → V2.3 updates:** Radar and integrity runtime state remain persistent/protected alongside user configuration, state, ledgers, and receipts.
 
-Local targeted tests, no-write/no-XLSX behavior, crash/resume, updater fixtures, and read-only production Crossref/PubMed parsing have been validated. Real Zotero writes, SMTP, LLM Radar, long-running OS scheduling, and sustained real-world rate limits remain unverified. V2.3 does not include PDF download, full-text reading, or content summarization.
+Local targeted tests, no-write/no-XLSX behavior, crash/resume, updater fixtures, read-only production Crossref/PubMed parsing, 45 public dirty-query families, and 120 deterministic query mutations have been validated. Real Zotero writes, SMTP, LLM Radar, long-running OS scheduling, and sustained real-world rate limits remain unverified; public no-key sources can still return 429 or transient 5xx responses under sustained pressure. V2.3 does not include PDF download, full-text reading, or content summarization, and it does not claim perfect recall.
 
 ### V2.2
 

@@ -84,9 +84,9 @@
 - 当前依赖树仍存在 2 moderate、1 high advisory；本版本未处理依赖升级，未执行 `npm audit fix`，这些 advisory 未被修复。
 - 本版本不包含每日 Radar、Weekly queue merge、撤稿/勘误/关注声明、PDF 下载、全文分析或内容总结。
 
-## PaperEcho v2.3 — Radar and Integrity Release
+## PaperEcho v2.3 — Radar, Integrity, and Retrieval Recall Release
 
-状态：Daily Radar、Weekly 接管与文献完整性监测已完成本地 release gate；真实有副作用的生产验收仍保留为已知风险。
+状态：Daily Radar、Weekly 接管、文献完整性监测与多源检索召回增强已完成本地 release gate；真实有副作用的生产验收仍保留为已知风险。
 
 ### Daily Radar
 
@@ -111,6 +111,17 @@
 - correction 与 expression of concern 只追加状态标签，不覆盖用户标签。证据状态与 mutation application 状态分别记录；本周新增确认、已应用和待继续处理的完整性变化只进入 Weekly summary。
 - Bootstrap 有界、可 checkpoint、可恢复且幂等；成功空结果与 provider outage/timeout/parse/partial 明确区分，只有成功检查才推进 `lastCheckedAt`。
 
+### Retrieval Recall Hardening
+
+- 查询先解析为统一 Search Intent IR，保留隐式 AND、布尔嵌套、短语、排除项、概念组、日期、文献类型与领域提示；每个来源再使用自己的语法编译，不把一条原始字符串直接转发给所有数据库。
+- OpenAlex 是通用主题主来源，具备查询/URL 长度门禁、确定性分块、零结果探针与仅在 primary zero 后触发的语义救援。Semantic Scholar 使用 bulk search 作为通用补充，并维持独立并发、重试、分页与 incomplete 状态。
+- Crossref 只使用高信息量书目锚点处理通用主题低召回，不作为宽泛主检索。PubMed 是生物医学主来源；Europe PMC 仅在生物医学低召回路径补充，生产 Tier 2 中贡献 97 个 canonical unique candidates，因而保留。Unpaywall 不承担 discovery。
+- 所有来源汇入同一 canonical dedupe；跨 DOI/PMID 的传递身份可合并，来源 provenance 被保留但不改变 A/B/C grading。单一来源 zero 只触发诊断/救援，不解释为“没有文献”；只有各适用来源均无结果才记录 confirmed multi-source zero。
+- 生产 Tier 2 使用 45 组公开脏查询与 13 组 known-hit（5 通用、5 生物医学、3 跨学科；每组 3 个公开 ID）。6 个单来源零结果全部被其他来源救援，confirmed multi-source zero 为 0；union known-hit recall 为 18/39，不低于最佳单一来源的 10/39。
+- Tier 2 来源概况：OpenAlex zero rate 9.76%（41/42 成功，0 个 429）；Semantic Scholar zero rate 27.27%（22/42 成功，6 个 429，存在瞬时 5xx）；PubMed zero rate 6.67%（15/15 成功）；Crossref 与 Europe PMC zero rate 均为 0。union unique candidates 为 11,184，单查询最多 3 个请求。
+- 在 Tier 2 稳定后执行 120 组确定性变体：200 个请求，healthy query rate 92.5%，单查询最多 2 个请求。持续公开无 key 压力下 OpenAlex 出现 57 个 429，Semantic Scholar 出现 3 个 429及少量 5xx/timeout；适配器保留 Retry-After/backoff、来源隔离和失败不推进状态，但这不等于长期 rate-limit 生产验收。
+- 召回门禁证明多源 union 不劣于本组最佳单一来源，并能识别和救援单来源 zero；它不证明数据库覆盖完整，也不承诺绝对无遗漏。
+
 ### Updater and Compatibility
 
 - v2.2 的 `paperecho-update` 可按既有 stable-tag/update-contract 路径安全升级到 v2.3。Radar 与 Integrity runtime state 位于 persistent/protected 范围。
@@ -119,7 +130,7 @@
 
 ### 已验证边界
 
-- 已验证：Phase A/B/C fixture 与定向测试；Radar no-Zotero-write/no-XLSX；Weekly takeover、verified-before-consume、代表性 crash/resume 与重复创建防护；Crossref production REST 只读解析；PubMed production EFetch 只读解析；Retraction Watch 冲突保护；updater v2.2→v2.3 fixture；配置 v1/v2 兼容。
+- 已验证：Phase A/B/C fixture 与定向测试；Phase D source-specific compiler、共享 dedupe、来源健康诊断、45 组公开脏查询与 120 组确定性变体；Radar no-Zotero-write/no-XLSX；Weekly takeover、verified-before-consume、代表性 crash/resume 与重复创建防护；Crossref production REST 只读解析；PubMed production EFetch 只读解析；Retraction Watch 冲突保护；updater v2.2→v2.3 fixture；配置 v1/v2 兼容。
 - Crossref/PubMed production acceptance 仅验证公开接口的真实结构化响应可被 parser 正确归一化，没有执行 Zotero mutation，也不等同于生产写入验收。
-- 未验证：真实 Zotero write、真实 SMTP、真实 LLM Radar、长期实际 OS scheduler、真实长期 rate-limit 环境。不得据此宣称“生产环境已全面验证”。
+- 未验证：真实 Zotero write、真实 SMTP、真实 LLM Radar、长期实际 OS scheduler、真实长期 rate-limit 环境。Phase D 公开源只读验收也不构成“生产环境已全面验证”或“检索绝对无遗漏”。
 - 本版本不包含 PDF 下载、全文阅读或内容总结。
