@@ -128,6 +128,14 @@
 - 用户 `.env`、真实 config、source state、shared index、operation ledger、notification receipt 和输出不会被 updater 覆盖；managed 文件冲突、活动任务或 schema 不兼容仍会阻塞升级。
 - unified config schema v1 不能静默启用 Radar/Integrity；schema v2 只有显式开启时才启用，缺省保持关闭。
 
+### Production Hardening Invariants
+
+- Windows atomic JSON rename 仅对 `EPERM`、`EACCES`、`EBUSY` 做有限指数退避重试；仍保持临时文件加原子 rename，不退化为直接覆盖。
+- operation ledger 的 `verified` 是终态并在 resume 时直接 `skipped_verified`；已证明无需执行的 metadata operation 以 verified no-op evidence 闭合。
+- 不确定的 Zotero create 默认 fail closed 并等待 reconciliation；collection membership 在 backend 边界统一为 stable key，大批量 Zotero JavaScript 只经 stdin 传输。
+- RSS namespace 合并会去除规范化后相同的文本片段但保留真实不同片段；未翻译或失败时中文标题保持为空，不用英文 fallback 冒充翻译成功。
+- Weekly XLSX 只有通过 independent-reader 的 sheet、header、blank cell 与 formula-error 校验后才能 promote；首选 writer 失败时丢弃中间产物，并从 pristine source 进入既有 fallback chain。
+
 ### 已验证边界
 
 - 已验证：Phase A/B/C fixture 与定向测试；Phase D source-specific compiler、共享 dedupe、来源健康诊断、45 组公开脏查询与 120 组确定性变体；Radar no-Zotero-write/no-XLSX；Weekly takeover、verified-before-consume、代表性 crash/resume 与重复创建防护；Crossref production REST 只读解析；PubMed production EFetch 只读解析；Retraction Watch 冲突保护；updater v2.2→v2.3 fixture；配置 v1/v2 兼容。
