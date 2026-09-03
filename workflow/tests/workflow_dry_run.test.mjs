@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,12 +11,17 @@ const ROOT = path.resolve(__dirname, "..", "..");
 const SCRIPT = path.join(ROOT, "workflow", "tools", "maintenance", "workflow_dry_run.mjs");
 
 function runDryRun(args = []) {
-  const result = spawnSync(process.execPath, [SCRIPT, ...args], {
-    cwd: ROOT,
-    encoding: "utf8",
-    timeout: 10000,
-  });
-  return { stdout: result.stdout || "", stderr: result.stderr || "", status: result.status };
+  const isolatedRoot = mkdtempSync(path.join(os.tmpdir(), "paperecho-dry-run-test-"));
+  try {
+    const result = spawnSync(process.execPath, [SCRIPT, ...args], {
+      cwd: isolatedRoot,
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    return { stdout: result.stdout || "", stderr: result.stderr || "", status: result.status };
+  } finally {
+    rmSync(isolatedRoot, { recursive: true, force: true });
+  }
 }
 
 // --- Help ---
