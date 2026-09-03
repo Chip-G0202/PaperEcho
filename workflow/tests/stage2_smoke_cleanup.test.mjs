@@ -119,6 +119,7 @@ test("apply rebuilds local fingerprints after removing created items", async () 
   });
   const index = JSON.parse(await fs.readFile(indexPath, "utf8"));
   assert.equal(result.ok, true);
+  assert.deepEqual(index.live_items, {});
   assert.deepEqual(index.fingerprints.title, {});
 });
 

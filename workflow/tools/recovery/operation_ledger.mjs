@@ -15,7 +15,7 @@ const TRANSITIONS = Object.freeze({
   pending: new Set(["started", "failed", "conflict"]),
   started: new Set(["remote_observed", "verified", "failed", "conflict"]),
   remote_observed: new Set(["verified", "failed", "conflict"]),
-  verified: new Set(["conflict"]),
+  verified: new Set(),
   failed: new Set(["started", "remote_observed", "conflict"]),
   conflict: new Set(),
 });

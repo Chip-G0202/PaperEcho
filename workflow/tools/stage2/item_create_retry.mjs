@@ -1,3 +1,7 @@
+import {
+  isDefinitelyFailedWithoutSideEffect,
+  uncertainCreateError,
+} from "../lib/zotero_create_safety.mjs";
 import { isTransientZoteroBackendError, wait } from "../lib/zotero_backend_client.mjs";
 
 export async function createItemWithDedupeRetry({
@@ -16,14 +20,18 @@ export async function createItemWithDedupeRetry({
       const itemKey = await createItem({ attempt });
       return { itemKey, retryCount, duplicatePrevented: false };
     } catch (createError) {
-      if (!isTransientError(createError) || attempt >= maxRetries) throw createError;
-      retryCount += 1;
+      if (!isTransientError(createError)) throw createError;
       const existing = typeof findExisting === "function"
         ? await findExisting({ attempt, error: createError })
         : null;
       if (existing) {
         return { itemKey: existing, retryCount, duplicatePrevented: true };
       }
+      if (!isDefinitelyFailedWithoutSideEffect(createError)) {
+        throw uncertainCreateError(createError, { attempt, source: "stage2_dedupe_retry" });
+      }
+      if (attempt >= maxRetries) throw createError;
+      retryCount += 1;
       attempt += 1;
     }
   }

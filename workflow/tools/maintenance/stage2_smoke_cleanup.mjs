@@ -148,7 +148,7 @@ async function removeLocalIndexEntries(localIndexPath, itemKeys, { apply }) {
     if (apply && residual.length) {
       for (const key of residual) delete liveItems[key];
       index.fingerprints = buildFingerprintMaps(index);
-      await writeZoteroLibraryIndex(localIndexPath, index);
+      await writeZoteroLibraryIndex(localIndexPath, index, { mergeCurrent: false });
     }
     return { removed: apply ? residual.length : 0, residual: apply ? 0 : residual.length, error: "" };
   } catch (error) {

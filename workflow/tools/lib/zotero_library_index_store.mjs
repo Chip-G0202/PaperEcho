@@ -357,11 +357,11 @@ async function writeIndexUnlocked(filePath, index) {
   return normalized;
 }
 
-export async function writeZoteroLibraryIndex(filePath, index) {
+export async function writeZoteroLibraryIndex(filePath, index, { mergeCurrent = true } = {}) {
   return withIndexLock(filePath, async () => {
     const current = await readZoteroLibraryIndex(filePath);
     const normalized = normalizeZoteroLibraryIndex(index);
-    if (current.usable) {
+    if (mergeCurrent && current.usable) {
       normalized.integrity_monitoring = {
         ...(current.index.integrity_monitoring || {}),
         ...(normalized.integrity_monitoring || {}),

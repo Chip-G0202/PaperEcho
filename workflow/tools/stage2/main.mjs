@@ -29,7 +29,7 @@ import {
 } from "./duplicate_scan.mjs";
 import { resolveGradeName } from "./item_payload.mjs";
 import { runCollectionAttachStep } from "./collection_attach_step.mjs";
-import { createStage2ItemWriter, runWritebackExecution } from "./writeback_execution.mjs";
+import { createStage2ItemWriter, createStage2RecoveryRecordItemsCallback, runWritebackExecution } from "./writeback_execution.mjs";
 import { markWritebackFailureReport } from "./writeback_failure_report.mjs";
 import {
   GRADE_COLLECTIONS,
@@ -298,7 +298,7 @@ export async function runZoteroWriteback({ argv = process.argv, recovery = null,
   const createItem = createStage2ItemWriter({
     zoteroBackend,
     zoteroBackendCall: zoteroBackendToolCall,
-    onCreatedKeys: async (itemKeys) => recovery?.recordItems(itemKeys),
+    onCreatedKeys: createStage2RecoveryRecordItemsCallback(recovery),
   });
 
   const counters = {

@@ -156,7 +156,7 @@ test("createStage3WriteMetadataBatchTool prefers contract writeMetadataBatch", a
   assert.deepEqual(result, { updated: ["K1"], failed: [] });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].tool, "writeMetadataBatch");
-  assert.equal(calls[0].options.stage, "stage3_translation_backfill");
+  assert.equal(calls[0].options.stage, "stage3_translation");
 });
 
 test("createStage3WriteMetadataBatchTool falls back to compat write_metadata_batch", async () => {
@@ -191,6 +191,39 @@ test("createStage3WriteMetadataBatchTool preserves contract partial failures", a
 
   assert.deepEqual(result.updated, ["K1"]);
   assert.deepEqual(result.failed, [{ itemKey: "K2", error: "write_metadata_failed:mock" }]);
+});
+
+test("Stage3 batch guard preserves item-level updated, unchanged, and failed results", async () => {
+  const writeMetadataBatch = createStage3WriteMetadataBatch({
+    admittedMetadataItemKeys: new Set(["K1", "K2", "K3"]),
+    apply: true,
+    dryRun: false,
+    writeMetadataBatchTool: async () => ({
+      updated: ["K1"],
+      unchanged: ["K2"],
+      failed: [{ itemKey: "K3", error: "mock_failure" }],
+    }),
+  });
+  await assert.rejects(
+    () => writeMetadataBatch(["K1", "K2", "K3"].map((itemKey) => ({ itemKey, fields: { shortTitle: itemKey } }))),
+    (error) => {
+      assert.deepEqual(error.result.updated, ["K1"]);
+      assert.deepEqual(error.result.unchanged, ["K2"]);
+      assert.deepEqual(error.result.failed, [{ itemKey: "K3", error: "mock_failure" }]);
+      return true;
+    },
+  );
+});
+
+test("Stage3 mutation stage normalizes its one legacy identifier and rejects unknown stages", async () => {
+  const stages = [];
+  const legacy = createStage3WriteMetadataBatchTool({
+    stage: "stage3_translation_backfill",
+    zoteroBackend: { async writeMetadataBatch(_updates, options) { stages.push(options.stage); return { updated: [], unchanged: [], failed: [] }; } },
+  });
+  await legacy([]);
+  assert.deepEqual(stages, ["stage3_translation"]);
+  assert.throws(() => createStage3WriteMetadataBatchTool({ stage: "stage2" }), /stage3_metadata_stage_invalid/);
 });
 
 test("backfillShortTitles uses batch metadata writer when available", async () => {

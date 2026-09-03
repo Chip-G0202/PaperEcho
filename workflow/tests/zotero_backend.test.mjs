@@ -725,7 +725,7 @@ describe("zotero_cli_backend collection batching", () => {
     assert.equal(calls.some((args) => args[0] === "item" && args[1] === "add-to-collection"), false);
   });
 
-  it("createItem falls back to import path when JS bridge create fails", async () => {
+  it("createItem uses import fallback only with the explicit legacy compatibility flag", async () => {
     const { ZoteroCliBackend } = await import("../tools/lib/zotero_cli_backend.mjs");
     const calls = [];
     let importTag = "";
@@ -752,11 +752,19 @@ describe("zotero_cli_backend collection batching", () => {
       checkCliAvailable: async () => true,
     });
 
-    const created = await backend.createItem({
-      itemType: "journalArticle",
-      title: "Imported title",
-      collections: [{ key: "GRADE", name: "A课题相关" }],
-    });
+    const previous = process.env.ZOTERO_LEGACY_CREATE_FALLBACK;
+    process.env.ZOTERO_LEGACY_CREATE_FALLBACK = "1";
+    let created;
+    try {
+      created = await backend.createItem({
+        itemType: "journalArticle",
+        title: "Imported title",
+        collections: [{ key: "GRADE", name: "A课题相关" }],
+      });
+    } finally {
+      if (previous === undefined) delete process.env.ZOTERO_LEGACY_CREATE_FALLBACK;
+      else process.env.ZOTERO_LEGACY_CREATE_FALLBACK = previous;
+    }
 
     assert.equal(created.key, "ITEM1");
     assert.equal(created.createMode, "import_json");

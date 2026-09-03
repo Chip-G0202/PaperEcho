@@ -1206,7 +1206,7 @@ test("createStage2ItemWriter falls back to write_item when write_items fails", a
   const createItem = createStage2ItemWriter({
     zoteroBackendCall: async (name, args) => {
       calls.push({ name, args });
-      if (name === "write_items") throw new Error("batch unavailable");
+      if (name === "write_items") throw Object.assign(new Error("batch unavailable"), { definitelyFailedWithoutSideEffect: true });
       if (name === "write_item") {
         return { content: [{ text: JSON.stringify({ itemKey: `ONE${calls.filter((call) => call.name === "write_item").length}` }) }] };
       }

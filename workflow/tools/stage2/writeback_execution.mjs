@@ -8,6 +8,11 @@ import {
   shouldStopWritebackByRisk,
 } from "../lib/writeback_support.mjs";
 import { normalizeLiveIndexItem } from "../lib/zotero_library_index_store.mjs";
+import {
+  isDefinitelyFailedWithoutSideEffect,
+  legacyCreateFallbackEnabled,
+  uncertainCreateError,
+} from "../lib/zotero_create_safety.mjs";
 import { createItemWithDedupeRetry } from "./item_create_retry.mjs";
 import {
   findByIndex,
@@ -240,6 +245,16 @@ export function createStage2ItemWriter({ zoteroBackendCall, mcpToolCall, onCreat
           rejectRemaining(batch, offset, error);
           return;
         }
+        if (!isDefinitelyFailedWithoutSideEffect(error) && !legacyCreateFallbackEnabled()) {
+          const uncertain = uncertainCreateError(error, {
+            batchSize: chunk.length,
+            firstIndex: chunk[0]?.index ?? null,
+            source: "stage2_batch_create",
+          });
+          for (const entry of chunk) entry.reject(uncertain);
+          rejectRemaining(batch, offset + chunk.length, uncertain);
+          return;
+        }
         batchCreateStats.batch_create_fallback_count += chunk.length;
         if (batchCreateStats.batch_create_fallback_errors.length < 5) {
           batchCreateStats.batch_create_fallback_errors.push({
@@ -308,6 +323,11 @@ export function createStage2ItemWriter({ zoteroBackendCall, mcpToolCall, onCreat
   createItem.batchCreateStats = batchCreateStats;
   Object.defineProperty(createItem, "recoveryError", { get: () => recoveryError });
   return createItem;
+}
+
+export function createStage2RecoveryRecordItemsCallback(recovery) {
+  if (typeof recovery?.recordItems !== "function") return undefined;
+  return (itemKeys) => recovery.recordItems(itemKeys);
 }
 
 export async function runWritebackExecution({

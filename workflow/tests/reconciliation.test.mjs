@@ -130,14 +130,17 @@ test("object version change conflicts without overwriting user metadata", async 
   assert.equal(counters.size, 0);
 });
 
-test("verified fact changed becomes conflict instead of silently skipping", async (t) => {
+test("verified operations are terminal and skip observation even when the remote fixture changed", async (t) => {
   const { store } = await setup(t);
   const operation = await store.planOperation({ type: "shared_index", identity: "doi:a", target: { id: "index" }, input: { itemKey: "I1" } });
   await store.transition(operation.idempotencyKey, "started");
   await store.transition(operation.idempotencyKey, "remote_observed");
   await store.transition(operation.idempotencyKey, "verified");
-  await reconcileOperationLedger({ store, reconcilers: { shared_index: remoteReconciler(new Set(), new Map()) } });
-  assert.equal(store.ledger.operations[0].status, "conflict");
+  let observations = 0;
+  const result = await reconcileOperationLedger({ store, reconcilers: { shared_index: { async observe() { observations += 1; return { state: "conflict" }; } } } });
+  assert.equal(store.ledger.operations[0].status, "verified");
+  assert.equal(result.outcomes[0].action, "skipped_verified");
+  assert.equal(observations, 0);
 });
 
 test("local output crash after write is recovered by content hash without regeneration", async (t) => {

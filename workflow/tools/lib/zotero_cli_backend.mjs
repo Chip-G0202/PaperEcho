@@ -20,6 +20,11 @@ import { ZoteroBackendBase, createVerifyResult, createWriteResult } from "./zote
 import { executeCli, checkCliAvailable, getDefaultCliTool } from "./zotero_cli_executor.mjs";
 import { launchZoteroDesktop } from "./zotero_desktop_launcher.mjs";
 import { wait } from './async_utils.mjs';
+import {
+  isDefinitelyFailedWithoutSideEffect,
+  legacyCreateFallbackEnabled,
+  uncertainCreateError,
+} from "./zotero_create_safety.mjs";
 import { EphemeralRegistry, getActiveEphemeralRegistry, registerEphemeral } from "./ephemeral_registry.mjs";
 
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -366,6 +371,14 @@ export function buildGetItemsDetailsJs(itemKeys, mode = "preview") {
   const mode = ${JSON.stringify(mode)};
   const libraryID = Zotero.Libraries.userLibraryID;
   const out = [];
+  function stableCollectionKey(value) {
+    if (value && typeof value === "object" && value.key) return String(value.key);
+    const raw = String(value == null ? "" : value).trim();
+    if (!raw) return "";
+    if (!/^\\d+$/.test(raw)) return raw;
+    const collection = Zotero.Collections.get(Number(raw));
+    return String(collection && collection.key || "");
+  }
   for (const itemKey of itemKeys) {
     const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
     if (!item) {
@@ -389,7 +402,7 @@ export function buildGetItemsDetailsJs(itemKeys, mode = "preview") {
     if (mode === "complete") {
       data.creators = item.getCreators ? item.getCreators() : [];
       data.tags = item.getTags ? item.getTags() : [];
-      data.collections = item.getCollections ? item.getCollections() : [];
+      data.collections = item.getCollections ? item.getCollections().map(stableCollectionKey).filter(Boolean) : [];
     }
     out.push({ key: item.key, itemKey: item.key, data, title: data.title, missing: false });
   }
@@ -872,9 +885,32 @@ export class ZoteroCliBackend extends ZoteroBackendBase {
       if (!key) throw new Error("js_create_item_no_key");
       return { ...itemData, key, itemKey: key, createMode: "js_bridge" };
     } catch (jsError) {
-      if (process.env.ZOTERO_CLI_CREATE_ITEM_DISABLE_IMPORT_FALLBACK === "1") throw jsError;
+      if (legacyCreateFallbackEnabled() && process.env.ZOTERO_CLI_CREATE_ITEM_DISABLE_IMPORT_FALLBACK !== "1") {
+        return this.createItemViaImport(itemData);
+      }
+      if (isDefinitelyFailedWithoutSideEffect(jsError)) throw jsError;
+      const query = itemData?.DOI || itemData?.doi || itemData?.title || itemData?.fields?.DOI || itemData?.fields?.title || "";
+      let matches = [];
+      if (query) {
+        try {
+          const candidates = await this.searchLibrary({ q: query, limit: 8 });
+          const expectedTitle = String(itemData?.title || itemData?.fields?.title || "").normalize("NFKC").trim().replace(/\\s+/g, " ").toLowerCase();
+          const expectedDoi = String(itemData?.DOI || itemData?.doi || itemData?.fields?.DOI || "").trim().toLowerCase().replace(/^https?:\/\/(?:dx\.)?doi\.org\//, "");
+          matches = candidates.filter((candidate) => {
+            const data = candidate?.data || candidate || {};
+            const actualDoi = String(data.DOI || data.doi || "").trim().toLowerCase().replace(/^https?:\/\/(?:dx\.)?doi\.org\//, "");
+            if (expectedDoi && actualDoi) return expectedDoi === actualDoi;
+            const actualTitle = String(data.title || candidate?.title || "").normalize("NFKC").trim().replace(/\\s+/g, " ").toLowerCase();
+            return Boolean(expectedTitle && actualTitle === expectedTitle);
+          });
+        } catch {}
+      }
+      if (matches.length === 1) {
+        const key = matches[0]?.itemKey || matches[0]?.key || matches[0]?.data?.itemKey || matches[0]?.data?.key || "";
+        if (key) return { ...itemData, key, itemKey: key, createMode: "reconciled_js_bridge" };
+      }
+      throw uncertainCreateError(jsError, { candidateCount: matches.length, source: "zotero_cli_create_item" });
     }
-    return this.createItemViaImport(itemData);
   }
 
   async createItems(itemsData = []) {

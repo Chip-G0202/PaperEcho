@@ -77,6 +77,10 @@ export async function reconcileOperationLedger({ store, reconcilers = {}, contex
   let globalBlocked = false;
   for (const snapshot of store.ledger.operations) {
     let operation = store.ledger.operations.find((item) => item.idempotencyKey === snapshot.idempotencyKey);
+    if (operation.status === "verified") {
+      outcomes.push({ idempotencyKey: operation.idempotencyKey, status: "verified", action: "skipped_verified" });
+      continue;
+    }
     if (globalBlocked) {
       outcomes.push({ idempotencyKey: operation.idempotencyKey, status: operation.status, action: "blocked_by_global_conflict" });
       continue;
@@ -94,15 +98,6 @@ export async function reconcileOperationLedger({ store, reconcilers = {}, contex
       continue;
     }
     const observed = await reconciler.observe(operation, context);
-    if (operation.status === "verified") {
-      if (observed.state === "match") outcomes.push({ idempotencyKey: operation.idempotencyKey, status: "verified", action: "skipped_verified" });
-      else {
-        await store.transition(operation.idempotencyKey, "conflict", { verification: evidence(observed.evidence), error: `VERIFIED_FACT_${String(observed.state || "UNKNOWN").toUpperCase()}` });
-        outcomes.push({ idempotencyKey: operation.idempotencyKey, status: "conflict", action: "verified_fact_changed" });
-        if (operation.scope === "global") globalBlocked = true;
-      }
-      continue;
-    }
     if (operation.status === "conflict") {
       outcomes.push({ idempotencyKey: operation.idempotencyKey, status: "conflict", action: "conflict_preserved" });
       if (operation.scope === "global") globalBlocked = true;

@@ -1,5 +1,10 @@
 import { runGuardedWriteMetadataUpdates } from "../lib/writeback_support.mjs";
 
+export function normalizeStage3MutationStage(stage = "stage3_translation") {
+  if (stage === "stage3_translation" || stage === "stage3_translation_backfill") return "stage3_translation";
+  throw new Error(`stage3_metadata_stage_invalid:${String(stage || "missing")}`);
+}
+
 function normalizeStage3MetadataBatchResult(result = {}, updates = []) {
   const failed = Array.isArray(result?.failed)
     ? result.failed
@@ -24,13 +29,15 @@ export function createStage3WriteMetadataBatchTool({
   zoteroBackendCall,
   zoteroBackend = null,
   idBase = 970000,
+  stage = "stage3_translation",
 } = {}) {
+  const normalizedStage = normalizeStage3MutationStage(stage);
   return async function writeMetadataBatchTool(updates = []) {
     const contractBackend = typeof zoteroBackend?.writeMetadataBatch === "function"
       ? zoteroBackend
       : zoteroBackendCall?.adapter || null;
     if (typeof contractBackend?.writeMetadataBatch === "function") {
-      const result = await contractBackend.writeMetadataBatch(updates, { stage: "stage3_translation_backfill" });
+      const result = await contractBackend.writeMetadataBatch(updates, { stage: normalizedStage });
       return normalizeStage3MetadataBatchResult(result, updates);
     }
     if (typeof zoteroBackendCall !== "function") throw new Error("write_metadata_batch_writer_required");
@@ -102,6 +109,9 @@ export function createStage3WriteMetadataBatch({
       write_unchanged_count: 0,
       write_failure_count: 0,
       write_failures: [],
+      updated: [],
+      unchanged: [],
+      failed: [],
       versions: {},
       libraryVersion: null,
       guard_blocked_count: 0,
@@ -141,6 +151,8 @@ export function createStage3WriteMetadataBatch({
       const updated = new Set(batch?.updated || []);
       const unchanged = new Set(batch?.unchanged || []);
       const failed = Array.isArray(batch?.failed) ? batch.failed : [];
+      result.updated = [...updated];
+      result.unchanged = [...unchanged];
       result.write_success_count += updated.size;
       result.write_unchanged_count += unchanged.size;
       result.versions = batch?.versions || {};
@@ -163,6 +175,7 @@ export function createStage3WriteMetadataBatch({
       }
     }
 
+    result.failed = result.write_failures.map((failure) => ({ ...failure }));
     result.ok = result.write_failure_count === 0;
     if (!result.ok) {
       throw Object.assign(new Error(result.write_failures[0]?.error || "write_metadata_failed"), { result });

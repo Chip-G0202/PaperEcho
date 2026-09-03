@@ -73,6 +73,7 @@ export async function addItemToWorthyCollectionWithGuard({
   dryRun = !apply,
   role = "worthy_target",
   phase = "add_to_worthy",
+  stage = phase === "add_to_worthy" ? "stage2_worthy_migration_add" : phase,
   verify = false,
 } = {}) {
   const callZotero = zoteroBackendCall || mcpToolCall;
@@ -99,7 +100,7 @@ export async function addItemToWorthyCollectionWithGuard({
       if (typeof contractBackend?.addItemsToCollections === "function") {
         const operations = [{ collectionKey: op.collectionKey, itemKeys: op.itemKeys, role: op.role, phase: op.phase }];
         try {
-          const raw = await contractBackend.addItemsToCollections(operations, { verify, stage: phase, id });
+          const raw = await contractBackend.addItemsToCollections(operations, { verify, stage, id });
           const applied = [
             ...(Array.isArray(raw?.added) ? raw.added : []),
             ...(Array.isArray(raw?.already) ? raw.already : []),
@@ -185,6 +186,7 @@ export async function writeTagSetWithGuard({
   guardCheck = { ok: true },
   action = "set",
   phase = "tag_cleanup",
+  stage = phase === "tag_cleanup" ? "stage2_tag_cleanup" : phase,
 } = {}) {
   const callZotero = zoteroBackendCall || mcpToolCall;
   const contractBackend = zoteroBackend || callZotero?.adapter || null;
@@ -205,7 +207,7 @@ export async function writeTagSetWithGuard({
       if (typeof contractBackend?.writeTagsBatch === "function") {
         const operations = [{ action, itemKey: op.itemKey, tags: op.tags }];
         try {
-          const raw = await contractBackend.writeTagsBatch(operations, { stage: phase, id });
+          const raw = await contractBackend.writeTagsBatch(operations, { stage, id });
           contractResult = normalizeStage2MembershipMutationResult({
             method: "writeTagsBatch",
             operations,

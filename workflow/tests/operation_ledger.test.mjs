@@ -146,3 +146,14 @@ test("ledger validator rejects malformed operation states", () => {
   ledger.operations.push({ idempotencyKey: HASH, status: "unknown" });
   assert.throws(() => validateOperationLedger(ledger), /OPERATION_STATE_INVALID/);
 });
+
+test("verified operation rejects every backward transition", async (t) => {
+  const { store } = await makeStore(t);
+  const operation = await store.planOperation({ type: "zotero_collection_add", identity: "doi:x", target: { itemKey: "I1", collectionId: "C1" }, input: {} });
+  await store.transition(operation.idempotencyKey, "started");
+  await store.transition(operation.idempotencyKey, "verified");
+  for (const status of ["pending", "started", "remote_observed", "failed", "conflict"]) {
+    await assert.rejects(() => store.transition(operation.idempotencyKey, status), new RegExp(`verified_TO_${status}`, "i"));
+  }
+  assert.equal(store.ledger.operations[0].status, "verified");
+});
