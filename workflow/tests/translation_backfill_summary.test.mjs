@@ -18,7 +18,7 @@ it("separates translation and metadata write timing in backfill diagnostics", as
 
   const result = await backfillShortTitles(summary, {
     translateTitlesBatch: async (titles) => ({
-      map: new Map(titles.map((title) => [title, { ok: true, zh: `ZH ${title}` }])),
+      map: new Map(titles.map((title) => [title, { ok: true, zh: `中文 ${title}` }])),
       usage: {
         cache_hits: 0,
         cache_misses: titles.length,

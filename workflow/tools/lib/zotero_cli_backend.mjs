@@ -836,8 +836,11 @@ export class ZoteroCliBackend extends ZoteroBackendBase {
   // ─── 项目读取 ───
 
   async getItemDetails(itemKey, mode = "preview") {
+    if (mode === "complete") {
+      const items = await this.getItemsDetails([itemKey], mode);
+      return items[0] || null;
+    }
     const args = ["item", "get", itemKey, "--json"];
-    if (mode === "complete") args.push("--full");
 
     const result = await this._exec(args);
     return extractData(result, result.data);

@@ -1,6 +1,7 @@
 import { LABELS } from "./grade_primitives.mjs";
 import { resolveCachedTranslation } from "./title_translation_support.mjs";
 import { getLiteratureIdentityKeys } from "./literature_identity.mjs";
+import { existingTranslatedTitle, isMeaningfulChineseTranslation } from "./title_translation_generation.mjs";
 
 /**
  * Deterministic normalization for correlation key components.
@@ -55,14 +56,19 @@ export function resolveVerifiedWritebackItems(writebackSummary) {
 export function buildWritebackReadyItems(triagedItems, { translationCache = null } = {}) {
   return (triagedItems || [])
     .filter((item) => item && item.grade && item.grade !== "D" && item.pre_llm_skip_writeback !== true)
-    .map((item) => ({
-      ...item,
-      推荐等级: item.final_grade || item.grade_label || item["推荐等级"] || LABELS[item.grade] || "",
-      推荐理由: item.grade_reason || item["推荐理由"] || "",
-      标题翻译: resolveCachedTranslation(translationCache, item.title) || String(item["标题翻译"] || "").trim(),
-      中文标题: resolveCachedTranslation(translationCache, item.title) || String(item["中文标题"] || item.title || "").trim() || String(item.title || "").trim(),
-      backfill_short_title: true,
-    }));
+    .map((item) => {
+      const cached = resolveCachedTranslation(translationCache, item.title);
+      const translated = isMeaningfulChineseTranslation(cached, item.title) ? cached : existingTranslatedTitle(item);
+      return {
+        ...item,
+        推荐等级: item.final_grade || item.grade_label || item["推荐等级"] || LABELS[item.grade] || "",
+        推荐理由: item.grade_reason || item["推荐理由"] || "",
+        标题翻译: translated,
+        中文标题: translated,
+        hasTranslation: Boolean(translated),
+        backfill_short_title: true,
+      };
+    });
 }
 
 export function buildWritebackReadyArtifact(triagedItems, {
@@ -90,7 +96,7 @@ export function buildTranslationBackfillInput(summary) {
     .map((item) => ({
       itemKey: item.itemKey,
       title: item.title || "",
-      中文标题: item["中文标题"] || item.title || "",
+      中文标题: existingTranslatedTitle(item),
       grade: item.grade,
       source_channel: item.source_channel || "",
     }));

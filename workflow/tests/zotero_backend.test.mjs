@@ -378,6 +378,25 @@ describe("zotero_cli_backend readiness", () => {
 });
 
 describe("zotero_cli_backend collection batching", () => {
+  it("reads complete item details through the supported JS detail bridge without --full", async () => {
+    const { ZoteroCliBackend } = await import("../tools/lib/zotero_cli_backend.mjs");
+    const calls = [];
+    const backend = new ZoteroCliBackend({
+      executeCli: async (_tool, args) => {
+        calls.push(args);
+        return { exitCode: 0, stdout: "", stderr: "", data: { items: [{ key: "ITEM1", data: { key: "ITEM1", title: "Anonymous title", tags: [], collections: [] } }] } };
+      },
+      checkCliAvailable: async () => true,
+    });
+
+    const details = await backend.getItemDetails("ITEM1", "complete");
+
+    assert.equal(details.key, "ITEM1");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], "js");
+    assert.equal(calls[0].includes("--full"), false);
+  });
+
   it("resolves recursive subcollections from one collection tree scan", async () => {
     const { ZoteroCliBackend } = await import("../tools/lib/zotero_cli_backend.mjs");
     const calls = [];

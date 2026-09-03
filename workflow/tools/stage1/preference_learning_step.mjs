@@ -43,6 +43,49 @@ function loadPreviousFeedbackPrefs(now, { reviewRoot, desktopRoot, projectRoot, 
   };
 }
 
+export function buildNormalizedFeedbackLearning(normalizedFeedbackRows = [], feedbackSource = "") {
+  const rows = Array.isArray(normalizedFeedbackRows) ? normalizedFeedbackRows : [];
+  const normalizeAction = (row) => String(row?.feedback || row?.action || "").trim().toLowerCase();
+  const feedbackColumnDetected = rows.some((row) => Object.hasOwn(row || {}, "feedback") || Object.hasOwn(row || {}, "action"));
+  const commentColumnDetected = rows.some((row) => Object.hasOwn(row || {}, "comment") || Object.hasOwn(row || {}, "user_comment"));
+  const supported = rows.filter((row) => ["keep", "drop", "upgrade", "downgrade"].includes(normalizeAction(row)));
+  const headers = ["title", feedbackColumnDetected ? "feedback" : "", commentColumnDetected ? "comment" : ""].filter(Boolean);
+  return {
+    ok: supported.length > 0,
+    path: feedbackSource || "local_feedback_jsonl",
+    selected_date: "",
+    checked_files: feedbackSource ? [feedbackSource] : [],
+    rows_used: supported.length,
+    rows_with_comment: supported.filter((row) => row.comment || row.user_comment).length,
+    rows_missing_title_translation: 0,
+    rows_ambiguous: 0,
+    hardPositiveTerms: [],
+    hardNegativeTerms: [],
+    signals: supported.map((row, index) => ({ ...row, id: row.id || row.event_id || `local-feedback-${index + 1}`, feedback: normalizeAction(row) })),
+    metaPreferenceSignals: [],
+    standardSummaryFeedback: {},
+    screeningStandards: {},
+    diagnostics: {
+      ok: true,
+      lookup_paths: feedbackSource ? [feedbackSource] : [],
+      selected_feedback_file: feedbackSource,
+      selected_feedback_file_source: "local_jsonl",
+      selected_feedback_file_exists: true,
+      workbook_unreadable: false,
+      sheet: { name: "local_feedback_jsonl", headers },
+      columns: { feedback: feedbackColumnDetected, comment: commentColumnDetected, english_title: true, title_translation: false, chinese_title: false },
+      counts: { total_rows: rows.length, rows_with_feedback: supported.length, rows_with_comment: supported.filter((row) => row.comment || row.user_comment).length },
+      preference_learning: {
+        ignored_samples: rows.length - supported.length,
+        positive_samples: supported.filter((row) => ["keep", "upgrade"].includes(normalizeAction(row))).length,
+        negative_samples: supported.filter((row) => ["drop", "downgrade"].includes(normalizeAction(row))).length,
+        ambiguous_samples: 0,
+        blockers: feedbackColumnDetected ? [] : ["required_feedback_columns_missing"],
+      },
+    },
+  };
+}
+
 /**
  * Run preference learning phase.
  *
@@ -72,35 +115,7 @@ export async function runPreferenceLearningPhase({ reviewRoot, desktopRoot, rese
     researchRoot,
   });
   if (Array.isArray(normalizedFeedbackRows)) {
-    const supported = normalizedFeedbackRows.filter((row) => ["keep", "drop", "upgrade", "downgrade"].includes(String(row.feedback || row.action || "").toLowerCase()));
-    feedbackLearning = {
-      ok: supported.length > 0,
-      path: feedbackSource || "local_feedback_jsonl",
-      selected_date: "",
-      checked_files: feedbackSource ? [feedbackSource] : [],
-      rows_used: supported.length,
-      rows_with_comment: supported.filter((row) => row.comment || row.user_comment).length,
-      rows_missing_title_translation: 0,
-      rows_ambiguous: 0,
-      hardPositiveTerms: [],
-      hardNegativeTerms: [],
-      signals: supported.map((row, index) => ({ ...row, id: row.id || row.event_id || `local-feedback-${index + 1}`, feedback: String(row.feedback || row.action).toLowerCase() })),
-      metaPreferenceSignals: [],
-      standardSummaryFeedback: {},
-      screeningStandards: {},
-      diagnostics: {
-        ok: true,
-        lookup_paths: feedbackSource ? [feedbackSource] : [],
-        selected_feedback_file: feedbackSource,
-        selected_feedback_file_source: "local_jsonl",
-        selected_feedback_file_exists: true,
-        workbook_unreadable: false,
-        sheet: { name: "local_feedback_jsonl", headers: ["title", "feedback", "comment"] },
-        columns: { feedback: true, comment: true, english_title: true, title_translation: false, chinese_title: false },
-        counts: { total_rows: normalizedFeedbackRows.length, rows_with_feedback: supported.length, rows_with_comment: supported.filter((row) => row.comment || row.user_comment).length },
-        preference_learning: { ignored_samples: normalizedFeedbackRows.length - supported.length, positive_samples: supported.filter((row) => ["keep", "upgrade"].includes(String(row.feedback || row.action).toLowerCase())).length, negative_samples: supported.filter((row) => ["drop", "downgrade"].includes(String(row.feedback || row.action).toLowerCase())).length, ambiguous_samples: 0, blockers: [] },
-      },
-    };
+    feedbackLearning = buildNormalizedFeedbackLearning(normalizedFeedbackRows, feedbackSource);
   }
   const feedbackDiag = feedbackLearning.diagnostics || {};
 
@@ -346,7 +361,6 @@ export async function runPreferenceLearningPhase({ reviewRoot, desktopRoot, rese
   updatedMedQueryLearning.expected_comment_aliases = ["comment", "Comment", "备注", "评价备注"];
   updatedMedQueryLearning.missing_columns = [
     updatedMedQueryLearning.feedback_column_detected ? null : "feedback",
-    updatedMedQueryLearning.comment_column_detected ? null : "comment",
   ].filter(Boolean);
   updatedMedQueryLearning.blocker = "";
   if (updatedMedQueryLearning.workbook_unreadable) {
@@ -387,6 +401,7 @@ export async function runPreferenceLearningPhase({ reviewRoot, desktopRoot, rese
     llmPreferenceReport,
     preferenceAudit,
     preferenceLearningExecutionSummary,
+    preferenceLearningInputs,
     preferenceAuditPath,
     preferenceLearningInitialAuditPath,
   };

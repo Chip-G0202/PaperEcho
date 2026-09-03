@@ -263,7 +263,7 @@ describe("Stage 1 artifact builders", () => {
     assert.deepEqual(backfillInput, [{
       itemKey: "Z1",
       title: "A title",
-      中文标题: "A title",
+      中文标题: "",
       grade: "A",
       source_channel: "rss",
     }]);

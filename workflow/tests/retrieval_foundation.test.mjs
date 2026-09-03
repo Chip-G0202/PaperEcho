@@ -95,7 +95,12 @@ test("RSS parser handles RSS 2.0, Atom, namespaces, CDATA, entities, and singlet
   assert.equal(atom.length, 1);
   assert.equal(atom[0].url, "https://example.org/atom/1");
   assert.match(atom[0].abstract, /<safe>/);
+  assert.equal(namespaced.length, 2);
   assert.equal(namespaced[0].title, "Namespaced Item");
+  assert.equal(namespaced[0].journal, "Namespaced Journal");
+  assert.equal(namespaced[0].publicationTitle, "Namespaced Journal");
+  assert.equal(namespaced[1].title, "Part A Part B");
+  assert.equal(namespaced[1].publicationTitle, "Namespaced Journal");
 });
 
 async function rssRoot(t) {

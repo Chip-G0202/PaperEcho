@@ -57,6 +57,13 @@ import {
 export { dedupWithDiagnostics } from "./dedupe_step.mjs";
 export { loadFixtureCandidates } from "./fixture_input.mjs";
 
+export function preserveStage1PreferenceLearningContext(preferenceLearning = {}) {
+  return {
+    preferenceAuditWithImpact: preferenceLearning.preferenceAudit || {},
+    preferenceLearningInputs: preferenceLearning.preferenceLearningInputs || { feedbackRows: [], feedbackSource: "none" },
+  };
+}
+
 const RUNTIME = buildRuntimeConfig();
 const ROOT = RUNTIME.projectRoot;
 const RESEARCH_ROOT = RUNTIME.researchRoot;
@@ -410,7 +417,7 @@ export async function runResearchOsPipeline({
       flags: scored.flags,
       triage_version: scored.triage_version,
       推荐等级: scored.grade_label,
-      中文标题: it.title,
+      中文标题: "",
       推荐理由: scored.grade_reason,
       评分明细: scored,
     };
@@ -452,8 +459,7 @@ export async function runResearchOsPipeline({
   let effectiveGradeReviewBatchSize = llmReviewConfig.grade_review_batch_size || llmReviewConfig.batch_size || 25;
   let gradeReviewBatchSizeSource = "default";
   const preferenceAuditPath = path.join(pipeDir, "preference_learning_audit.json");
-  const preferenceAuditWithImpact = {};
-  const preferenceLearningInputs = { feedbackRows: [], feedbackSource: "none" };
+  const { preferenceAuditWithImpact, preferenceLearningInputs } = preserveStage1PreferenceLearningContext(preferenceLearning);
   const qualityGateStarted = Date.now();
   const qualityGate = await applyJournalQualityGate(triagedAll, {
     config: buildJournalQualityConfig(workflowRulesForQualityGate.config || workflowRulesForQualityGate),

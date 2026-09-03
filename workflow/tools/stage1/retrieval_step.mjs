@@ -40,6 +40,7 @@ function asArray(value) {
 
 function cleanText(value) {
   return String(value || "")
+    .normalize("NFKC")
     .replace(/<\/?(?:a|b|br|div|em|i|p|span|strong)\b[^>]*>/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -48,7 +49,17 @@ function cleanText(value) {
 function xmlText(value) {
   if (value == null) return "";
   if (["string", "number", "boolean"].includes(typeof value)) return cleanText(value);
-  if (Array.isArray(value)) return cleanText(value.map(xmlText).filter(Boolean).join(" "));
+  if (Array.isArray(value)) {
+    const fragments = [];
+    const seen = new Set();
+    for (const entry of value) {
+      const text = cleanText(xmlText(entry));
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      fragments.push(text);
+    }
+    return cleanText(fragments.join(" "));
+  }
   if (typeof value === "object") {
     if (value["#text"] != null) return cleanText(value["#text"]);
     return cleanText(Object.entries(value)

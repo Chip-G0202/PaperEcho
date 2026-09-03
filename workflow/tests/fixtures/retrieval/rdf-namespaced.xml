@@ -1,9 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:rss="http://purl.org/rss/1.0/">
-  <rss:channel><rss:title>Namespaced Journal</rss:title></rss:channel>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:rss="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <rss:channel><rss:title>Namespaced Journal</rss:title><dc:title> Namespaced   Journal </dc:title></rss:channel>
   <rss:item>
     <rss:title>Namespaced Item</rss:title>
+    <dc:title> Namespaced   Item </dc:title>
     <rss:link>https://example.org/ns/1</rss:link>
     <rss:description>Namespaced abstract</rss:description>
+  </rss:item>
+  <rss:item>
+    <rss:title>Part A</rss:title>
+    <dc:title>Part B</dc:title>
+    <rss:link>https://example.org/ns/2</rss:link>
+    <rss:description>Distinct title fragments</rss:description>
   </rss:item>
 </rdf:RDF>

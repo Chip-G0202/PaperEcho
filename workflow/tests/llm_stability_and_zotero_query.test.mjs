@@ -9,6 +9,7 @@ import {
   writeZoteroLibraryIndex,
 } from "../tools/lib/zotero_library_index_store.mjs";
 import {
+  buildCorrectionPlan,
   enrichArchivePlanWithZoteroTitleMatches,
   sanitizeZoteroSearchQuery,
 } from "../tools/maintenance/zotero_feedback_collection_corrections.mjs";
@@ -142,6 +143,32 @@ test("feedback title enrichment uses local Zotero index before search_library", 
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test("historical drop feedback plans quarantine in 文献池/待删除 without deleting the item", () => {
+  const collections = [
+    { key: "POOL", name: "文献池", parentCollection: false },
+    { key: "DAY", name: "2026-07-02", parentCollection: "POOL" },
+    { key: "GRADE", name: "B专题相关", parentCollection: "DAY" },
+    { key: "TRASH", name: "待删除", parentCollection: "POOL" },
+  ];
+  const plan = buildCorrectionPlan({
+    archivePlan: [{
+      status: "planned",
+      date: "2026-07-02",
+      original_level: "B专题相关",
+      assigned_level: "D无关",
+      feedback: { feedback: "drop", english_title: "Anonymous title" },
+      record: { itemKey: "ITEM1", title: "Anonymous title" },
+    }],
+    collections,
+    includeArchiveCleanup: false,
+    dropMode: "quarantine",
+  });
+  assert.equal(plan.actions[0].action, "move_drop_to_delete_review_collection");
+  assert.equal(plan.actions[0].target_collection_key, "TRASH");
+  assert.equal(plan.actions[0].source_collection_key, "GRADE");
+  assert.equal(JSON.stringify(plan.actions[0]).includes("delete_zotero_item"), false);
 });
 
 test("workflow startup readiness reports removed local semantic backend dependency", async () => {

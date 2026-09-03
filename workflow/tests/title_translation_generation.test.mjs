@@ -25,3 +25,37 @@ test("Desktop, Web, and Local share title cache without Zotero identifiers", asy
   assert.equal(web.items[0].translatedTitle, "共享中文标题");
   assert.equal(local.items[0].itemKey, undefined);
 });
+
+test("English fallback and provider failure remain explicitly untranslated", async () => {
+  for (const result of [
+    { ok: true, zh: "Original English title" },
+    { ok: false, zh: "Original English title", reason: "HTTP_402" },
+  ]) {
+    const generated = await generateLiteratureTitleTranslations([
+      { title: "Original English title", translatedTitle: "Original English title", "中文标题": "Original English title" },
+    ], {
+      translateTitlesBatchImpl: async () => ({ map: new Map([["Original English title", result]]), usage: null }),
+    });
+    assert.equal(generated.items[0].translatedTitle, "");
+    assert.equal(generated.items[0]["标题翻译"], "");
+    assert.equal(generated.items[0]["中文标题"], "");
+    assert.equal(generated.items[0].hasTranslation, false);
+    assert.equal(generated.generated_count, 0);
+  }
+});
+
+test("a meaningful Chinese translation is accepted after an untranslated item is retried", async () => {
+  let calls = 0;
+  const generated = await generateLiteratureTitleTranslations([
+    { title: "Original English title", "中文标题": "Original English title" },
+  ], {
+    translateTitlesBatchImpl: async (titles) => {
+      calls += 1;
+      return { map: new Map(titles.map((title) => [title, { ok: true, zh: "真正的中文标题" }])), usage: null };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(generated.items[0].translatedTitle, "真正的中文标题");
+  assert.equal(generated.items[0]["中文标题"], "真正的中文标题");
+  assert.equal(generated.items[0].hasTranslation, true);
+});
