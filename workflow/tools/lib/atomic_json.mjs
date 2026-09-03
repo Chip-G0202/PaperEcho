@@ -2,7 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-export async function writeAtomicJson(filePath, value, { fsApi = fs } = {}) {
+const TRANSIENT_RENAME_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+export async function writeAtomicJson(filePath, value, {
+  fsApi = fs,
+  renameImpl = (source, target) => fsApi.rename(source, target),
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  renameAttempts = 4,
+  renameBackoffMs = 10,
+} = {}) {
   await fsApi.mkdir(path.dirname(filePath), { recursive: true });
   const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   let handle;
@@ -12,7 +20,16 @@ export async function writeAtomicJson(filePath, value, { fsApi = fs } = {}) {
     if (typeof handle.sync === "function") await handle.sync();
     await handle.close();
     handle = null;
-    await fsApi.rename(temporary, filePath);
+    const attempts = Math.max(1, Number(renameAttempts || 1));
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await renameImpl(temporary, filePath);
+        break;
+      } catch (error) {
+        if (!TRANSIENT_RENAME_ERRORS.has(error?.code) || attempt >= attempts) throw error;
+        await sleep(Math.max(0, Number(renameBackoffMs || 0)) * (2 ** (attempt - 1)));
+      }
+    }
   } catch (error) {
     if (handle) await handle.close().catch(() => {});
     await fsApi.unlink(temporary).catch(() => {});

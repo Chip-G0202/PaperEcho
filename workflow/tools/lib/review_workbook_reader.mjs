@@ -134,7 +134,7 @@ function sourceForPath(p, { reviewRoot, desktopRoot, projectRoot, researchRoot }
   return "unknown";
 }
 
-function readXlsxSheets(filePath) {
+export function readXlsxSheets(filePath) {
   const entries = parseZipEntries(fs.readFileSync(filePath));
   const workbook = entries.get("xl/workbook.xml");
   if (!workbook) throw new Error("workbook_xml_missing");
@@ -172,6 +172,26 @@ function readXlsxSheets(filePath) {
     sheets.set(sheet.name, rows);
   }
   return sheets;
+}
+
+export function inspectXlsxWorkbook(filePath) {
+  const entries = parseZipEntries(fs.readFileSync(filePath));
+  const sheets = readXlsxSheets(filePath);
+  const formula_errors = [];
+  for (const [entryName, xml] of entries.entries()) {
+    if (!/^xl\/worksheets\/[^/]+\.xml$/.test(entryName)) continue;
+    for (const cell of String(xml || "").matchAll(/<[^:<>\s]*:?c([^>]*)>([\s\S]*?)<\/[^:<>\s]*:?c>/g)) {
+      const attrs = cell[1] || "";
+      const inner = cell[2] || "";
+      const ref = (attrs.match(/\br="([^"]+)"/) || [])[1] || "";
+      const error = (inner.match(/<[^:<>\s]*:?v[^>]*>([\s\S]*?)<\/[^:<>\s]*:?v>/) || [])[1] || "formula_error";
+      const hasFormula = /<[^:<>\s]*:?f(?:\s[^>]*)?>/.test(inner);
+      const cachedFormulaError = hasFormula && /^#(?:NULL!|DIV\/0!|VALUE!|REF!|NAME\?|NUM!|N\/A|GETTING_DATA)$/i.test(escapeXml(error));
+      if (!/\bt="e"/.test(attrs) && !cachedFormulaError) continue;
+      formula_errors.push({ entry: entryName, cell: ref, error: escapeXml(error) });
+    }
+  }
+  return { sheets, formula_errors };
 }
 
 function numericOnly(arr) {

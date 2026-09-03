@@ -504,9 +504,12 @@ describe("zotero_cli_backend collection batching", () => {
     const { ZoteroCliBackend } = await import("../tools/lib/zotero_cli_backend.mjs");
     const calls = [];
     const backend = new ZoteroCliBackend({
-      executeCli: async (_tool, args) => {
+      executeCli: async (_tool, args, options) => {
         calls.push(args);
-        assert.equal(args[0], "js");
+        assert.match(args[0], /zotero_cli_stdin_runner\.py$/);
+        assert.equal(args.some((arg) => String(arg).includes("shortTitle")), false);
+        assert.match(options.stdin, /setField/);
+        assert.match(options.stdin, /shortTitle/);
         return { exitCode: 0, stdout: "", stderr: "", data: { updated: ["K1", "K2"], failed: [] } };
       },
       checkCliAvailable: async () => true,
@@ -520,8 +523,6 @@ describe("zotero_cli_backend collection batching", () => {
     assert.deepEqual(result.updated, ["K1", "K2"]);
     assert.deepEqual(result.failed, []);
     assert.equal(calls.length, 1);
-    assert.match(calls[0][1], /setField/);
-    assert.match(calls[0][1], /shortTitle/);
   });
 
   it("getItemsDetails accepts JS bridge object-wrapped items", async () => {

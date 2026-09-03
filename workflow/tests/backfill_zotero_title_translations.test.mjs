@@ -9,7 +9,7 @@ import {
 
 function batchTranslator(titles) {
   return {
-    map: new Map(titles.map((title) => [title, { ok: true, zh: `ZH ${title}` }])),
+    map: new Map(titles.map((title) => [title, { ok: true, zh: `中文 ${title}` }])),
     usage: { cache_hits: 0, cache_misses: titles.length, api_items: titles.length, api_calls: titles.length },
   };
 }

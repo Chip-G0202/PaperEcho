@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { buildStandardSummary } from "../stage1/preference_refinement.mjs";
 import { cleanJournalName } from "../lib/journal_name_cleaner.mjs";
+import { inspectXlsxWorkbook } from "../lib/review_workbook_reader.mjs";
 
 export const EXPORT_METHODS = {
   CODEX_SPREADSHEET: "codex_spreadsheet",
@@ -28,6 +29,34 @@ export const STANDARD_SUMMARY_FEEDBACK_OPTIONS = [
 export const DAILY_REVIEW_HEADERS = ["英文标题", "标题翻译", "规则等级", "语义等级", "最终等级", "期刊/来源", "反馈", "评价"];
 
 export const HUMAN_REVIEW_HEADERS = ["标题", "标题翻译", "期刊/来源", "发表日期", "规则等级", "语义等级", "最终等级", "是否需人工复核", "分歧类型", "语义调整原因", "人工确认等级"];
+
+export async function validateWeeklyWorkbook(filePath) {
+  const errors = [];
+  let inspection;
+  try {
+    inspection = inspectXlsxWorkbook(filePath);
+  } catch (error) {
+    return { ok: false, errors: [`workbook_unreadable:${String(error?.message || error)}`], sheets: [], formula_errors: [] };
+  }
+  const sheetNames = [...inspection.sheets.keys()];
+  for (const required of ["每日反馈", "需人工复核"]) {
+    if (!inspection.sheets.has(required)) errors.push(`required_sheet_missing:${required}`);
+  }
+  const daily = inspection.sheets.get("每日反馈") || [];
+  const review = inspection.sheets.get("需人工复核") || [];
+  const headerMatches = (rows, expected) => expected.every((value, index) => String(rows?.[0]?.[index] || "").trim() === value);
+  if (!headerMatches(daily, DAILY_REVIEW_HEADERS)) errors.push("daily_headers_invalid");
+  if (!headerMatches(review, HUMAN_REVIEW_HEADERS)) errors.push("human_review_headers_invalid");
+  for (let index = 1; index < daily.length; index++) {
+    if (String(daily[index]?.[6] || "").trim()) errors.push(`daily_feedback_not_blank:G${index + 1}`);
+    if (String(daily[index]?.[7] || "").trim()) errors.push(`daily_comment_not_blank:H${index + 1}`);
+  }
+  for (let index = 1; index < review.length; index++) {
+    if (String(review[index]?.[10] || "").trim()) errors.push(`human_confirmation_not_blank:K${index + 1}`);
+  }
+  if (inspection.formula_errors.length) errors.push(`formula_errors:${inspection.formula_errors.length}`);
+  return { ok: errors.length === 0, errors, sheets: sheetNames, formula_errors: inspection.formula_errors };
+}
 
 export async function detectCodexSpreadsheetAvailability() {
   try {

@@ -483,6 +483,18 @@ export class ZoteroCliBackend extends ZoteroBackendBase {
     throw lastError || new Error(`CLI command failed after ${retries} attempts`);
   }
 
+  async _execJsViaStdin(script, { timeoutMs = this.timeoutMs } = {}) {
+    const result = await this.executeCli(
+      process.env.PYTHON || "python",
+      [STDIN_RUNNER_PATH, "--wait", String(Math.ceil(timeoutMs / 1000))],
+      { timeoutMs, json: true, stdin: String(script || "") },
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(`CLI stdin runner exited with code ${result.exitCode}: ${result.stderr || result.stdout}`);
+    }
+    return result;
+  }
+
   // ─── 连接管理 ───
 
   async ping() {
@@ -927,12 +939,7 @@ export class ZoteroCliBackend extends ZoteroBackendBase {
         this.timeoutMs,
         batch.length * Number(process.env.ZOTERO_CLI_BATCH_CREATE_TIMEOUT_MS_PER_ITEM || 3000),
       );
-      const jsResult = await this.executeCli(process.env.PYTHON || "python", [STDIN_RUNNER_PATH, "--wait", String(Math.ceil(timeoutMs / 1000))], {
-        timeoutMs,
-        json: true,
-        stdin: script,
-      });
-      if (jsResult.exitCode !== 0) throw new Error(`CLI stdin runner exited with code ${jsResult.exitCode}: ${jsResult.stderr || jsResult.stdout}`);
+      const jsResult = await this._execJsViaStdin(script, { timeoutMs });
       const data = extractData(jsResult, {});
       return {
         created: Array.isArray(data?.created) ? data.created : [],
@@ -1134,9 +1141,9 @@ export class ZoteroCliBackend extends ZoteroBackendBase {
     }
     if (!normalized.length) return result;
 
-    const jsResult = await this._exec(
-      ["js", buildWriteMetadataBatchJs(normalized)],
-      { retries: 1, timeoutMs: Math.max(30000, this.timeoutMs) }
+    const jsResult = await this._execJsViaStdin(
+      buildWriteMetadataBatchJs(normalized),
+      { timeoutMs: Math.max(30000, this.timeoutMs) },
     );
     const data = extractData(jsResult, {});
     result.updated.push(...(Array.isArray(data?.updated) ? data.updated : []));

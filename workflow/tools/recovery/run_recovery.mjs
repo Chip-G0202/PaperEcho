@@ -254,9 +254,14 @@ export class RunRecoveryCoordinator {
 
   async completeMetadata(operations, result = {}) {
     const successes = new Set([...(result.updated || []), ...(result.unchanged || [])].map(String));
+    const notApplicable = new Set([...(result.notApplicable || []), ...(result.not_applicable || [])]
+      .map((entry) => String(entry?.itemKey || entry || ""))
+      .filter(Boolean));
     for (const operation of operations) {
       const itemKey = operation.target.itemKey;
-      if (successes.has(itemKey)) await transitionToVerified(this.store, operation, { verification: { itemKey, version: result.versions?.[itemKey] || null } });
+      if (notApplicable.has(itemKey)) {
+        await transitionToVerified(this.store, operation, { verification: { itemKey, notApplicable: true, outcome: "verified_no_op", reason: "metadata_not_applicable" } });
+      } else if (successes.has(itemKey)) await transitionToVerified(this.store, operation, { verification: { itemKey, version: result.versions?.[itemKey] || null } });
       else {
         const current = this.store.ledger.operations.find((item) => item.idempotencyKey === operation.idempotencyKey);
         if (current.status === "started") await this.store.transition(current.idempotencyKey, "failed", { error: result.failed?.find((failure) => failure.itemKey === itemKey)?.error || "METADATA_NOT_VERIFIED" });
