@@ -30,7 +30,7 @@ import { formatStage1Date, resolveStage1ManualTrigger } from "./runtime_context.
 import { evaluateStage1IntervalGate } from "./interval_gate_step.mjs";
 import { runRuleSuggestionStep } from "./rule_suggestions_step.mjs";
 import { runScreeningStandardsSyncStep } from "./screening_standards_sync_step.mjs";
-import { buildLlmReviewCandidates, gradeReviewPromptContractHash, resolveEligibleRuleGrades } from "./llm_grade_reviewer.mjs";
+import { buildLlmReviewCandidates, gradeReviewPromptContractHash, resolveEligibleRuleGrades, resolveGradeReviewItemLimit } from "./llm_grade_reviewer.mjs";
 import { runSourceSelectionAndFetch } from "./source_selection_step.mjs";
 import { runPreferenceLearningPhase } from "./preference_learning_step.mjs";
 import { runFeedbackActionsAndWriteback } from "./feedback_actions_step.mjs";
@@ -509,10 +509,13 @@ export async function runResearchOsPipeline({
     forcedReviewCount: weeklyClassificationCoverage.forcedReviewCount,
     llmReviewItemCount: llmReviewItems.length,
   };
-  if (maxGradeReviewItemsSource === "full_coverage") {
-    llmReviewConfig.max_grade_review_items = Math.max(1, llmReviewItems.length);
-    effectiveMaxGradeReviewItems = Number(llmReviewConfig.max_grade_review_items);
-  }
+  const gradeReviewItemLimit = resolveGradeReviewItemLimit(llmReviewConfig, {
+    candidateCount: llmReviewItems.length,
+    runtimeOverride: buildRuntimeSafetyConfig({ runtime: RUNTIME, argv }).max_grade_review_items,
+  });
+  llmReviewConfig.max_grade_review_items = gradeReviewItemLimit.maxItems;
+  effectiveMaxGradeReviewItems = gradeReviewItemLimit.maxItems;
+  maxGradeReviewItemsSource = gradeReviewItemLimit.source;
   report.steps.pre_llm_zotero_existing_dedupe = preLlmExistingDedupe.diagnostics;
   report.steps.dedupe.pre_llm_zotero_existing_dedupe = preLlmExistingDedupe.diagnostics;
   report.steps.dedupe.llm_review_candidate_count_before_zotero_dedupe = llmReviewCandidateCount;

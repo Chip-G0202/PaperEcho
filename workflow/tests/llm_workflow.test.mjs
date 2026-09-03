@@ -5,13 +5,62 @@ import os from "node:os";
 import path from "node:path";
 
 import { buildPreferenceLearningInputs, runLlmPreferenceLearning } from "../tools/stage1/llm_preference_learning.mjs";
-import { buildLlmReviewCandidates, resolveEligibleRuleGrades, reviewGradesWithLlm } from "../tools/stage1/llm_grade_reviewer.mjs";
+import { buildLlmReviewCandidates, resolveEligibleRuleGrades, resolveGradeReviewItemLimit, reviewGradesWithLlm } from "../tools/stage1/llm_grade_reviewer.mjs";
 import { callJsonLlm, parseJsonOnlyWithInfo } from "../tools/lib/llm_json_support.mjs";
 import { dedupWithDiagnostics } from "../tools/stage1/main.mjs";
 import { understandPreferenceEvaluation } from "../tools/lib/preference_learning_support.mjs";
 import { translateTitlesBatch } from "../tools/lib/title_translation_support.mjs";
 
 describe("LLM workflow", () => {
+  it("keeps the legacy Stage 1 review limit when config does not opt into full coverage", () => {
+    assert.deepEqual(
+      resolveGradeReviewItemLimit({}, { candidateCount: 481 }),
+      { maxItems: 50, source: "default" },
+    );
+  });
+
+  it("reviews every post-dedupe candidate when config explicitly opts into full coverage", () => {
+    assert.deepEqual(
+      resolveGradeReviewItemLimit(
+        { max_grade_review_items: 0, max_grade_review_items_mode: "full_coverage_by_default" },
+        { candidateCount: 481 },
+      ),
+      { maxItems: 481, source: "full_coverage" },
+    );
+  });
+
+  it("keeps a runtime review limit run-scoped and ahead of configured full coverage", () => {
+    const config = { max_grade_review_items: 0, max_grade_review_items_mode: "full_coverage_by_default" };
+
+    assert.deepEqual(
+      resolveGradeReviewItemLimit(config, { candidateCount: 481, runtimeOverride: 25 }),
+      { maxItems: 25, source: "runtime_override" },
+    );
+    assert.deepEqual(
+      resolveGradeReviewItemLimit(config, { candidateCount: 481 }),
+      { maxItems: 481, source: "full_coverage" },
+    );
+    assert.equal(config.max_grade_review_items, 0);
+  });
+
+  it("fails closed on malformed runtime review limits", () => {
+    assert.deepEqual(
+      resolveGradeReviewItemLimit({}, { candidateCount: 481, runtimeOverride: "all" }),
+      { maxItems: 50, source: "default" },
+    );
+    assert.deepEqual(
+      resolveGradeReviewItemLimit({}, { candidateCount: 481, runtimeOverride: { maxItems: 481 } }),
+      { maxItems: 50, source: "default" },
+    );
+  });
+
+  it("preserves an explicit configured review cap", () => {
+    assert.deepEqual(
+      resolveGradeReviewItemLimit({ max_grade_review_items: 30 }, { candidateCount: 481 }),
+      { maxItems: 30, source: "config" },
+    );
+  });
+
   it("disabled LLM mode skips without sending requests even when an API key exists", async () => {
     let called = false;
     const result = await callJsonLlm({

@@ -8,6 +8,27 @@ import { synthesizeFinalGrade } from "./semantic_grade_synthesis.mjs";
 
 const DEFAULT_ELIGIBLE_RULE_GRADES = ["A", "B", "C"];
 
+export function resolveGradeReviewItemLimit(config = {}, {
+  candidateCount = 0,
+  runtimeOverride = null,
+  defaultLimit = 50,
+} = {}) {
+  const runtimeLimit = Number(runtimeOverride);
+  if (Number.isInteger(runtimeLimit) && runtimeLimit > 0) {
+    return { maxItems: runtimeLimit, source: "runtime_override" };
+  }
+
+  const configuredLimit = Number(config.max_grade_review_items);
+  const coverageMode = String(config.max_grade_review_items_mode || "").trim().toLowerCase();
+  if (coverageMode === "full_coverage_by_default" && (!Number.isFinite(configuredLimit) || configuredLimit <= 0)) {
+    return { maxItems: Math.max(1, Number(candidateCount) || 0), source: "full_coverage" };
+  }
+  if (Number.isInteger(configuredLimit) && configuredLimit > 0) {
+    return { maxItems: configuredLimit, source: "config" };
+  }
+  return { maxItems: Math.max(1, Number(defaultLimit) || 50), source: "default" };
+}
+
 export function resolveEligibleRuleGrades(config = {}) {
   const configured = Array.isArray(config.eligible_rule_grades)
     ? config.eligible_rule_grades.map(normalizeGradeLetter).filter(Boolean)
