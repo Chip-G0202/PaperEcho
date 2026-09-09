@@ -74,6 +74,7 @@ function inspectLlmEvidence(value, pathParts = [], result = { observed: false, f
 }
 
 export async function validateProductionResult({ options, plan, processResult, fsApi = fs } = {}) {
+  if (["timed_out", "interrupted"].includes(processResult.status)) return { ok: false, status: processResult.status, reason: "production_incomplete", exitCode: processResult.status === "interrupted" ? 7 : 5 };
   if (processResult.signal) return { ok: false, reason: "canceled", exitCode: 7 };
   if (processResult.code !== 0) return { ok: false, reason: "production_entry_failed", productionExitCode: processResult.code, exitCode: 5 };
   const report = extractLastJsonObject(processResult.stdout);

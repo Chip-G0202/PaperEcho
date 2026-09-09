@@ -13,6 +13,7 @@
  */
 
 import { getZoteroAdapter } from "./zotero_adapter.mjs";
+import { throwIfWorkflowCanceled } from "./workflow_cancellation.mjs";
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
@@ -137,6 +138,7 @@ export async function createCompatMcpToolCall(options = {}) {
    * @returns {Promise<{content: [{text: string}]}>} 与原 mcpToolCall 格式一致
    */
   async function mcpToolCall(name, args, id) {
+    throwIfWorkflowCanceled();
     const handler = MCP_TO_ADAPTER[name];
     if (!handler) {
       throw new Error(`Unknown MCP operation: ${name}`);
@@ -172,6 +174,7 @@ export async function createVerifiedMcpToolCall(options = {}) {
   };
 
   async function mcpToolCall(name, args, id) {
+    throwIfWorkflowCanceled();
     const handler = VERIFIED_MCP_TO_ADAPTER[name];
     if (!handler) {
       throw new Error(`Unknown MCP operation: ${name}`);

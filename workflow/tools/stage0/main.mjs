@@ -1,6 +1,7 @@
 // Must be first import: sets review_results_OVERRIDE_DATE from --date= CLI arg before stage modules load.
 import "../lib/date_override_bootstrap.mjs";
 import "../lib/env_file_bootstrap.mjs";
+import { installWorkflowCancellation, throwIfWorkflowCanceled } from "../lib/workflow_cancellation.mjs";
 
 // Pipeline directory set early by main() so the global unhandledRejection
 // handler can write an emergency orchestrator report.
@@ -171,9 +172,11 @@ function skippedStage(name, scriptPath, skipReason, clock) {
 }
 
 async function executeStage(stage, runStage, clock) {
+  throwIfWorkflowCanceled();
   const started = clock();
   const startedAt = iso(started);
   const result = await runStage(stage);
+  throwIfWorkflowCanceled();
   const finished = clock();
   const finishedAt = iso(finished);
   return {
@@ -825,6 +828,7 @@ export async function runZoteroLiteratureFilter({
 }
 
 async function main() {
+  const cancellation = installWorkflowCancellation();
   const runMode = detectRunMode();
   let orchestratorReportWritten = false;
   process.env.review_results_ORCHESTRATOR_TRIGGER = runMode.triggerMode;
@@ -932,6 +936,8 @@ async function main() {
     }
   } finally {
     if (workflowLease?.acquired) await releaseRunLease(workflowLease).catch(() => {});
+    if (cancellation.signal.aborted) report = { ...report, status: cancellation.signal.reason.status, last_known_phase: _emergencyPipelineDir ? "see_current_run_timing_diagnostics" : "startup" };
+    cancellation.dispose();
   }
   console.log(JSON.stringify(report, null, 2));
   process.exit(["completed", "completed_with_warnings", "completed_stage1_only", "degraded_due_to_zotero_backend_unavailable", "skipped"].includes(report.status) ? 0 : 1);

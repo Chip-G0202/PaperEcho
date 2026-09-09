@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
+import { watchProductionChild } from "./child_watchdog.mjs";
+import { writeAtomicJson } from "../lib/atomic_json.mjs";
 import { pathToFileURL } from "node:url";
 
 import "../lib/env_file_bootstrap.mjs";
@@ -25,10 +28,18 @@ export function runProduction(plan, dependencies = {}) {
   const spawnImpl = dependencies.spawnImpl || spawn;
   const stdout = dependencies.stdout || process.stdout;
   const stderr = dependencies.stderr || process.stderr;
+  const enrichmentMs = Number(plan.childEnv?.PAPERECHO_FEEDBACK_ENRICHMENT_TIMEOUT_MS || 1800000);
+  const timeoutMs = Number(dependencies.watchdogTimeoutMs ?? plan.childEnv?.PAPERECHO_RUNNER_WATCHDOG_TIMEOUT_MS ?? Math.max(7200000, enrichmentMs * 4));
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || (!dependencies.watchdogTimeoutMs && timeoutMs <= enrichmentMs)) throw new Error("invalid_runner_watchdog_timeout");
   return new Promise((resolve, reject) => {
-    const child = spawnImpl(process.execPath, [plan.entry, ...plan.args], { cwd: plan.cwd, env: plan.childEnv, shell: false, stdio: ["inherit", "pipe", "pipe"] });
+    const child = spawnImpl(process.execPath, [plan.entry, ...plan.args], { cwd: plan.cwd, env: plan.childEnv, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["inherit", "pipe", "pipe", "ipc"] });
     let rawStdout = "";
     let rawStderr = "";
+    const watchdog = watchProductionChild(child, { timeoutMs, graceMs: dependencies.graceMs, processApi: dependencies.processApi || process,
+      force: dependencies.forceChildTree,
+      onStop: (status) => stderr.write(`[runner] ${status}: terminating owned production child\n`),
+      onUnreaped: (status) => { watchdog.cleanup(); child.unref?.(); child.stdout?.destroy?.(); child.stderr?.destroy?.(); if (child.connected) child.disconnect?.(); resolve({ code: 1, status, childExitConfirmed: false, stdout: rawStdout, stderr: rawStderr }); },
+    });
     child.stdout?.on("data", (chunk) => {
       rawStdout += chunk;
       stdout.write(redactText(chunk, plan.childEnv));
@@ -37,8 +48,8 @@ export function runProduction(plan, dependencies = {}) {
       rawStderr += chunk;
       stderr.write(redactText(chunk, plan.childEnv));
     });
-    child.once("error", reject);
-    child.once("close", (code, signal) => resolve({ code: Number(code ?? 1), signal, stdout: rawStdout, stderr: rawStderr }));
+    child.once("error", (error) => { watchdog.cleanup(); reject(error); });
+    child.once("close", (code, signal) => { const status = watchdog.status || (signal ? "interrupted" : Number(code) === 0 ? "completed" : "failed"); watchdog.cleanup(); resolve({ code: status === "completed" ? 0 : Number(code || 1), status, signal, childExitConfirmed: true, stdout: rawStdout, stderr: rawStderr }); });
   });
 }
 
@@ -96,6 +107,12 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     return EXIT_CODES.pipeline;
   }
   const productionReport = extractLastJsonObject(processResult.stdout);
+  if (["timed_out", "interrupted"].includes(processResult.status)) {
+    const result = { type: "result", ok: false, status: processResult.status, runId: plan.runId, childExitConfirmed: processResult.childExitConfirmed, lastKnownPhase: productionReport?.last_known_phase || productionReport?.status || "unknown", sideEffects: "consult_current_run_ledger", exitCode: processResult.status === "interrupted" ? EXIT_CODES.canceled : EXIT_CODES.pipeline };
+    if (plan.runRoot && plan.runId) await writeAtomicJson(path.join(plan.runRoot, plan.runId, "runner_report.json"), result);
+    stdout.write(`${JSON.stringify(result)}\n`);
+    return result.exitCode;
+  }
   const notificationSchemaV2 = String(resolved.env.PAPERECHO_CONFIG_SCHEMA_VERSION || "") === "2";
   const recipient = String(options.email || resolved.env.PAPERFLOW_REPORT_TO || resolved.env.NOTIFICATION_EMAIL || "").trim();
   if (processResult.code !== 0 && notificationSchemaV2 && /^(1|true|yes|on)$/i.test(String(resolved.env.PAPERECHO_FAILURE_NOTIFIER_ENABLED || ""))) {
