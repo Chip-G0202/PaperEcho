@@ -121,6 +121,8 @@ export class ZoteroAdapter {
     return this.backend?.backendType || "none";
   }
 
+  get supportsConcurrentReads() { return this.backend?.supportsConcurrentReads === true; }
+
   async ping() {
     this._ensureInitialized();
     return this.backend.ping();

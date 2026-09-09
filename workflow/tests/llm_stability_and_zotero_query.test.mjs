@@ -34,7 +34,7 @@ test("sanitizeZoteroSearchQuery removes control characters and caps query length
   assert.equal(sanitized.length, 300);
 });
 
-test("search_library retries once with sanitized title after MCP parse error", async () => {
+test("search_library uses cleaned variant only after reliable zero response", async () => {
   const searchedTitles = [];
   const archivePlan = [{
     status: "needs_review",
@@ -47,7 +47,7 @@ test("search_library retries once with sanitized title after MCP parse error", a
     if (name === "search_library") {
       searchedTitles.push(args.title);
       if (args.title.includes("β")) {
-        throw new Error('MCP search_library failed: {"code":-32700,"message":"Parse error"}');
+        return mcpResult([]);
       }
       return mcpResult({ results: [{ key: "ABC123", title: "IFN-beta response" }] });
     }
@@ -61,12 +61,12 @@ test("search_library retries once with sanitized title after MCP parse error", a
 
   assert.deepEqual(searchedTitles, ["IFN-β response", "IFN-beta response"]);
   assert.equal(archivePlan[0].match_key, "IFN-β response");
-  assert.equal(archivePlan[0].record.title, "IFN-β response");
+  assert.equal(archivePlan[0].record.title, "IFN-beta response");
   assert.equal(archivePlan[0].zotero_title_query_diagnostics.sanitized_query_used, true);
-  assert.equal(archivePlan[0].zotero_title_query_diagnostics.sanitized_retry_reason, "mcp_parse_error");
+
 });
 
-test("search_library falls back to shortened query after repeated MCP parse errors", async () => {
+test("search_library falls back to shortened query only after reliable zeros", async () => {
   const searchedTitles = [];
   const originalTitle = `IFN-\u200Bβ response ${"example topic term 011 ".repeat(30)}`;
   const cleanedOriginalTitle = originalTitle.trim();
@@ -81,7 +81,7 @@ test("search_library falls back to shortened query after repeated MCP parse erro
     if (name === "search_library") {
       searchedTitles.push(args.title);
       if (searchedTitles.length < 3) {
-        throw new Error('MCP search_library failed: {"code":-32700,"message":"Parse error"}');
+        return mcpResult([]);
       }
       return mcpResult({ results: [{ key: "ABC123", title: originalTitle }] });
     }

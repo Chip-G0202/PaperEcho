@@ -155,6 +155,7 @@ export async function createCompatMcpToolCall(options = {}) {
   // 附加适配器信息
   mcpToolCall.adapter = adapter;
   mcpToolCall.backendType = adapter.backendType;
+  mcpToolCall.readConcurrencySafe = adapter.supportsConcurrentReads === true;
 
   return mcpToolCall;
 }

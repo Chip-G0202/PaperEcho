@@ -150,6 +150,8 @@ export async function runFeedbackItemActionsStep({
         };
 
         const enrichStarted = Date.now();
+        trackedZoteroBackendCall.backendType = zoteroBackendCall.backendType;
+        trackedZoteroBackendCall.readConcurrencySafe = zoteroBackendCall.readConcurrencySafe;
         lastKnownPhase = "feedback_item_actions.enrichArchivePlanWithZoteroTitleMatches";
         await enrichArchivePlanWithZoteroTitleMatches(archivePlan, {
           ...dependencies.enrichmentOptions,
