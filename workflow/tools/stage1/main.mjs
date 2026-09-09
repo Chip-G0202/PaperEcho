@@ -1,3 +1,4 @@
+import { writeAtomicJson } from "../lib/atomic_json.mjs";
 import { loadPubMedPmcSearchConfig, loadWorkflowRules } from "../lib/literature_config.mjs";
 import { resolveLlmRuntime } from "../lib/llm_json_support.mjs";
 // Internal stage notice:
@@ -161,7 +162,9 @@ export async function runResearchOsPipeline({
   const timingDiagnosticsPath = path.join(pipeDir, "timing_diagnostics.json");
   let lastCompletedTimingName = "";
   let lastKnownPhase = "report_initialized";
+  let timingWrites = Promise.resolve();
   const writeTimingDiagnostics = async (reason, extra = {}) => {
+    if (extra.last_known_phase) lastKnownPhase = extra.last_known_phase;
     latestTimingDiagnostics = {
       path: timingDiagnosticsPath,
       generated_at: new Date().toISOString(),
@@ -171,10 +174,12 @@ export async function runResearchOsPipeline({
       last_known_phase: lastKnownPhase,
       ...extra,
     };
-    await fs.writeFile(timingDiagnosticsPath, JSON.stringify(latestTimingDiagnostics, null, 2), "utf8");
+    const snapshot = structuredClone(latestTimingDiagnostics);
+    timingWrites = timingWrites.then(() => writeAtomicJson(timingDiagnosticsPath, snapshot));
+    await timingWrites;
   };
   const flushTimingDiagnostics = (reason, extra = {}) => {
-    writeTimingDiagnostics(reason, extra).catch(() => {});
+    return writeTimingDiagnostics(reason, extra).catch(() => {});
   };
   const recordTiming = (name, startedMs, extra = {}) => {
     report.stage_timings[name] = {

@@ -9,6 +9,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { zoteroLookupSignal } from "./zotero_lookup_scope.mjs";
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_WEB_CLI_TOOL = "zot"; // zotero-cli-cc
@@ -76,7 +77,9 @@ export async function executeCli(command, args, options = {}) {
     env = {},
     json = true,
     stdin = null,
+    signal = zoteroLookupSignal(),
   } = options;
+  signal?.throwIfAborted();
 
   return new Promise((resolve, reject) => {
     const spawnSpec = resolveCliSpawnSpec(command, args);
@@ -90,6 +93,11 @@ export async function executeCli(command, args, options = {}) {
 
     let stdout = "";
     let stderr = "";
+    const onAbort = () => {
+      terminateChildProcessTree(child);
+      reject(signal.reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout.on("data", (data) => {
       stdout += Buffer.isBuffer(data) ? data.toString("utf8") : data;
@@ -112,6 +120,7 @@ export async function executeCli(command, args, options = {}) {
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       const result = {
         exitCode: code,
         stdout: stdout.trim(),
@@ -132,6 +141,7 @@ export async function executeCli(command, args, options = {}) {
 
     child.on("error", (error) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       reject(new Error(`CLI command failed: ${command} ${args.join(" ")} - ${error.message}`));
     });
   });

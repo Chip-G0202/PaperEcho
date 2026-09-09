@@ -27,6 +27,7 @@ import {
 } from "./zotero_create_safety.mjs";
 import { EphemeralRegistry, getActiveEphemeralRegistry, registerEphemeral } from "./ephemeral_registry.mjs";
 
+import { zoteroLookupSignal } from "./zotero_lookup_scope.mjs";
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_RETRIES = 3;
 const DEFAULT_INTERVAL_MS = 2000;
@@ -461,6 +462,7 @@ export class ZoteroCliBackend extends ZoteroBackendBase {
 
     let lastError = null;
     for (let attempt = 1; attempt <= retries; attempt++) {
+      zoteroLookupSignal()?.throwIfAborted();
       try {
         const result = await this.executeCli(this.cliTool, args, {
           timeoutMs,
@@ -473,6 +475,7 @@ export class ZoteroCliBackend extends ZoteroBackendBase {
 
         return result;
       } catch (error) {
+        zoteroLookupSignal()?.throwIfAborted();
         lastError = error;
         if (attempt < retries) {
           await wait(intervalMs);

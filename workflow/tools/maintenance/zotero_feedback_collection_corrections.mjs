@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { normalizeTitleForExistingDedupe } from "../lib/literature_identity.mjs";
+import { enrichmentAbort, withZoteroLookupSignal } from "../lib/zotero_lookup_scope.mjs";
 import { buildRuntimeConfig } from "../lib/runtime_config.mjs";
 import { parseToolText } from "../lib/writeback_support.mjs";
 import {
@@ -352,7 +354,7 @@ function levelFromZoteroDetails(details = {}) {
 }
 
 function normalizeLocalTitle(value) {
-  return sanitizeZoteroSearchQuery(value).toLowerCase();
+  return normalizeTitleForExistingDedupe(value);
 }
 
 function resolveZoteroTitleMatchFromLocalIndex(feedback, localLibraryIndex) {
@@ -440,11 +442,18 @@ async function resolveZoteroTitleMatch(feedback, mcpToolCall, id, { localLibrary
     }
   }
   const result = parseToolText(resultPayload);
-  const hits = Array.isArray(result?.results) ? result.results : Array.isArray(result) ? result : [];
+  if (result?.error) throw new Error("feedback_title_search_failed");
+  const candidates = Array.isArray(result?.results) ? result.results : Array.isArray(result) ? result : null;
+  if (!candidates) throw new Error("feedback_title_search_invalid_response");
+  const hits = candidates.map((hit) => ({ ...hit, ...(hit.data || {}) })).filter((hit) =>
+    normalizeLocalTitle(hit.title) === normalizeLocalTitle(title) ||
+    sanitizeZoteroSearchQuery(hit.title).toLowerCase() === sanitizedTitle.toLowerCase());
+  // A capped response cannot prove uniqueness, even if only one returned hit is exact.
+  if (candidates.length >= 5) return { status: "ambiguous", title, hits: hits.length, hitItems: [], query_diagnostics: diagnostics };
   if (hits.length !== 1) return { status: hits.length > 1 ? "ambiguous" : "missing", title, hits: hits.length, hitItems: hits, query_diagnostics: diagnostics };
   const itemKey = normalizeItemKey(hits[0].key || hits[0].itemKey);
   if (!itemKey) return { status: "missing", title, hits: hits.length, query_diagnostics: diagnostics };
-  const details = parseToolText(await mcpToolCall("get_item_details", { itemKey, mode: "complete" }, id + 1));
+  const details = levelFromZoteroDetails(hits[0]) ? hits[0] : parseToolText(await mcpToolCall("get_item_details", { itemKey, mode: "complete" }, id + 1));
   return { status: "matched", title, itemKey, details, query_diagnostics: diagnostics };
 }
 
@@ -455,7 +464,87 @@ async function zoteroItemExists(itemKey, mcpToolCall, id, { localLibraryIndex = 
   return !String(result?.error || "").match(/not found/i);
 }
 
-export async function enrichArchivePlanWithZoteroTitleMatches(archivePlan, { mcpToolCall = defaultMcpToolCall, localLibraryIndex = null, localIndexPath = "" } = {}) {
+export async function enrichArchivePlanWithZoteroTitleMatches(archivePlan, {
+  mcpToolCall = defaultMcpToolCall, localLibraryIndex = null, localIndexPath = "",
+  timeoutMs = Number(process.env.PAPERECHO_FEEDBACK_ENRICHMENT_TIMEOUT_MS || 1800000),
+  signal, onProgress = async () => {}, heartbeatMs = 10000,
+} = {}) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("invalid_feedback_enrichment_timeout");
+  const controller = new AbortController();
+  const started = Date.now();
+  const progress = { phase: "feedback_item_actions.enrichArchivePlanWithZoteroTitleMatches", status: "running", startedAt: new Date(started).toISOString(), total: archivePlan.length, totalPlanItems: archivePlan.length, localResolved: 0, remoteRequired: 0, uniqueRemoteQueries: 0, completed: 0, remaining: archivePlan.length, matched: 0, noMatch: 0, ambiguous: 0, errors: 0, cacheHits: 0, remoteRequests: 0, enumeration: "unavailable_no_verified_adapter_contract", concurrency: 1 };
+  let writes = Promise.resolve();
+  const publish = () => {
+    const snapshot = { ...progress, remaining: Math.max(0, progress.total - progress.completed), elapsedMs: Date.now() - started, lastProgressAt: new Date().toISOString() };
+    writes = writes.then(() => onProgress(snapshot));
+    return writes;
+  };
+  const interrupt = () => controller.abort(enrichmentAbort("interrupted"));
+  const message = (value) => { if (value?.type === "paperecho_cancel") controller.abort(enrichmentAbort(value.status === "timed_out" ? "timed_out" : "interrupted")); };
+  signal?.addEventListener("abort", interrupt, { once: true });
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
+  process.on("message", message);
+  if (signal?.aborted) interrupt();
+  const deadline = setTimeout(() => controller.abort(enrichmentAbort("timed_out")), timeoutMs);
+  const heartbeat = setInterval(() => { publish().catch(() => controller.abort(enrichmentAbort("failed"))); }, Math.max(5, heartbeatMs));
+  const checkAbort = () => controller.signal.throwIfAborted();
+  const queries = new Set();
+  const calls = new Map();
+  const call = async (name, args, id) => {
+    checkAbort();
+    const key = name === "search_library" ? `${name}:${String(args.title || args.query || "").trim().toLowerCase()}` : name === "get_item_details" ? `${name}:${args.itemKey}` : "";
+    if (key && calls.has(key)) { progress.cacheHits++; return calls.get(key); }
+    progress.remoteRequests++;
+    if (name === "search_library") queries.add(normalizeLocalTitle(args.title));
+    progress.uniqueRemoteQueries = queries.size;
+    const result = await withZoteroLookupSignal(controller.signal, () => mcpToolCall(name, args, id));
+    checkAbort();
+    const parsed = parseToolText(result);
+    if (parsed?.error && !/not found/i.test(String(parsed.error))) throw new Error("feedback_lookup_backend_error");
+    if (key) calls.set(key, result);
+    return result;
+  };
+  let abortListener;
+  try {
+    await publish();
+    if (!localLibraryIndex) {
+      const read = await readZoteroLibraryIndex(localIndexPath || getDefaultZoteroLibraryIndexPath(process.env.ZOTERO_PROJECT_ROOT || process.cwd()));
+      localLibraryIndex = read.usable ? read.index : { live_items: {} };
+    }
+    for (const entry of archivePlan) {
+      const titleMatch = resolveZoteroTitleMatchFromLocalIndex(entry.feedback, localLibraryIndex);
+      const knownKey = localLibraryIndex.live_items?.[normalizeItemKey(entry.record?.itemKey)];
+      if (!knownKey && titleMatch?.status !== "matched" && titleMatch?.status !== "ambiguous") progress.remoteRequired++;
+    }
+    await publish();
+    const aborted = new Promise((_, reject) => {
+      abortListener = () => reject(controller.signal.reason);
+      controller.signal.addEventListener("abort", abortListener, { once: true });
+      if (controller.signal.aborted) abortListener();
+    });
+    await Promise.race([enrichArchivePlanRows(archivePlan, { mcpToolCall: call, localLibraryIndex, progress, checkAbort, resolvedCache: new Map() }), aborted]);
+    checkAbort();
+    progress.status = "completed";
+    await publish();
+    return archivePlan;
+  } catch (error) {
+    progress.status = controller.signal.aborted ? controller.signal.reason.status : "failed";
+    progress.errors++;
+    await publish();
+    throw Object.assign(error, { code: "FEEDBACK_ENRICHMENT_INCOMPLETE", status: progress.status, progress: { ...progress }, noCorrectionSideEffects: true });
+  } finally {
+    clearTimeout(deadline);
+    clearInterval(heartbeat);
+    controller.signal.removeEventListener("abort", abortListener);
+    signal?.removeEventListener("abort", interrupt);
+    process.removeListener("SIGINT", interrupt);
+    process.removeListener("SIGTERM", interrupt);
+    process.removeListener("message", message);
+  }
+}
+
+async function enrichArchivePlanRows(archivePlan, { mcpToolCall, localLibraryIndex = null, localIndexPath = "", progress, checkAbort, resolvedCache }) {
   let effectiveLocalIndex = localLibraryIndex;
   if (!effectiveLocalIndex) {
     const read = await readZoteroLibraryIndex(localIndexPath || getDefaultZoteroLibraryIndexPath(process.env.ZOTERO_PROJECT_ROOT || process.cwd()));
@@ -464,58 +553,40 @@ export async function enrichArchivePlanWithZoteroTitleMatches(archivePlan, { mcp
   let seq = 0;
   const additions = [];
   for (const entry of archivePlan || []) {
+    checkAbort();
+    try {
     if (entry._zotero_title_expanded) continue;
     const currentItemKey = normalizeItemKey(entry.record?.itemKey);
     let staleItemKey = false;
     if (entry.status === "planned" && currentItemKey) {
       try {
         staleItemKey = !(await zoteroItemExists(currentItemKey, mcpToolCall, 894000 + seq * 5, { localLibraryIndex: effectiveLocalIndex }));
-      } catch {
-        staleItemKey = true;
+      } catch (error) {
+        throw error;
       }
     }
     const missingItemKey = entry.status === "planned" && !entry.record?.itemKey;
     const unmatched = entry.status === "needs_review" && entry.reason === "no_matching_literature_record";
     const duplicateLocalMatches = entry.status === "conflict" && entry.conflict_category === "one_feedback_multiple_literature";
     if (!missingItemKey && !staleItemKey && !unmatched && !duplicateLocalMatches) continue;
-    const resolved = await resolveZoteroTitleMatch(entry.feedback, mcpToolCall, 895000 + seq * 5, { localLibraryIndex: effectiveLocalIndex });
+    const lookupKey = normalizeLocalTitle(entry.feedback?.english_title || entry.feedback?.title || entry.feedback?.translated_title);
+    let resolved;
+    if (resolvedCache.has(lookupKey)) {
+      progress.cacheHits++;
+      resolved = resolvedCache.get(lookupKey);
+    } else {
+      resolved = await resolveZoteroTitleMatch(entry.feedback, mcpToolCall, 895000 + seq * 5, { localLibraryIndex: effectiveLocalIndex });
+      checkAbort();
+      if (resolved?.query_diagnostics?.fallback_used === "skip_after_parse_error") throw new Error("feedback_title_query_unresolved_parse_error");
+      resolvedCache.set(lookupKey, resolved);
+    }
+    if (resolved?.query_diagnostics?.fallback_used === "local_zotero_index") progress.localResolved++;
+    if (resolved?.status === "matched") progress.matched++;
+    else if (resolved?.status === "ambiguous") progress.ambiguous++;
+    else progress.noMatch++;
     seq += 1;
     if (resolved?.query_diagnostics) entry.zotero_title_query_diagnostics = resolved.query_diagnostics;
     if (!resolved || resolved.status !== "matched") {
-      if (resolved?.status === "ambiguous" && feedbackAction(entry) === "drop") {
-        const expanded = [];
-        for (const hit of resolved.hitItems || []) {
-          const itemKey = normalizeItemKey(hit.key || hit.itemKey);
-          if (!itemKey) continue;
-          const details = parseToolText(await mcpToolCall("get_item_details", { itemKey, mode: "complete" }, 895000 + seq * 5 + expanded.length + 1));
-          const originalLevel = entry.original_level || levelFromZoteroDetails(details);
-          expanded.push({
-            ...entry,
-            _zotero_title_expanded: true,
-            status: "planned",
-            reason: "ambiguous_drop_title_expanded_to_all_exact_zotero_matches",
-            match_method: "zotero_title_exact_multi_drop",
-            match_key: resolved.title,
-            confidence: 0.9,
-            original_level: originalLevel,
-            assigned_level: "D无关",
-            source_path: `zotero:${itemKey}`,
-            record: {
-              ...(entry.record || {}),
-              title: details?.title || hit.title || resolved.title,
-              itemKey,
-              record_key: `zotero:${itemKey}`,
-              source_kind: "zotero_mcp_search_library_multi_drop",
-            },
-            zotero_title_query_diagnostics: resolved.query_diagnostics || null,
-          });
-        }
-        if (expanded.length) {
-          Object.assign(entry, expanded[0]);
-          additions.push(...expanded.slice(1));
-          continue;
-        }
-      }
       if (resolved?.status === "ambiguous") {
         entry.status = "conflict";
         entry.reason = "ambiguous_zotero_title_match";
@@ -551,6 +622,7 @@ export async function enrichArchivePlanWithZoteroTitleMatches(archivePlan, { mcp
       record_key: `zotero:${resolved.itemKey}`,
       source_kind: "zotero_mcp_search_library",
     };
+    } finally { progress.completed++; }
   }
   archivePlan.push(...additions);
   return archivePlan;

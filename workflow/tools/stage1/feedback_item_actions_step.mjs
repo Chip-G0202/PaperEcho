@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeAtomicJson } from "../lib/atomic_json.mjs";
 import { createCompatMcpToolCall } from "../lib/zotero_backend_compat.mjs";
 import { getDefaultZoteroLibraryIndexPath, readZoteroLibraryIndex } from "../lib/zotero_library_index_store.mjs";
 import { buildMovePlan, scanFeedbackRows, scanLiteratureRecords } from "../maintenance/archive_history_by_feedback.mjs";
@@ -68,6 +69,7 @@ export async function runFeedbackItemActionsStep({
   startedAt,
   applyItemActions,
   timingContext,
+  dependencies = {},
 }) {
   const { recordTiming, flushTimingDiagnostics } = timingContext;
   let { lastKnownPhase } = timingContext;
@@ -93,7 +95,7 @@ export async function runFeedbackItemActionsStep({
       lastKnownPhase = "feedback_item_actions.scanFeedbackRows";
       flushTimingDiagnostics("phase_started", { timing_name: lastKnownPhase });
       const scanFeedbackRowsStarted = Date.now();
-      const feedbackRows = await scanFeedbackRows(reviewRoot);
+      const feedbackRows = await (dependencies.scanFeedbackRows || scanFeedbackRows)(reviewRoot);
       recordTiming("feedback_item_actions.scanFeedbackRows", scanFeedbackRowsStarted, {
         rows_count: feedbackRows.length,
       });
@@ -105,13 +107,13 @@ export async function runFeedbackItemActionsStep({
         lastKnownPhase = "feedback_item_actions.scanLiteratureRecords";
         flushTimingDiagnostics("phase_started", { timing_name: lastKnownPhase });
         const scanLiteratureRecordsStarted = Date.now();
-        const records = await scanLiteratureRecords(researchRoot);
+        const records = await (dependencies.scanLiteratureRecords || scanLiteratureRecords)(researchRoot);
         recordTiming("feedback_item_actions.scanLiteratureRecords", scanLiteratureRecordsStarted, {
           records_count: records.length,
         });
 
         const planBuildStarted = Date.now();
-        const archivePlan = buildMovePlan({ records, feedbackRows, archiveRoot });
+        const archivePlan = (dependencies.buildMovePlan || buildMovePlan)({ records, feedbackRows, archiveRoot });
         recordTiming("feedback_item_actions.plan_build", planBuildStarted, {
           records_count: records.length,
           feedback_rows_count: feedbackRows.length,
@@ -137,7 +139,7 @@ export async function runFeedbackItemActionsStep({
           };
         };
 
-        const zoteroBackendCall = await createCompatMcpToolCall();
+        const zoteroBackendCall = await (dependencies.createCompatMcpToolCall || createCompatMcpToolCall)();
         const trackedZoteroBackendCall = async (...args) => {
           const start = Date.now();
           try {
@@ -148,7 +150,17 @@ export async function runFeedbackItemActionsStep({
         };
 
         const enrichStarted = Date.now();
-        await enrichArchivePlanWithZoteroTitleMatches(archivePlan, { mcpToolCall: trackedZoteroBackendCall });
+        lastKnownPhase = "feedback_item_actions.enrichArchivePlanWithZoteroTitleMatches";
+        await enrichArchivePlanWithZoteroTitleMatches(archivePlan, {
+          ...dependencies.enrichmentOptions,
+          mcpToolCall: trackedZoteroBackendCall,
+          onProgress: async (progress) => {
+            feedbackItemActionsReport.enrichment = progress;
+            await writeAtomicJson(path.join(pipeDir, "feedback_item_actions_progress.json"), { ...progress, correction_mutation_started: false });
+            await flushTimingDiagnostics(progress.status === "running" ? "phase_started_or_heartbeat" : "phase_finished", { timing_name: lastKnownPhase, last_known_phase: lastKnownPhase, status: progress.status, startedAt: progress.startedAt, progress });
+            console.log(`[feedback title enrichment] ${progress.completed}/${progress.total}, remote queries ${progress.uniqueRemoteQueries}, requests ${progress.remoteRequests}, cache hits ${progress.cacheHits}, elapsed ${progress.elapsedMs}ms, ${progress.status}`);
+          },
+        });
         const enrichSearchSummary = {
           total_searches: enrichSearchTimings.length,
           successful_searches: enrichSearchTimings.filter((t) => t.duration_ms < 5000).length,
@@ -275,6 +287,11 @@ export async function runFeedbackItemActionsStep({
       feedbackItemActionsReport.status = "skipped_mcp_not_ready";
     }
   } catch (error) {
+    if (error?.code === "FEEDBACK_ENRICHMENT_INCOMPLETE") {
+      feedbackItemActionsReport.status = error.status;
+      error.feedbackItemActionsReport = feedbackItemActionsReport;
+      throw error;
+    }
     feedbackItemActionsReport.status = "error";
     feedbackItemActionsReport.error = String(error?.message || error);
   }
