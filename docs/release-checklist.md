@@ -142,3 +142,12 @@
 - Crossref/PubMed production acceptance 仅验证公开接口的真实结构化响应可被 parser 正确归一化，没有执行 Zotero mutation，也不等同于生产写入验收。
 - 未验证：真实 Zotero write、真实 SMTP、真实 LLM Radar、长期实际 OS scheduler、真实长期 rate-limit 环境。Phase D 公开源只读验收也不构成“生产环境已全面验证”或“检索绝对无遗漏”。
 - 本版本不包含 PDF 下载、全文阅读或内容总结。
+# Historical feedback enrichment safeguards
+
+- Preserve every historical feedback row. Deduplicate remote lookup work with the shared title normalization and run-scoped query/detail caches; never persist a remote-title cache as identity authority.
+- Use verified adapter capabilities only. Without a safe library enumeration contract or explicit concurrency evidence, use serial deduplicated searches. Partial local coverage never proves a remote miss; ambiguous/capped search results require review.
+- `PAPERECHO_FEEDBACK_ENRICHMENT_TIMEOUT_MS` is a run-scoped optional positive millisecond override (default 30 minutes). It is independent of the CLI request timeout. Phase start, periodic progress, and completion/failure are recorded atomically in timing and feedback progress artifacts.
+- Timeout, interruption, or incomplete enrichment must prevent collection discovery/application and downstream writeback preparation. Only a completed enrichment may build a consumable correction plan; verify zero correction mutations with timeout fixtures.
+- `PAPERECHO_RUNNER_WATCHDOG_TIMEOUT_MS` optionally bounds the production child (default at least 2 hours and four times the enrichment budget; explicit values must exceed that budget). Runner requests cooperative cancellation, then terminates only its owned child tree after a bounded grace period. Never kill processes by executable name.
+- SIGINT/SIGTERM propagate through launcher/Runner to production. Interrupted/timed-out runs must exit nonzero, retain last-phase evidence, and never report verified completion. Existing verified side effects remain ledger facts and are not automatically rolled back.
+- Release acceptance requires focused cancellation/cache fixtures, full development regression, and one controlled production run. A timed-out production run is a safe failure, not release acceptance; do not automatically rerun or move the release tag.
