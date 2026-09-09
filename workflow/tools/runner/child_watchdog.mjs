@@ -32,9 +32,11 @@ export function watchProductionChild(child, {
     }, graceMs);
   };
   const interrupted = () => stop("interrupted");
+  const message = (value) => { if (value?.type === "paperecho_cancel") interrupted(); };
   const timer = setTimeout(() => stop("timed_out"), timeoutMs);
   processApi.on("SIGINT", interrupted);
   processApi.on("SIGTERM", interrupted);
+  processApi.on("message", message);
   return {
     get status() { return status; },
     cleanup() {
@@ -42,6 +44,7 @@ export function watchProductionChild(child, {
       clearTimeout(timer); clearTimeout(graceTimer); clearTimeout(reapTimer);
       processApi.removeListener("SIGINT", interrupted);
       processApi.removeListener("SIGTERM", interrupted);
+      processApi.removeListener("message", message);
     },
   };
 }

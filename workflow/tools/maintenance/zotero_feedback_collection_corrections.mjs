@@ -296,6 +296,7 @@ export function buildCorrectionPlan({
   collectionGuard = null,
   collectionScopeBlocks = null,
 } = {}) {
+  if (archivePlan.enrichmentStatus && archivePlan.enrichmentStatus !== "completed") throw enrichmentAbort(archivePlan.enrichmentStatus);
   const actions = archivePlan.map((entry) => {
     const action = correctionActionForEntry(entry, collections);
     if (dropMode === "quarantine" && action.status === "drop_manual_delete_required") {
@@ -362,7 +363,7 @@ function resolveZoteroTitleMatchFromLocalIndex(feedback, localLibraryIndex) {
   if (!title || !localLibraryIndex?.live_items) return null;
   const target = normalizeLocalTitle(title);
   if (!target) return null;
-  const hits = Object.values(localLibraryIndex.live_items || {}).filter((item) => normalizeLocalTitle(item.title) === target);
+  const hits = localLibraryIndex.titleLookup?.get(target) || Object.values(localLibraryIndex.live_items || {}).filter((item) => normalizeLocalTitle(item.title) === target);
   const diagnostics = {
     original_query_had_unicode: hasNonAscii(title),
     original_query_length: title.length,
@@ -447,7 +448,7 @@ async function resolveZoteroTitleMatch(feedback, mcpToolCall, id, { localLibrary
   if (!candidates) throw new Error("feedback_title_search_invalid_response");
   const hits = candidates.map((hit) => ({ ...hit, ...(hit.data || {}) })).filter((hit) =>
     normalizeLocalTitle(hit.title) === normalizeLocalTitle(title) ||
-    sanitizeZoteroSearchQuery(hit.title).toLowerCase() === sanitizedTitle.toLowerCase());
+    (title.length < MAX_ZOTERO_SEARCH_QUERY_LENGTH && String(hit.title || "").length < MAX_ZOTERO_SEARCH_QUERY_LENGTH && sanitizeZoteroSearchQuery(hit.title).toLowerCase() === sanitizedTitle.toLowerCase()));
   // A capped response cannot prove uniqueness, even if only one returned hit is exact.
   if (candidates.length >= 5) return { status: "ambiguous", title, hits: hits.length, hitItems: [], query_diagnostics: diagnostics };
   if (hits.length !== 1) return { status: hits.length > 1 ? "ambiguous" : "missing", title, hits: hits.length, hitItems: hits, query_diagnostics: diagnostics };
@@ -471,6 +472,7 @@ export async function enrichArchivePlanWithZoteroTitleMatches(archivePlan, {
 } = {}) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("invalid_feedback_enrichment_timeout");
   const controller = new AbortController();
+  Object.defineProperty(archivePlan, "enrichmentStatus", { value: "running", writable: true, configurable: true });
   const started = Date.now();
   const progress = { phase: "feedback_item_actions.enrichArchivePlanWithZoteroTitleMatches", status: "running", startedAt: new Date(started).toISOString(), total: archivePlan.length, totalPlanItems: archivePlan.length, localResolved: 0, remoteRequired: 0, uniqueRemoteQueries: 0, completed: 0, remaining: archivePlan.length, matched: 0, noMatch: 0, ambiguous: 0, errors: 0, cacheHits: 0, remoteRequests: 0, enumeration: "unavailable_no_verified_adapter_contract", concurrency: 1 };
   let writes = Promise.resolve();
@@ -497,7 +499,7 @@ export async function enrichArchivePlanWithZoteroTitleMatches(archivePlan, {
     if (key && calls.has(key)) { progress.cacheHits++; return calls.get(key); }
     progress.remoteRequests++;
     if (name === "search_library") queries.add(normalizeLocalTitle(args.title));
-    progress.uniqueRemoteQueries = queries.size;
+    progress.remoteQueriesStarted = queries.size;
     const result = await withZoteroLookupSignal(controller.signal, () => mcpToolCall(name, args, id));
     checkAbort();
     const parsed = parseToolText(result);
@@ -512,11 +514,24 @@ export async function enrichArchivePlanWithZoteroTitleMatches(archivePlan, {
       const read = await readZoteroLibraryIndex(localIndexPath || getDefaultZoteroLibraryIndexPath(process.env.ZOTERO_PROJECT_ROOT || process.cwd()));
       localLibraryIndex = read.usable ? read.index : { live_items: {} };
     }
+    const titleLookup = new Map();
+    for (const item of Object.values(localLibraryIndex.live_items || {})) {
+      const key = normalizeLocalTitle(item.title);
+      if (!titleLookup.has(key)) titleLookup.set(key, []);
+      titleLookup.get(key).push(item);
+    }
+    localLibraryIndex = { ...localLibraryIndex, titleLookup };
+    const remoteTitles = new Set();
     for (const entry of archivePlan) {
       const titleMatch = resolveZoteroTitleMatchFromLocalIndex(entry.feedback, localLibraryIndex);
       const knownKey = localLibraryIndex.live_items?.[normalizeItemKey(entry.record?.itemKey)];
-      if (!knownKey && titleMatch?.status !== "matched" && titleMatch?.status !== "ambiguous") progress.remoteRequired++;
+      if (!knownKey && titleMatch?.status !== "matched" && titleMatch?.status !== "ambiguous") {
+        progress.remoteRequired++;
+        const key = normalizeLocalTitle(entry.feedback?.english_title || entry.feedback?.title || entry.feedback?.translated_title);
+        if (key) remoteTitles.add(key);
+      }
     }
+    progress.uniqueRemoteQueries = remoteTitles.size;
     await publish();
     const aborted = new Promise((_, reject) => {
       abortListener = () => reject(controller.signal.reason);
@@ -526,10 +541,12 @@ export async function enrichArchivePlanWithZoteroTitleMatches(archivePlan, {
     await Promise.race([enrichArchivePlanRows(archivePlan, { mcpToolCall: call, localLibraryIndex, progress, checkAbort, resolvedCache: new Map() }), aborted]);
     checkAbort();
     progress.status = "completed";
+    archivePlan.enrichmentStatus = "completed";
     await publish();
     return archivePlan;
   } catch (error) {
     progress.status = controller.signal.aborted ? controller.signal.reason.status : "failed";
+    archivePlan.enrichmentStatus = progress.status;
     progress.errors++;
     await publish();
     throw Object.assign(error, { code: "FEEDBACK_ENRICHMENT_INCOMPLETE", status: progress.status, progress: { ...progress }, noCorrectionSideEffects: true });

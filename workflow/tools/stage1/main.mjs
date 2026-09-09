@@ -625,6 +625,13 @@ export async function runResearchOsPipeline({
     normalizedFeedbackRows: normalizedFeedbackRows || [],
     skipItemActions: radarProfile,
     noWriteback: radarProfile,
+  }).catch(async (error) => {
+    if (error.code === "FEEDBACK_ENRICHMENT_INCOMPLETE") {
+      report.status = error.status;
+      report.steps.feedback_item_actions = error.feedbackItemActionsReport;
+      await writeAtomicJson(path.join(pipeDir, "run_report.json"), report);
+    }
+    throw error;
   });
   lastKnownPhase = feedbackActionsResult.lastKnownPhase;
   let { writebackReady } = feedbackActionsResult;

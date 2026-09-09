@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { enrichArchivePlanWithZoteroTitleMatches as enrich } from "../tools/maintenance/zotero_feedback_collection_corrections.mjs";
 import { runFeedbackItemActionsStep } from "../tools/stage1/feedback_item_actions_step.mjs";
+import { buildCorrectionPlan } from "../tools/maintenance/zotero_feedback_collection_corrections.mjs";
 
 const result = (value) => ({ content: [{ text: JSON.stringify(value) }] });
 const row = (title) => ({ status: "needs_review", reason: "no_matching_literature_record", feedback: { english_title: title, feedback: "upgrade" }, record: {} });
@@ -53,6 +54,7 @@ test("deadline stops scheduling, reports heartbeat before return, retains every 
   assert.equal(calls, 1); assert.equal(rows.length, 1070);
   assert.ok(snapshots.filter((p) => p.status === "running").length >= 3);
   assert.equal(snapshots.at(-1).status, "timed_out");
+  assert.throws(() => buildCorrectionPlan({ archivePlan: rows }), { status: "timed_out" });
   await new Promise((r) => setTimeout(r, 170));
   assert.equal(calls, 1);
 });

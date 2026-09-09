@@ -98,7 +98,7 @@ async function defaultRunStage(stage) {
     } catch (markErr) {
       stderr += "\n[orchestrator] markFailure also threw: " + String(markErr?.message || markErr);
     }
-    return { exitCode: stage.name === "stage3_translation" && /^partial_failed:/i.test(message) ? 2 : 1, stdout, stderr };
+    return { exitCode: stage.name === "stage3_translation" && /^partial_failed:/i.test(message) ? 2 : 1, stdout, stderr, data: { failureStatus: err?.status || "failed", last_known_phase: err?.progress?.phase || stage.name } };
   } finally {
     process.stdout.write = originalWrite;
     process.stderr.write = originalErrorWrite;
@@ -455,17 +455,18 @@ export async function runZoteroLiteratureFilter({
     return await completeRunGroup(report);
   }
   if (stages.at(-1).exitCode !== 0) {
+    const failure = stages.at(-1).data;
     stages.push(skippedStage(stageDefs.zoteroBackendReady.name, stageDefs.zoteroBackendReady.scriptPath, "stage1_failed", clock));
     stages.push(skippedStage(stageDefs.stage2.name, stageDefs.stage2.scriptPath, "stage1_failed", clock));
     stages.push(skippedStage(stageDefs.stage3.name, stageDefs.stage3.scriptPath, "stage1_failed", clock));
     stages.push(skippedStage(stageDefs.stage4.name, stageDefs.stage4.scriptPath, "stage1_failed", clock));
     const report = buildOrchestratorReport({
-      status: "failed_stage1",
+      status: ["timed_out", "interrupted"].includes(failure?.failureStatus) ? failure.failureStatus : "failed_stage1",
       runContext,
       finishedAt: iso(clock()),
       stages,
       artifacts,
-      extra: { startup, interval_gate_diagnostics: intervalGateDiagnostics, runtimeSafety },
+      extra: { startup, interval_gate_diagnostics: intervalGateDiagnostics, runtimeSafety, last_known_phase: failure?.last_known_phase || "stage1" },
     });
     await writeReport(report);
     return await completeRunGroup(report);

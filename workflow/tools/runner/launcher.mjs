@@ -11,7 +11,7 @@ export function buildLauncherInvocation({ mode, runnerPath, argv = process.argv.
   return {
     command: nodePath,
     args: [runnerPath, "--mode", mode, "--fixed-mode", ...argv],
-    options: { shell: false, stdio: "inherit" },
+    options: { shell: false, stdio: ["inherit", "inherit", "inherit", "ipc"], windowsHide: true },
   };
 }
 export function runFixedModeLauncher(options = {}, dependencies = {}) {
@@ -19,7 +19,11 @@ export function runFixedModeLauncher(options = {}, dependencies = {}) {
   const spawnImpl = dependencies.spawnImpl || spawn;
   return new Promise((resolve, reject) => {
     const child = spawnImpl(invocation.command, invocation.args, invocation.options);
-    child.once("error", reject);
-    child.once("close", (code, signal) => resolve(signal ? EXIT_CODES.canceled : Number(code ?? EXIT_CODES.pipeline)));
+    const processApi = dependencies.processApi || process;
+    const interrupt = () => { if (child.connected) { try { child.send({ type: "paperecho_cancel", status: "interrupted" }, () => {}); } catch {} } };
+    const cleanup = () => { processApi.removeListener("SIGINT", interrupt); processApi.removeListener("SIGTERM", interrupt); };
+    processApi.on("SIGINT", interrupt); processApi.on("SIGTERM", interrupt);
+    child.once("error", (error) => { cleanup(); reject(error); });
+    child.once("close", (code, signal) => { cleanup(); resolve(signal ? EXIT_CODES.canceled : Number(code ?? EXIT_CODES.pipeline)); });
   });
 }

@@ -15,6 +15,11 @@ test("normal child exits clear watchdog and signal listeners", async () => {
   assert.equal(processApi.listenerCount("SIGINT"), 0);
 });
 
+test("live fixture honors watchdog IPC and exits without a second workflow", async () => {
+  const result = await runProduction({ entry: "-e", args: ["process.on('message', m => { if(m.type === 'paperecho_cancel') process.exit(9); }); setInterval(() => {}, 1000)"], childEnv: process.env }, { stdout: silent, stderr: silent, watchdogTimeoutMs: 500, graceMs: 1000 });
+  assert.equal(result.status, "timed_out"); assert.equal(result.childExitConfirmed, true); assert.equal(result.code, 9);
+});
+
 test("watchdog requests cooperative stop then force only its child, nonzero timed_out", async () => {
   const processApi = new EventEmitter(); let child, forced = 0;
   const result = await runProduction({ entry: "fixture", args: [], childEnv: {} }, {

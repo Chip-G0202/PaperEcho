@@ -107,6 +107,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     return EXIT_CODES.pipeline;
   }
   const productionReport = extractLastJsonObject(processResult.stdout);
+  if (["timed_out", "interrupted"].includes(productionReport?.status)) processResult.status = productionReport.status;
   if (["timed_out", "interrupted"].includes(processResult.status)) {
     const result = { type: "result", ok: false, status: processResult.status, runId: plan.runId, childExitConfirmed: processResult.childExitConfirmed, lastKnownPhase: productionReport?.last_known_phase || productionReport?.status || "unknown", sideEffects: "consult_current_run_ledger", exitCode: processResult.status === "interrupted" ? EXIT_CODES.canceled : EXIT_CODES.pipeline };
     if (plan.runRoot && plan.runId) await writeAtomicJson(path.join(plan.runRoot, plan.runId, "runner_report.json"), result);
