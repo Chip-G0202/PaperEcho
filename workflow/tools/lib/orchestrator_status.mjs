@@ -17,6 +17,23 @@
 //   exit 0 → completed | completed_stage1_only | degraded_due_to_zotero_backend_unavailable | skipped
 //   exit 1 → everything else
 
+// Workflow outcomes outrank operation summaries, including vacuous empty-ledger success.
+export function terminalWorkflowStatus(...values) {
+  const statuses = values.filter(Boolean).map(String);
+  for (const status of ["interrupted", "timed_out"]) if (statuses.includes(status)) return status;
+  if (statuses.some((value) => /failed|crash/.test(value))) return "failed";
+  if (statuses.includes("blocked")) return "blocked";
+  if (statuses.includes("incomplete")) return "incomplete";
+  if (statuses.some((value) => ["completed", "completed_with_warnings", "completed_stage1_only", "degraded_due_to_zotero_backend_unavailable"].includes(value))) return "completed";
+  return statuses.includes("skipped") ? "skipped" : "incomplete";
+}
+
+export function workflowLedgerStatus(workflowStatus, operations = []) {
+  const status = terminalWorkflowStatus(workflowStatus);
+  if (status !== "completed") return status;
+  return operations.length > 0 && operations.every((operation) => operation.status === "verified") ? "completed" : "incomplete";
+}
+
 export const WORKFLOW_STATUS = Object.freeze({
   COMPLETED: "completed",
   COMPLETED_WITH_WARNINGS: "completed_with_warnings",

@@ -180,8 +180,12 @@ export class OperationLedgerStore {
     });
   }
 
-  async setRunStatus(status) {
-    await this.mutate((next) => { next.status = String(status); });
+  async setRunStatus(status, workflowStatus) {
+    await this.mutate((next) => {
+      next.status = String(status);
+      if (workflowStatus !== undefined) next.workflowStatus = String(workflowStatus);
+      next.operationCount = next.operations.length;
+    });
   }
 
   async planOperation({ type, identity = "run", target, input, inputHash = "", inputVersion = null, scope = "identity", dependsOn = [], retryable = true, intent = null }) {

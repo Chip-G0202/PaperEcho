@@ -1,3 +1,4 @@
+import { terminalWorkflowStatus } from "./orchestrator_status.mjs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -139,7 +140,7 @@ export async function finishRunGroup({ manifestPath, status, finishedAt, pipelin
   const next = {
     ...current,
     ...(pipelineMode ? { pipelineMode: String(pipelineMode) } : {}),
-    status: ["completed", "failed"].includes(status) ? status : "failed",
+    status: terminalWorkflowStatus(current.status === "running" ? null : current.status, status),
     finishedAt: String(finishedAt || new Date().toISOString()),
     artifacts: merged,
     references: {

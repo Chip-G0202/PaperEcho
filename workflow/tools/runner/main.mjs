@@ -2,6 +2,9 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { watchProductionChild } from "./child_watchdog.mjs";
 import { writeAtomicJson } from "../lib/atomic_json.mjs";
+import { terminalWorkflowStatus, workflowLedgerStatus } from "../lib/orchestrator_status.mjs";
+import { finishRunGroup } from "../lib/runtime_housekeeping.mjs";
+import { OperationLedgerStore } from "../recovery/operation_ledger.mjs";
 import { pathToFileURL } from "node:url";
 
 import "../lib/env_file_bootstrap.mjs";
@@ -107,10 +110,21 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     return EXIT_CODES.pipeline;
   }
   const productionReport = extractLastJsonObject(processResult.stdout);
-  if (["timed_out", "interrupted"].includes(productionReport?.status)) processResult.status = productionReport.status;
+  const terminal = terminalWorkflowStatus(processResult.status, productionReport?.status, processResult.code !== 0 ? "failed" : null);
+  if (["timed_out", "interrupted"].includes(terminal)) processResult.status = terminal;
   if (["timed_out", "interrupted"].includes(processResult.status)) {
     const result = { type: "result", ok: false, status: processResult.status, runId: plan.runId, childExitConfirmed: processResult.childExitConfirmed, lastKnownPhase: productionReport?.last_known_phase || productionReport?.status || "unknown", sideEffects: "consult_current_run_ledger", exitCode: processResult.status === "interrupted" ? EXIT_CODES.canceled : EXIT_CODES.pipeline };
-    if (plan.runRoot && plan.runId) await writeAtomicJson(path.join(plan.runRoot, plan.runId, "runner_report.json"), result);
+    if (plan.runRoot && plan.runId) {
+      // Never race a live child. A confirmed exit lets the parent persist watchdog authority.
+      if (processResult.childExitConfirmed === true) {
+        await finishRunGroup({ manifestPath: path.join(plan.runRoot, plan.runId, "run_group.json"), status: terminal });
+        try {
+          const store = await OperationLedgerStore.load({ runRoot: plan.runRoot, runId: plan.runId });
+          await store.setRunStatus(workflowLedgerStatus(terminal, store.ledger.operations), terminal);
+        } catch (error) { if (error?.code !== "ENOENT") result.ledgerStatusError = String(error?.message || error).slice(0, 160); }
+      }
+      await writeAtomicJson(path.join(plan.runRoot, plan.runId, "runner_report.json"), result);
+    }
     stdout.write(`${JSON.stringify(result)}\n`);
     return result.exitCode;
   }

@@ -21,7 +21,7 @@ import { markBackfillFailure, runZoteroTranslationBackfill } from "../stage3/mai
 import { runResearchOsPipeline } from "../stage1/main.mjs";
 import { buildRuntimeConfig, buildRuntimeSafetyConfig } from "../lib/runtime_config.mjs";
 import { filterDesktopReviewSourceByWritebackSummary } from "../lib/pipeline_stage_support.mjs";
-import { buildRunContext, buildOrchestratorReport, deriveWorkflowStatus, workflowStatusToExitCode } from "../lib/orchestrator_status.mjs";
+import { buildRunContext, buildOrchestratorReport, deriveWorkflowStatus, workflowStatusToExitCode, terminalWorkflowStatus, workflowLedgerStatus } from "../lib/orchestrator_status.mjs";
 import { ensureWorkflowStartupReady } from "../lib/workflow_startup_ready.mjs";
 import { writeWorkflowPerformanceSummary } from "./performance_summary.mjs";
 import { buildExportManifest, buildRunSummary, pipelineModeFromBackend } from "../lib/run_summary.mjs";
@@ -272,11 +272,12 @@ export async function runZoteroLiteratureFilter({
     housekeeping = { skipped: true, reason: "housekeeping_start_failed", warnings: [String(error?.message || error)] };
   }
   const completeRunGroup = async (report) => {
+    const terminalStatus = terminalWorkflowStatus(report?.status);
     if (report && typeof report === "object") report.notification_health_observations = notificationHealthObservations;
     if (!ephemeralCleanupDone) {
       ephemeralCleanupDone = true;
       try {
-        const immediate = await ephemeralRegistry.cleanup({ success: !String(report?.status || "").includes("failed") });
+        const immediate = await ephemeralRegistry.cleanup({ success: ["completed", "skipped"].includes(terminalStatus) });
         Object.assign(housekeeping, {
           immediateDeletedFiles: immediate.immediateDeletedFiles,
           immediateDeletedBytes: immediate.immediateDeletedBytes,
@@ -297,7 +298,7 @@ export async function runZoteroLiteratureFilter({
       try {
         await finishRunGroup({
           manifestPath: runGroupManifestPath,
-          status: String(report?.status || "").includes("failed") ? "failed" : "completed",
+          status: terminalStatus,
           finishedAt: report?.finishedAt || iso(clock()),
           pipelineMode: runGroupPipelineMode,
           monthlyAggregationPending: monthlyAggregationApplicable && !monthlyAggregationCompleted,
@@ -308,9 +309,7 @@ export async function runZoteroLiteratureFilter({
       }
     }
     if (recoveryCoordinator) {
-      const allVerified = recoveryCoordinator.store.ledger.operations.every((operation) => operation.status === "verified");
-      const reportStatus = String(report?.status || "");
-      await recoveryCoordinator.store.setRunStatus(reportStatus === "skipped" ? "skipped" : reportStatus.includes("failed") ? "failed" : allVerified ? "completed" : "incomplete");
+      await recoveryCoordinator.store.setRunStatus(workflowLedgerStatus(terminalStatus, recoveryCoordinator.store.ledger.operations), terminalStatus);
     }
     return report;
   };

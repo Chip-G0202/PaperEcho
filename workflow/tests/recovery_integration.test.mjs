@@ -132,13 +132,13 @@ test("file input hash mismatch fails before reconciliation", async (t) => {
   await assert.rejects(() => resumeRunFromLedger({ runRoot, runId, mode: "web", profile: "standard", configHash: HASH, inputHash: "e".repeat(64), buildReconcilers: async () => ({}) }), /INPUT_HASH_MISMATCH/);
 });
 
-test("successful resume completes the exact persisted run group and releases its lease", async (t) => {
+test("empty ledger resume cannot complete a failed workflow and releases its lease", async (t) => {
   const { runRoot, runId, store } = await context(t);
   const manifestPath = path.join(runRoot, runId, "run_group.json");
   await fs.writeFile(manifestPath, JSON.stringify({ schemaVersion: 1, runId, pipelineMode: "web", status: "failed", artifacts: [] }));
   await store.setRunStatus("failed");
   const result = await resumeRunFromLedger({ runRoot, runId, mode: "web", profile: "standard", configHash: HASH, buildReconcilers: async () => ({}) });
-  assert.equal(result.status, "completed");
-  assert.equal(JSON.parse(await fs.readFile(manifestPath, "utf8")).status, "completed");
+  assert.equal(result.status, "incomplete");
+  assert.equal(JSON.parse(await fs.readFile(manifestPath, "utf8")).status, "failed");
   await assert.rejects(fs.stat(path.join(runRoot, runId, "resume.lease.json")), { code: "ENOENT" });
 });

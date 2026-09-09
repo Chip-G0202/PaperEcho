@@ -1,3 +1,4 @@
+import { terminalWorkflowStatus } from "../lib/orchestrator_status.mjs";
 import fs from "node:fs/promises";
 
 import { hashFile } from "./operation_ledger.mjs";
@@ -155,7 +156,9 @@ export async function reconcileOperationLedger({ store, reconcilers = {}, contex
     }
   }
   const statuses = store.ledger.operations.map((operation) => operation.status);
-  const status = statuses.every((value) => value === "verified") ? "completed" : statuses.includes("conflict") ? "completed_with_conflicts" : "incomplete";
+  const operationsStatus = statuses.length > 0 && statuses.every((value) => value === "verified") ? "completed" : statuses.includes("conflict") ? "completed_with_conflicts" : "incomplete";
+  const terminal = store.ledger.workflowStatus || (["timed_out", "interrupted"].includes(store.ledger.status) ? store.ledger.status : null);
+  const status = terminal && terminalWorkflowStatus(terminal) !== "completed" ? terminalWorkflowStatus(terminal) : operationsStatus;
   await store.setRunStatus(status);
   return { status, outcomes, globalBlocked };
 }
