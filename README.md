@@ -30,35 +30,12 @@ PaperEcho 不替代研究者作出判断。它负责整理不断传来的文献�
 
 ### V2.2
 
-**PaperEcho V2.2** 聚焦三条路径的可验证性能改进，并新增安全更新能力。
+**PaperEcho V2.2** 让三条使用路径更轻快，也让日常更新更省心。
 
-- **Web 路径显著减少 Zotero 请求。** 固定 cold benchmark 的总请求从 511 降至 263，其中读取从 489 降至 248、写入从 22 降至 15；候选数量、业务结果和副作用计划保持一致。
-- **Local 热点更快。** Local upsert 的 cold/warm hotspot 分别改善约 39.5% 和 65.8%。这是局部热点收益，不代表整条 Local 路径获得同等比例提升；Desktop 没有发现值得承担风险的稳定热点，因此没有强行修改。
-- **外部调用具备受控自适应并发。** Source HTTP、LLM 和 Zotero Web API 分别使用独立的有界控制器，遇到 429、`Retry-After`、`Backoff`、连续失败或延迟恶化时降低并发，恢复时缓慢增加且不超过原有安全上限。
-- **新增安全更新 Skill。** `paperecho-update` 只从官方 `Chip-G0202/PaperEcho` 选择最新 stable tag，不跟随 `main`。check 默认不写入，apply 必须显式执行；用户配置、secret、运行状态和输出受保护，managed 本地修改或活动任务会阻塞升级，目标版本先在 staging 验证，失败时执行并验证 rollback。
-
-V2.2 不改变检索、分级、Zotero 写回、恢复、通知和报告语义，也不包含每日 Radar、Weekly queue merge、撤稿/勘误监测、PDF 下载或全文分析。
-
-### V2.1
-
-**PaperEcho V2.1** 聚焦检索、写入和通知过程的可靠性，让长期自动运行更不容易漏文献、重复操作或覆盖人工修改。
-
-- **文献获取更完整。** RSS 2.0/Atom 改用正式 XML 解析并支持 ETag、Last-Modified 和 304；PubMed/PMC 会完整翻页、分批获取详情，并用 EDAT/CRDT 重叠窗口降低延迟收录造成的遗漏；OpenAlex 会沿 cursor 取完结果，并为免费接口保留日期重叠。
-- **检索进度更安全。** 每个来源和查询分别保存进度；只有完整分页和本次检索记录安全落盘后才推进水位，部分失败不会把未完成的结果误记为成功。
-- **失败后可以接着运行。** 通过原 launcher 使用 `--resume <runId>` 可从持久化任务记录恢复。PaperEcho 会先核对 Zotero、索引和已生成文件，已经完成且仍有效的操作不会重复执行；遇到人工修改或版本冲突时不会直接覆盖。
-- **通知更可信。** Stage1–4 中途失败也可独立通知；无法确认邮件是否送达时会保守记录，不会假装成功或默认重复发送。来源或 LLM 连续两次异常才告警，恢复后只通知一次。
-- **老配置继续可用。** schema v1 保持原有行为；schema v2 提供新的可靠性配置，新增通知默认关闭，Radar 不会自动启用。
-
-V2.1 不包含每日 Radar、Weekly queue merge、撤稿/勘误监测或 PDF/全文功能；Desktop/Web/Local 性能优化见上方 V2.2。
-
-### V2.0
-
-**PaperEcho V2.0** 面向不同的研究环境，扩展了运行方式，也补齐了长期自动运行所需的能力。
-
-- **从单一 Zotero Desktop 扩展为三条路径。** 原有的 Desktop 工作方式继续保留；新增的 Zotero Web API 路径无需保持桌面客户端运行；Standalone Local 则完全脱离 Zotero，通过本地 JSON/JSONL 和报告文件完成处理与交付。
-- **Desktop 从 MCP 迁移至 CLI。** Desktop 减少了中间通信，Web 直接使用 Zotero Web API，Local 在本地独立运行。三条路径共用核心工作流，不再依赖 MCP。
-- **新增邮件通知。** 工作流完成后可按需发送运行结果和报告附件，周期任务结束后不必再手动查看。
-- **加入定期清理，并优化整体性能。** PaperEcho 会清理到期的临时运行产物，同时通过批量读写、减少重复调用和缩短执行链路提升效率。
+- **Web 路径更高效。** PaperEcho 会减少与 Zotero 之间不必要的重复通信。处理较多文献时等待更少，原有的筛选结果和写入规则保持不变。
+- **Local 路径更流畅。** 本地导入、去重和重复运行时的处理效率得到改善，适合长期积累文献的项目。Desktop 路径继续以稳定为先，不为追求数字改变现有体验。
+- **面对服务波动更从容。** 当文献来源、AI 服务或 Zotero 暂时繁忙时，PaperEcho 会自动放慢请求；服务恢复后再逐步提速，减少频繁失败和手动重试。
+- **更新版本更安心。** 新增 `paperecho-update`，可以检查并安装官方稳定版本。更新前会保护本地配置、运行记录和已有报告；发现文件被修改或任务仍在运行时会主动停止，更新失败也会尽量恢复原来的可用版本。
 
 ## 核心特色
 
@@ -274,35 +251,12 @@ Daily Radar and literature status monitoring can be enabled as needed. PaperEcho
 
 ### V2.2
 
-**PaperEcho V2.2** focuses on measurable performance improvements across the three paths and adds a safe update mechanism.
+**PaperEcho V2.2** makes all three ways of using PaperEcho feel lighter and makes future updates safer.
 
-- **Fewer Zotero requests on Web:** the fixed cold benchmark drops from 511 total requests to 263, with reads reduced from 489 to 248 and writes from 22 to 15, while preserving candidate volume, business output, and side-effect plans.
-- **A faster Local hotspot:** Local upsert improves by about 39.5% cold and 65.8% warm. These are hotspot gains rather than equivalent end-to-end speedups. Desktop showed no stable, low-risk hotspot worth forcing into this release.
-- **Bounded adaptive concurrency:** Source HTTP, LLM, and Zotero Web API use independent controllers that reduce concurrency on 429, `Retry-After`, `Backoff`, repeated failures, or sustained latency degradation, then recover gradually without exceeding existing safety caps.
-- **Safe official updates:** `paperecho-update` selects only the latest stable tag from `Chip-G0202/PaperEcho` and never follows `main`. Checks are read-only by default; apply is explicit. User configuration, secrets, runtime state, and outputs are protected, while managed-file drift or an active run blocks deployment. Targets are validated in staging and critical failures trigger verified rollback.
-
-V2.2 preserves retrieval, grading, Zotero writeback, resume, notification, and reporting semantics. It does not add daily Radar, weekly queue merging, retraction/correction monitoring, PDF downloads, or full-text analysis.
-
-### V2.1
-
-**PaperEcho V2.1** focuses on reliable retrieval, recovery, and notification for long-running workflows.
-
-- **More complete retrieval:** RSS 2.0/Atom now uses a proper XML parser with ETag, Last-Modified, and 304 support. PubMed/PMC exhausts result pages, fetches details in batches, and uses overlapping EDAT/CRDT windows. OpenAlex follows cursor pagination and retains an overlapping publication-date window for the free API path.
-- **Safer progress tracking:** source progress is isolated by source and query, and advances only after complete pagination and durable retrieval artifacts. Partial failures do not falsely advance the boundary.
-- **Resume after failure:** run the original launcher with `--resume <runId>`. PaperEcho verifies existing Zotero changes, indexes, and generated files before deciding what still needs to run, and reports conflicts instead of overwriting manual edits.
-- **More trustworthy alerts:** Stage1–4 failures can notify independently of Stage5. Ambiguous mail outcomes are not reported as successful or automatically resent. Source or LLM degradation alerts only after two consecutive observations, with one recovery notice.
-- **Backward-compatible configuration:** schema v1 keeps its existing behavior; schema v2 exposes the reliability settings, while new notifications and Radar remain off by default.
-
-V2.1 does not include daily Radar, weekly queue merging, retraction/correction monitoring, or PDF/full-text features. The Desktop/Web/Local performance work is described above under V2.2.
-
-### V2.0
-
-**PaperEcho V2.0** adds new ways to run the workflow and the maintenance features needed for long-term automation.
-
-- **From one Zotero Desktop path to three paths:** the original Desktop workflow remains available, joined by a Zotero Web API path that does not require the desktop client to stay open and a Standalone Local path that works entirely through local JSON/JSONL files and reports without Zotero.
-- **A more direct execution model:** Desktop moves from MCP to CLI, Web connects directly through the Zotero Web API, and Local runs independently on the filesystem. All three share the same core workflow without depending on MCP.
-- **Email notification:** completed runs can send result notifications and report attachments when requested.
-- **Scheduled cleanup and performance improvements:** expired temporary run artifacts are cleaned automatically, while batch operations, fewer repeated calls, and shorter execution paths improve overall efficiency.
+- **A more efficient Web path:** PaperEcho avoids unnecessary back-and-forth with Zotero, reducing wait time when handling larger batches without changing screening or writeback behavior.
+- **A smoother Local path:** local imports, deduplication, and repeat runs now handle growing libraries more efficiently. Desktop continues to prioritize stability and keeps its familiar workflow.
+- **More graceful recovery from busy services:** when a literature source, AI service, or Zotero is temporarily overloaded, PaperEcho slows down automatically and picks up speed gradually when the service recovers.
+- **Safer product updates:** the new `paperecho-update` skill checks and installs official stable releases while protecting local configuration, run history, and existing reports. It stops when local changes or an active task make updating unsafe, and can restore the previous working version if an update fails.
 
 ## Quick Start
 
