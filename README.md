@@ -12,21 +12,21 @@
 
 PaperEcho 是一套面向长期科研工作的文献追踪与整理工具。它持续获取新文献，完成去重、筛选、分级和整理，再将结果写入 Zotero 或生成本地报告，让值得关注的研究不被信息流淹没。
 
-你可以选择 Zotero Desktop、Zotero Web API，或者完全脱离 Zotero 的 Standalone Local 路径；也可以根据研究方向配置 OpenAlex、PubMed/PMC、RSS 或本地数据。
+你可以选择 Zotero Desktop、Zotero Web API，或者完全脱离 Zotero 的 Standalone Local 路径；也可以根据研究方向组合 OpenAlex、Semantic Scholar、PubMed、Europe PMC、Crossref、RSS 或本地数据。
 
 PaperEcho 不替代研究者作出判断。它负责整理不断传来的文献回声，把更多时间留给阅读、思考，以及下一步研究。
 
 ## 更新内容
 
-**PaperEcho V2.3** 新增 Daily Radar、Weekly 接管、文献完整性监测与多源检索召回增强，同时沿用同一套身份、恢复和安全更新边界。
+**PaperEcho V2.3** 让文献追踪从“每周整理一次”，变成更持续、更可靠的研究工作流：平时发现值得关注的新线索，每周统一整理入库，同时关注已收藏文献的撤稿、勘误等重要变化。
 
-- **Daily Radar 每天发现重要变化。** 默认按 Asia/Shanghai 每天 15:00 决策，周末和节假日照常；Weekly 到期日由 Weekly 接管。Radar 使用独立 watermark，只发现、判断和提醒，不写 Zotero，也不生成 XLSX。urgent A 依赖可靠 grading；LLM 不可用时进入独立 review backlog，不使用 rule-only 结果告警。
-- **Weekly 安全接管 Radar 队列。** Weekly 保持自己的 retrieval，并按 canonical identity 合并 urgent queue、review backlog 与本轮候选。classification fingerprint 变化或缺失会重新 grading；claim 不等于 consume，只有 Zotero 写入及 operation ledger 验证后才消费队列。恢复执行不会重复创建，周报只使用 verified business writes。
-- **监测撤稿、更正和关注声明。** 监测范围仅包括 shared index 中仍存在于 Zotero 且有 DOI 或 PMID 的文献；证据只来自 Crossref REST 和 PubMed structured relations，不按标题或自由文本猜测。撤稿先验证加入 `文献池/待删除`，再移除其他 PaperEcho-managed collection ID；用户集合、标签、item 和附件保留。更正与关注声明只追加状态标签，完整性变化仅进入 Weekly summary。
-- **多源检索强化召回。** 查询先归一化为统一 Search Intent，再按来源编译：通用主题以 OpenAlex 为主、Semantic Scholar 为补充，低召回时使用 Crossref 做书目信息救援；生物医学主题以 PubMed 为主，Europe PMC 仅作已验证有独立召回价值的补充。Unpaywall 不承担文献发现。单一来源返回 0 不再直接解释为“没有文献”，系统会记录来源级健康、过度约束、救援与多源零结果。
-- **安全升级边界延续到 V2.3。** `paperecho-update` 可从 V2.2 安全升级；Radar 与 Integrity 运行状态属于 persistent/protected，用户 `.env`、配置、state、ledger 和 receipt 不会被发布文件覆盖。
+- **每日 Radar，更早发现值得关注的新研究。** 每天轻量扫描，筛出值得及时关注的新文献；正式整理和 Zotero 入库仍由周度流程统一完成，避免日常提醒打乱已有文献库。
+- **每周整理更完整，也更可靠。** 每日发现、周度检索和历史待处理结果在正式入库前统一去重、筛选和整理。长流程中断后保留已确认进度，恢复时核对实际状态，尽量避免重复写入或重复整理。
+- **持续关注撤稿、勘误和重要状态变化。** 对已经进入文献库的研究，继续检查公开的结构化更新信息；发现重要变化时保守标记和整理，保留用户已有文献和附件，不直接删除。
+- **多源检索，降低单一数据库漏召回的影响。** 根据研究领域采用合适的检索方式，组合 OpenAlex、Semantic Scholar、PubMed、Europe PMC、Crossref 等来源补充结果并统一去重。复杂检索不会仅因某个来源返回零条结果，就被当成“没有文献”。
+- **长时间任务更可观察、更可控。** Desktop 处理大量历史反馈时持续显示进度，为耗时查询设置安全边界；超时或中断会明确报告未完成并停止后续操作，保留已确认结果，避免把未完成任务误报为成功。
 
-本版本已通过本地定向测试、no-write/no-XLSX、crash/resume、updater fixture、Crossref/PubMed 生产接口只读验收，以及 45 组公开脏查询和 120 组确定性变体的多源召回门禁。真实 Zotero 写入、真实 SMTP、真实 LLM Radar、长期 OS scheduler 和长期 rate-limit 环境尚未验收；公开无 key 来源在持续压力下仍可能出现 429 或瞬时 5xx。V2.3 仍不包含 PDF 下载、全文阅读或内容总结，也不承诺检索绝对无遗漏。
+每日 Radar 和文献状态监测可按需启用。PaperEcho 不包含 PDF 下载、全文阅读或内容总结。
 
 ### V2.2
 
@@ -67,12 +67,14 @@ V2.1 不包含每日 Radar、Weekly queue merge、撤稿/勘误监测或 PDF/全
 | Zotero Desktop | 继续使用本机 Zotero 文献库，通过 CLI 完成文献写入和整理。 |
 | Zotero Web API | 连接 Zotero 云端文献库，无需保持桌面客户端运行。 |
 | Standalone Local | 完全脱离 Zotero，通过本地文件完成文献处理和报告交付。 |
-| 多学科文献发现 | 根据研究领域组合 OpenAlex、PubMed/PMC、RSS 或本地文献数据，并完整处理分页和重叠查询边界。 |
+| 每日 Radar | 每天轻量发现新文献和重要研究线索；正式 Zotero 入库仍由周度流程统一完成。 |
+| 多源文献发现 | 根据研究领域组合 OpenAlex、Semantic Scholar、PubMed、Europe PMC、Crossref、RSS 或本地数据，通过多源补充和统一去重降低单一来源漏召回的影响。 |
 | 自动去重与分级 | 识别重复文献，完成 A/B/C/D 分级，把需要判断的内容留给研究者。 |
 | Zotero 写回 | Desktop 和 Web 路径支持集合整理、批量写入和标题翻译回填。 |
 | 本地独立交付 | Local 路径使用 JSON/JSONL 输入，在本地完成处理并生成报告。 |
 | 反馈持续学习 | 将文章反馈和长期筛选标准用于后续筛选，减少重复调整。 |
-| 任务恢复 | 中途失败后可按 runId 继续，并在恢复前核对已完成操作和人工修改。 |
+| 文献状态监测 | 持续关注已入库文献的撤稿、勘误等公开状态变化，并以保守方式提醒和整理。 |
+| 任务恢复 | 长流程中断或超时后保留已确认进度，恢复时核对实际状态，减少重复写入和误操作。 |
 | 报告与邮件 | 生成周报和到期月报；既可发送完成通知，也可在 Stage1–4 失败时按配置告警。 |
 | 自动维护 | 定期清理到期运行产物，同时保护长期配置、反馈和正式报告。 |
 
@@ -166,7 +168,7 @@ Copy-Item config/paperecho.config.example.json config/paperecho.config.json
 Copy-Item .env.example .env
 ```
 
-在 `config/paperecho.config.json` 中选择 Desktop、Web 或 Local，并按研究领域配置 OpenAlex、PubMed/PMC、RSS 或本地输入。API key、SMTP 密码等 secret 只写入本机 `.env`。完整字段见 [`docs/configuration.md`](docs/configuration.md)。
+在 `config/paperecho.config.json` 中选择 Desktop、Web 或 Local，并按研究领域选择合适的文献源或本地输入。API key、SMTP 密码等 secret 只写入本机 `.env`。完整字段见 [`docs/configuration.md`](docs/configuration.md)。
 
 ### 4. 检查并运行
 
@@ -254,21 +256,21 @@ New papers arrive constantly. The challenge is not simply collecting more of the
 
 PaperEcho is a literature tracking and organization tool for long-term research. It continuously collects new literature, removes duplicates, screens and grades results, then writes them to Zotero or produces local reports so relevant work is less likely to disappear into the stream.
 
-Choose Zotero Desktop, Zotero Web API, or the fully independent Standalone Local path. Sources can include OpenAlex, PubMed/PMC, RSS, or local data, depending on the research field.
+Choose Zotero Desktop, Zotero Web API, or the fully independent Standalone Local path. Depending on your field, combine OpenAlex, Semantic Scholar, PubMed, Europe PMC, Crossref, RSS, or local data.
 
 PaperEcho does not make research judgments for you. It handles the recurring organization work, leaving more time for reading, thinking, and deciding what to study next.
 
 ## Update
 
-**PaperEcho V2.3** adds a daily Radar, verified Weekly takeover, structured literature-integrity monitoring, and multi-source retrieval recall hardening while preserving the existing identity, recovery, and update boundaries.
+**PaperEcho V2.3** makes literature tracking a more continuous workflow: lightweight daily discovery, reliable weekly organization, ongoing status monitoring for saved papers, and broader multi-source discovery.
 
-- **Daily Radar:** runs on the 15:00 Asia/Shanghai decision slot, including weekends and holidays, while Weekly takes over on due days. Radar has an isolated watermark and performs discovery, grading, and notification only—no Zotero or XLSX writes. Unavailable LLM grading goes to a separate review backlog rather than producing a rule-only urgent alert.
-- **Verified Weekly takeover:** Weekly keeps its own retrieval and merges Radar queue/backlog entries by canonical identity. Changed or missing classification fingerprints trigger regrading. A claim is consumed only after verified Zotero and ledger evidence; resume does not duplicate creation, and reports use verified business writes.
-- **Structured integrity monitoring:** only active Zotero records with a DOI or PMID are checked through Crossref REST and PubMed structured relations. Retractions are verified into `文献池/待删除` before other PaperEcho-managed memberships are removed. User collections, tags, items, and attachments remain intact; corrections and expressions of concern use additive tags.
-- **Hardened multi-source retrieval:** queries are normalized into one Search Intent and compiled separately for each source. OpenAlex is the general-domain primary, Semantic Scholar supplements it, and Crossref provides bounded bibliographic rescue for low recall. PubMed is the biomedical primary; Europe PMC supplements it only where independent recall has been demonstrated. Unpaywall is not used for discovery. A zero result from one source is treated as a source-level signal, not proof that no literature exists, and the run records source health, overconstraint, rescue, and confirmed multi-source zero cases.
-- **Safe V2.2 → V2.3 updates:** Radar and integrity runtime state remain persistent/protected alongside user configuration, state, ledgers, and receipts.
+- **Daily Radar for timely discoveries.** Lightweight scans surface research worth noticing between weekly runs. Formal organization and Zotero imports remain part of the weekly workflow, so daily alerts do not disrupt your library.
+- **More reliable weekly organization and recovery.** Daily discoveries, weekly search results, and pending items are deduplicated and screened together before import. Interrupted work retains confirmed progress; recovery checks the actual state to reduce duplicate imports and repeated work.
+- **Status monitoring for saved literature.** PaperEcho checks public structured updates for retractions, corrections, and other important changes. It flags and organizes affected papers conservatively while preserving your existing items and attachments.
+- **Stronger multi-source discovery.** Search methods are tailored to the field and source, combining appropriate results from OpenAlex, Semantic Scholar, PubMed, Europe PMC, Crossref, and RSS. Results are deduplicated across sources, and a zero result from one database is not treated as proof that no relevant literature exists.
+- **Better visibility during long Desktop tasks.** Large historical-feedback jobs show progress and place time limits on slow lookups. A timeout or interruption is clearly reported as unfinished work and stops subsequent operations, while retaining confirmed results.
 
-Local targeted tests, no-write/no-XLSX behavior, crash/resume, updater fixtures, read-only production Crossref/PubMed parsing, 45 public dirty-query families, and 120 deterministic query mutations have been validated. Real Zotero writes, SMTP, LLM Radar, long-running OS scheduling, and sustained real-world rate limits remain unverified; public no-key sources can still return 429 or transient 5xx responses under sustained pressure. V2.3 does not include PDF download, full-text reading, or content summarization, and it does not claim perfect recall.
+Daily Radar and literature status monitoring can be enabled as needed. PaperEcho does not download PDFs, read full texts, or summarize their contents.
 
 ### V2.2
 
@@ -306,7 +308,7 @@ V2.1 does not include daily Radar, weekly queue merging, retraction/correction m
 
 1. Install Node.js 18+, npm, and PowerShell 7+. Desktop also requires Zotero Desktop; Web requires a Zotero API key; Local requires no Zotero installation.
 2. Clone the repository and run `npm install`.
-3. Copy `config/paperecho.config.example.json` to `config/paperecho.config.json` and `.env.example` to `.env`. Choose one path and configure OpenAlex, PubMed/PMC, RSS, or local input for your field.
+3. Copy `config/paperecho.config.example.json` to `config/paperecho.config.json` and `.env.example` to `.env`. Choose one path and select suitable literature sources or local input for your field.
 4. Use `$paperecho-zotero-desktop`, `$paperecho-zotero-web`, or `$paperecho-local` in Codex. Run the selected launcher with `--check`, then change it to `--run` after the check passes.
 
 To check for an official stable update, use `$paperecho-update` or run `node skills/paperecho-update/scripts/update.mjs --check --json`. Use `--apply` only after an explicit update request and a `safeToApply=true` result.
