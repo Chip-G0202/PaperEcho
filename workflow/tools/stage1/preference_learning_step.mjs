@@ -11,6 +11,7 @@ import { buildPreferenceLearningExecutionSummary } from "./preference_learning_e
 import { runFeedbackLearningDiagnostic } from "../lib/feedback_learning_support.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readCanonicalFeedback, currentPaperFeedback, canonicalFeedbackPath } from '../lib/control_feedback_service.mjs';
 
 /**
  * Load previous feedback preferences.
@@ -116,6 +117,14 @@ export async function runPreferenceLearningPhase({ reviewRoot, desktopRoot, rese
   });
   if (Array.isArray(normalizedFeedbackRows)) {
     feedbackLearning = buildNormalizedFeedbackLearning(normalizedFeedbackRows, feedbackSource);
+  } else {
+    const canonical = currentPaperFeedback(await readCanonicalFeedback(reviewRoot));
+    if (canonical.length) {
+      feedbackLearning = buildNormalizedFeedbackLearning(canonical.map((entry) => ({
+        ...entry, id: `control-feedback-${entry.revision}`, event_id: `control-feedback-${entry.revision}`,
+        source_file: canonicalFeedbackPath(reviewRoot), source_row: entry.revision,
+      })), canonicalFeedbackPath(reviewRoot));
+    }
   }
   const feedbackDiag = feedbackLearning.diagnostics || {};
 

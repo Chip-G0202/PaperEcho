@@ -284,13 +284,27 @@ async function writeAudit(filePath, audit) {
   await fs.promises.writeFile(filePath, `${JSON.stringify({ ...audit, history }, null, 2)}\n`, "utf8");
 }
 
-export async function processManualStandardEvaluation({
+// DOCX remains an input adapter; both inputs execute the same evaluation core.
+export async function processManualStandardEvaluation(options = {}) {
+  return processResearchEvaluationInput(options);
+}
+
+export async function processResearchEvaluation(text, options = {}) {
+  if (typeof text !== 'string' || !text.trim() || text.length > 20000) throw new Error('EVALUATION_TEXT_INVALID');
+  return processResearchEvaluationInput({
+    ...options, evaluationText: text.trim(),
+    manualStandardEvaluationConfig: { ...options.manualStandardEvaluationConfig, mode: 'propose', allow_direct_apply: false },
+  });
+}
+
+async function processResearchEvaluationInput({
   reviewRoot,
   pubmedConfigPath,
   auditPath,
   llmClient = null,
   llmRuntime = null,
   manualStandardEvaluationConfig = {},
+  evaluationText = null,
 } = {}) {
   const mdPath = screeningStandardsPath(reviewRoot);
   const docxPath = screeningStandardsDocxPath(reviewRoot);
@@ -305,10 +319,19 @@ export async function processManualStandardEvaluation({
 
   let parsed;
   try {
+    if (evaluationText !== null) {
+      parsed = {
+        evaluation_text: evaluationText,
+        rules_text: (await readScreeningStandardsFile(reviewRoot)).content,
+        keyword_state: loadPubMedKeywordGroupsFromConfig(pubmedConfig),
+        suggestions_table: [],
+      };
+    } else {
     if (!fs.existsSync(docxPath)) {
       await syncScreeningStandardsDocx(reviewRoot, { pubmedConfigPath });
     }
     parsed = await parseScreeningStandardsDocx(docxPath);
+    }
   } catch (error) {
     audit.blockers.push("docx_unreadable");
     audit.error = String(error?.message || error);
@@ -345,7 +368,8 @@ export async function processManualStandardEvaluation({
   const resolvedSuggestionsLogPath = ruleSuggestionsLogPath(reviewRoot);
   let userDecisionResult = { decisions: [], log: null };
   try {
-    userDecisionResult = await processUserSuggestionDecisions(parsed, { reviewRoot, logPath: resolvedSuggestionsLogPath });
+    userDecisionResult = await processUserSuggestionDecisions(parsed, { reviewRoot, logPath: resolvedSuggestionsLogPath, noFormalRuleApply: modeConfig.no_formal_rule_apply });
+    audit.suggestion_decision_receipts = userDecisionResult.receipts || [];
     if (userDecisionResult.decisions.length) {
       const decisionSync = syncSuggestionsToScreeningStandardsMd(
         await fs.promises.readFile(mdPath, "utf8"),
@@ -448,7 +472,7 @@ export async function processManualStandardEvaluation({
       generatedAt,
     });
     await writeUnifiedPendingRuleSuggestions(resolvedSuggestionsLogPath, unified.log);
-    await syncScreeningStandardsDocx(reviewRoot, {
+    if (evaluationText === null) await syncScreeningStandardsDocx(reviewRoot, {
       pubmedConfigPath,
       evaluationText: modeConfig.clear_evaluation_after_success ? "" : parsed.evaluation_text,
       suggestionsLogPath: resolvedSuggestionsLogPath,

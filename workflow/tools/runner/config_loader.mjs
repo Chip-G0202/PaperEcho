@@ -204,6 +204,11 @@ async function loadConfigFile({ requestedPath, source, fsApi, cwd }) {
   let config;
   try { config = JSON.parse(raw); }
   catch (error) { fail("CONFIG_JSON_INVALID", `PaperEcho config JSON is invalid: ${error.message}`, { path: safeConfigPath(requestedPath, cwd) }); }
+  validateRunnerConfigObject(config);
+  return { config, configPath: requestedPath, source };
+}
+
+export function validateRunnerConfigObject(config) {
   if (!isObject(config)) fail("CONFIG_ROOT_INVALID", "PaperEcho config root must be an object");
   if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1 or 2", { schemaVersion: config.schemaVersion ?? null });
   for (const key of Object.keys(config)) {
@@ -214,7 +219,7 @@ async function loadConfigFile({ requestedPath, source, fsApi, cwd }) {
   optionalString(config.profile, "profile");
   if (config.profile != null && !PROFILES.has(config.profile)) fail("CONFIG_PROFILE_INVALID", "profile must be standard, complete, or radar", { profile: config.profile });
   validateEnabledSections(config);
-  return { config, configPath: requestedPath, source };
+  return config;
 }
 
 function selectConfigMode(config) {

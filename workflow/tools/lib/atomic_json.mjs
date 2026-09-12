@@ -4,7 +4,11 @@ import { randomUUID } from "node:crypto";
 
 const TRANSIENT_RENAME_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
 
-export async function writeAtomicJson(filePath, value, {
+export async function writeAtomicJson(filePath, value, options = {}) {
+  return writeAtomicText(filePath, `${JSON.stringify(value, null, 2)}\n`, options);
+}
+
+export async function writeAtomicText(filePath, value, {
   fsApi = fs,
   renameImpl = (source, target) => fsApi.rename(source, target),
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
@@ -16,7 +20,7 @@ export async function writeAtomicJson(filePath, value, {
   let handle;
   try {
     handle = await fsApi.open(temporary, "wx");
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await handle.writeFile(value, "utf8");
     if (typeof handle.sync === "function") await handle.sync();
     await handle.close();
     handle = null;

@@ -21,7 +21,8 @@ import {
   screeningStandardsLastSyncedPath,
   screeningStandardsPath,
 } from "../lib/screening_standards_paths.mjs";
-import { processUserSuggestionDecisions as processUserSuggestionDecisionsCore } from "../lib/screening_standards_rule_suggestions.mjs";
+import { RuleSuggestionService } from "../lib/control_rule_suggestion_service.mjs";
+import { suggestionObjectsFromTable, normalizeSuggestionStatus } from "../lib/screening_standards_rewrite_plan.mjs";
 
 async function backupDocx(docxPath) {
   if (!fs.existsSync(docxPath)) return null;
@@ -35,9 +36,22 @@ function defaultPubmedConfigPath(reviewRoot) {
   return path.join(path.dirname(path.dirname(reviewRoot)), "config", "pubmed_pmc_search.json");
 }
 
-export async function processUserSuggestionDecisions(parsedDocx, { reviewRoot, logPath } = {}) {
-  const resolvedLogPath = logPath || ruleSuggestionsLogPath(reviewRoot);
-  return processUserSuggestionDecisionsCore(parsedDocx, { logPath: resolvedLogPath });
+export async function processUserSuggestionDecisions(parsedDocx, { reviewRoot, logPath, noFormalRuleApply = false } = {}) {
+  if (logPath && path.resolve(logPath) !== path.resolve(ruleSuggestionsLogPath(reviewRoot))) throw new Error('SUGGESTION_LOG_OWNER_MISMATCH');
+  const service = new RuleSuggestionService({ reviewRoot, noFormalRuleApply });
+  const receipts = [];
+  for (const row of suggestionObjectsFromTable(parsedDocx?.suggestions_table)) {
+    const status = normalizeSuggestionStatus(row.status).status;
+    const decision = { accept: 'accepted', reject: 'rejected', revise: 'revised' }[status];
+    if (!decision) continue;
+    try {
+      receipts.push(await service.decide({ id: row.suggestion_id, decision, revisedRule: row.revised_rule, humanApproval: true }));
+    } catch (error) {
+      receipts.push({ id: row.suggestion_id, status: 'blocked', code: error.message });
+    }
+  }
+  // Formal mutations have already run through the service. Do not replay them.
+  return { decisions: [], receipts, log: await service.readLog() };
 }
 
 

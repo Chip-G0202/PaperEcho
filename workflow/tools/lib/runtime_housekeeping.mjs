@@ -20,6 +20,8 @@ const PROTECTED_NAMES = new Set([
   "dedupe-index.json",
   "learning-state.json",
   "events.jsonl",
+  "paper_feedback.json",
+  "research_evaluations",
   "translation_cache.json",
   "runtime_state.json",
   "urgent_queue.json",

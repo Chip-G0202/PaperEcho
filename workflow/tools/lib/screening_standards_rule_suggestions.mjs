@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { normalizeSuggestionStatus } from "./screening_standards_rewrite_plan.mjs";
+import { writeUnifiedPendingRuleSuggestions } from './unified_pending_rule_suggestions.mjs';
 
 export function normalizeRuleForDedup(rule) {
   return String(rule || "").toLowerCase().replace(/[\s\u3000]+/g, " ").replace(/[.,;:·。、；：]+$/g, "").trim();
@@ -30,60 +31,17 @@ export async function loadRuleSuggestionsLog(logPath) {
 }
 
 export async function writeRuleSuggestionsLog(logPath, log) {
-  await fs.promises.writeFile(logPath, JSON.stringify(log, null, 2) + "\n", "utf8");
+  return writeUnifiedPendingRuleSuggestions(logPath, log);
 }
 
 function collapseBlankLines(text) {
   return String(text || "").replace(/\n{3,}/g, "\n\n").trim() + "\n";
 }
 
-export async function processUserSuggestionDecisions(parsedDocx, { logPath } = {}) {
-  const log = await loadRuleSuggestionsLog(logPath);
-  const decisions = [];
-
-  const rows = Array.isArray(parsedDocx?.suggestions_table) ? parsedDocx.suggestions_table : [];
-  if (rows.length > 1) {
-    const headers = rows[0].map((c) => String(c || "").trim());
-    const statusCol = headers.findIndex((h) => h === "状态");
-    if (statusCol >= 0) {
-      const ruleCol = headers.findIndex((h) => h === "建议规则");
-      const revisedCol = headers.findIndex((h) => h === "修订后规则");
-      const idCol = headers.findIndex((h) => h === "建议ID");
-      for (const row of rows.slice(1)) {
-        const result = normalizeSuggestionStatus(row[statusCol]);
-        const suggestionId = idCol >= 0 ? String(row[idCol] || "").trim() : "";
-        if (result.unknown) {
-          const existing = log.suggestions.find((s) => s.suggestion_id === suggestionId);
-          if (existing) {
-            existing.process_warnings = existing.process_warnings || [];
-            existing.process_warnings.push(`unknown_status:${result.original}`);
-          }
-          continue;
-        }
-        if (!result.status || result.status === "pending") continue;
-        const suggestedRule = ruleCol >= 0 ? String(row[ruleCol] || "").trim() : "";
-        const revisedRule = revisedCol >= 0 ? String(row[revisedCol] || "").trim() : "";
-        const existing = log.suggestions.find((s) => s.suggestion_id === suggestionId && s.status === "pending");
-        if (!existing) continue;
-        if (result.status === "accept") {
-          existing.status = "accepted";
-          existing.processed_at = new Date().toISOString();
-          decisions.push({ type: "accept", rule: suggestedRule, source: suggestionId });
-        } else if (result.status === "reject") {
-          existing.status = "rejected";
-          existing.processed_at = new Date().toISOString();
-        } else if (result.status === "revise") {
-          if (!revisedRule) { existing.process_warnings = existing.process_warnings || []; existing.process_warnings.push("revise_but_revised_rule_empty"); continue; }
-          existing.status = "revised";
-          existing.revised_rule = revisedRule;
-          existing.processed_at = new Date().toISOString();
-          decisions.push({ type: "revise", rule: revisedRule, source: suggestionId });
-        }
-      }
-    }
-  }
-  await writeRuleSuggestionsLog(logPath, log);
-  return { decisions, log };
+export async function processUserSuggestionDecisions(parsedDocx, { logPath, noFormalRuleApply = false } = {}) {
+  const { processUserSuggestionDecisions: adapter } = await import('../stage1/screening_standards_docx.mjs');
+  const { default: path } = await import('node:path');
+  return adapter(parsedDocx, { reviewRoot: path.dirname(logPath), logPath, noFormalRuleApply });
 }
 
 export function syncSuggestionsToScreeningStandardsMd(currentContent, decisions) {

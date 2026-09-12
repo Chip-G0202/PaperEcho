@@ -1,0 +1,86 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { getLiteratureIdentityKeys } from './literature_identity.mjs';
+import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
+
+export const PAPER_FEEDBACK = Object.freeze({
+  highly_relevant: 'upgrade', relevant: 'keep', maybe: 'downgrade',
+  irrelevant: 'drop', do_not_recommend_similar: 'drop',
+});
+export const FEEDBACK_REASONS = new Set(['topic_mismatch', 'exposure_mismatch', 'population_mismatch', 'model_mismatch', 'method_mismatch', 'publication_type_mismatch', 'too_broad', 'too_peripheral', 'other']);
+export const canonicalFeedbackPath = (reviewRoot) => path.join(reviewRoot, 'paper_feedback.json');
+export function feedbackIdentity(item) {
+  const keys = getLiteratureIdentityKeys(item).filter((key) => !key.startsWith('title:'));
+  const valid = keys.filter((key) => /^(doi:10\.\d{4,9}\/\S+|pmid:\d+|pmcid:pmc\d+|arxiv:\d{4}\.\d{4,5}(v\d+)?|openalex:w\d+|url:https?:\/\/[^\s]+)$/i.test(key));
+  if (!valid.length) throw new Error('FEEDBACK_IDENTITY_REQUIRED');
+  return valid;
+}
+export async function readCanonicalFeedback(reviewRoot) {
+  try {
+    const state = JSON.parse(await fs.readFile(canonicalFeedbackPath(reviewRoot), 'utf8'));
+    if (state.schemaVersion !== 1 || !Array.isArray(state.history)) throw new Error('FEEDBACK_STATE_INVALID');
+    return state;
+  } catch (error) {
+    if (error.code === 'ENOENT') return { schemaVersion: 1, history: [] };
+    throw error;
+  }
+}
+export function currentPaperFeedback(state) {
+  const current = new Map();
+  for (const entry of state.history) current.set(entry.identity, entry);
+  return [...current.values()];
+}
+export class FeedbackService {
+  constructor({ reviewRoot, researchEvaluation, ruleDecision, atomicOptions } = {}) {
+    Object.assign(this, { reviewRoot, researchEvaluation, ruleDecision, atomicOptions });
+  }
+  async submit(input) {
+    if (input.kind === 'research_evaluation') {
+      if (!this.researchEvaluation) throw new Error('RESEARCH_EVALUATION_UNAVAILABLE');
+      return this.researchEvaluation(input);
+    }
+    if (input.kind === 'rule_decision') {
+      if (!this.ruleDecision) throw new Error('RULE_DECISION_UNAVAILABLE');
+      return this.ruleDecision(input);
+    }
+    return (await this.submitPaperBatch([input]))[0];
+  }
+  async submitPaperBatch(inputs) {
+    if (!Array.isArray(inputs) || inputs.length > 10000) throw new Error('FEEDBACK_BATCH_INVALID');
+    return withAtomicJsonLock(canonicalFeedbackPath(this.reviewRoot), async () => {
+      const state = await readCanonicalFeedback(this.reviewRoot);
+      const receipts = [];
+      for (const input of inputs) {
+    if (input.kind !== 'paper_feedback') throw new Error('FEEDBACK_KIND_INVALID');
+    const keys = feedbackIdentity(input.paper);
+    if (!Object.hasOwn(PAPER_FEEDBACK, input.value)) throw new Error('FEEDBACK_VALUE_INVALID');
+    if (input.reason && !FEEDBACK_REASONS.has(input.reason)) throw new Error('FEEDBACK_REASON_INVALID');
+    if (typeof input.requestId !== 'string' || !/^[a-zA-Z0-9:_-]{1,160}$/.test(input.requestId)) throw new Error('FEEDBACK_REQUEST_ID_REQUIRED');
+    const payload = { keys, value: input.value, reason: input.reason || '', comment: String(input.comment || '').slice(0, 4000) };
+    const digest = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+      const duplicate = state.history.find((entry) => entry.requestId === input.requestId);
+      if (duplicate) {
+        if (duplicate.digest !== digest) throw new Error('FEEDBACK_REQUEST_CONFLICT');
+        receipts.push({ revision: duplicate.revision, duplicate: true });
+        continue;
+      }
+      const matches = new Set(state.history.filter((entry) => entry.keys.some((key) => keys.includes(key))).map((entry) => entry.identity));
+      if (matches.size > 1) throw new Error('FEEDBACK_IDENTITY_AMBIGUOUS');
+      const entry = {
+        ...payload, identity: [...matches][0] || keys[0], requestId: input.requestId, digest,
+        revision: state.history.length + 1, created_at: new Date().toISOString(),
+        feedback: PAPER_FEEDBACK[input.value], title: String(input.paper.title || ''),
+        doi: String(input.paper.doi || input.paper.DOI || ''), pmid: String(input.paper.pmid || ''), pmcid: String(input.paper.pmcid || ''),
+        source: input.source === 'legacy_xlsx' ? 'legacy_xlsx' : 'control_center',
+        source_row: input.sourceRow || null,
+      };
+      state.history.push(entry);
+      receipts.push({ revision: entry.revision, duplicate: false });
+      }
+      if (receipts.some((receipt) => !receipt.duplicate)) await writeAtomicJson(canonicalFeedbackPath(this.reviewRoot), state, this.atomicOptions);
+      return receipts;
+    });
+  }
+  async current() { return currentPaperFeedback(await readCanonicalFeedback(this.reviewRoot)); }
+}

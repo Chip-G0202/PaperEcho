@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 
 export const PENDING_SUGGESTION_STATUSES = new Set([
   "candidate",
@@ -282,6 +283,15 @@ export function generateUnifiedPendingRuleSuggestions({
 }
 
 export async function writeUnifiedPendingRuleSuggestions(logPath, log) {
-  await fs.mkdir(path.dirname(logPath), { recursive: true });
-  await fs.writeFile(logPath, `${JSON.stringify(log, null, 2)}\n`, "utf8");
+  return withAtomicJsonLock(logPath, async () => {
+    let current = { suggestions: [] };
+    try { current = JSON.parse(await fs.readFile(logPath, 'utf8')); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (!Array.isArray(current.suggestions) || !Array.isArray(log.suggestions)) throw new Error('SUGGESTION_LOG_INVALID');
+    const terminal = new Set(current.suggestions.filter((entry) => ['accepted', 'revised', 'rejected', 'superseded', 'expired'].includes(entry.status)).map((entry) => entry.id || entry.suggestion_id));
+    const candidates = log.suggestions.filter((entry) => !terminal.has(entry.id || entry.suggestion_id));
+    const merged = generateUnifiedPendingRuleSuggestions({ existingSuggestionsLog: current, legacySuggestions: candidates, generatedAt: log.updated_at || new Date().toISOString() });
+    await writeAtomicJson(logPath, merged.log);
+    return merged.log;
+  });
 }
