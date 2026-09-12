@@ -44,11 +44,11 @@ export class ReviewQueryService {
       const pipeline = this.pipeline(run);
       if (!pipeline) continue;
       const report = await this.read(path.join(pipeline, 'run_report.json'));
-      if (report?.steps?.med_weekly_synthesis?.status !== 'completed') continue;
+      if (report?.steps?.med_weekly_synthesis?.completed !== true) continue;
       const source = await this.read(path.join(pipeline, 'desktop_daily_review_source.json'));
       const writeback = await this.read(path.join(pipeline, 'zotero_writeback_summary.json'));
       const filtered = buildStage4StandaloneExportSource({ desktopSource: source, writebackSummary: writeback });
-      if (filtered.filter.status !== 'ok') continue;
+      if (!['ok', 'no_new_writeback_items'].includes(filtered.filter.status)) continue;
       return { run, report, writeback, items: filtered.allAbcItems };
     }
     return null;
