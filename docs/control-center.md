@@ -18,6 +18,16 @@ node workflow/tools/web/server.mjs
 
 ## 反馈语义与存储
 
+### 界面约定
+
+App Shell 由固定 Sidebar、页头和主内容组成；窄窗口通过“导航菜单”展开，正文随导航向下排列。当前入口为 Overview、Literature、Feedback、Settings、System，不放置尚未实现的未来模块。Literature 偏重浏览；Feedback 内的 Paper / Research / Rule Suggestions 使用带当前状态的原生按钮子导航，支持键盘 Tab、Enter 和浏览器历史导航。
+
+Settings 按分类显示字段，分类切换不丢弃当前页尚未保存的输入；凭据仍为空密码框，仅写入、不回显。研究评价草稿只在当前页面会话内保留，不写浏览器持久存储。System 只展示已有状态的安全摘要，不显示绝对路径、不把历史证据当作实时健康检查。没有结构化推荐依据时不生成“Why Recommended”。
+
+可复用展示约定位于 `web/static/`：CSS custom properties 管理颜色、间距、圆角和 focus；`.subnav`、`.badge`、`.empty-state`、`.manual-action` 与字段错误提示承载一致状态。新增页面继续通过 service API 读取数据，动态文字使用 textContent；不得把 UI 状态改成业务决策或新增服务逻辑。
+
+UI 定向验证：`node --test workflow/tests/control_ui.test.mjs workflow/tests/control_http.test.mjs`。结构与安全契约测试不替代真实浏览器的交互／布局检查。
+
 | UI 值 | 原 workflow 值 | 意义 |
 |---|---|---|
 | Highly Relevant | upgrade | 强正向反馈 |

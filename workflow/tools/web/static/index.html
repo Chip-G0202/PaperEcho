@@ -2,8 +2,22 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PaperEcho Control Center</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head>
 <body>
-<header><p class="eyebrow">PAPERECHO · LOCAL WORKSPACE</p><h1>Control Center</h1><p>文献反馈、研究方向与常用设置，一个入口。</p></header>
-<nav aria-label="主导航"><button data-page="home">概览</button><button data-page="weekly">Weekly 文献</button><button data-page="research">研究反馈</button><button data-page="suggestions">待确认建议</button><button data-page="settings">Settings</button></nav>
-<p id="notice" role="status" aria-live="polite"></p><main id="content" aria-busy="true"></main>
-<footer>仅本机访问 · XLSX / DOCX 继续兼容 · 强负反馈不会直接生成永久排除规则</footer>
+<a class="skip-link" href="#content">跳到主要内容</a>
+<aside class="sidebar" id="sidebar">
+  <div class="brand"><span class="brand-mark" aria-hidden="true">P</span><div><strong>PaperEcho</strong><span>Control Center</span></div></div>
+  <p class="nav-label">工作空间</p>
+  <nav aria-label="主导航">
+    <button data-page="home"><span aria-hidden="true">01</span>Overview · 概览</button>
+    <button data-page="weekly"><span aria-hidden="true">02</span>Literature · 文献</button>
+    <button data-page="feedback"><span aria-hidden="true">03</span>Feedback · 反馈</button>
+    <button data-page="settings"><span aria-hidden="true">04</span>Settings · 设置</button>
+    <button data-page="system"><span aria-hidden="true">05</span>System · 系统</button>
+  </nav>
+  <div class="sidebar-footer"><span class="local-indicator">仅本机访问</span><span>PaperEcho v2.4</span></div>
+</aside>
+<div class="workspace">
+  <header class="topbar"><div><p class="eyebrow">RESEARCH WORKSPACE</p><h1 id="page-title">Overview · 概览</h1></div><button id="menu-toggle" aria-controls="sidebar" aria-expanded="false">导航菜单</button><span class="topbar-note">让反馈回到研究本身</span></header>
+  <div class="content-wrap"><p id="notice" role="status" aria-live="polite" aria-atomic="true"></p><main id="content" tabindex="-1" aria-busy="true"><p class="loading" role="status">正在连接本地工作空间…</p></main>
+  <footer>本地研究工作空间 · XLSX / DOCX 继续兼容 · 反馈不会直接生成永久排除规则</footer></div>
+</div>
 </body></html>
