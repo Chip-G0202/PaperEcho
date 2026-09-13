@@ -139,6 +139,18 @@ function isHumanReviewItem(item) {
   );
 }
 
+// Shared read-only Weekly evidence for XLSX and the Control Center. Keep the
+// legacy aliases and human-review classification here, never in the Web layer.
+export function getWeeklyReviewEvidence(item) {
+  return {
+    ruleGrade: extractGradeLetter(item, ["rule_grade", "ruleGrade", "original_grade", "initial_grade", "grade"]),
+    semanticGrade: extractGradeLetter(item, ["llm_review_grade", "llmReviewGrade", "semantic_grade", "semanticGrade", "semantic_review.grade", "semanticPreference.grade"]),
+    finalGrade: extractGradeLetter(item, ["final_grade", "finalGrade", "adjusted_grade", "grade"]),
+    needsReview: isHumanReviewItem(item),
+    reviewReason: String(item?.semantic_reason || item?.semanticReason || item?.semantic_review?.reason || item?.semantic_adjustment_reason || "").trim(),
+  };
+}
+
 function toDailyRows(triaged) {
   const banned = new Set(["D", "D无关"]);
   return triaged
@@ -150,9 +162,7 @@ function toDailyRows(triaged) {
     })
     .map((it) => {
       const translated = it?.translatedTitle || it?.["标题翻译"] || it?.["中文标题"] || it?.shortTitle || it?.title || "";
-      const ruleGrade = extractGradeLetter(it, ["rule_grade", "ruleGrade", "original_grade", "initial_grade", "grade"]);
-      const semanticGrade = extractGradeLetter(it, ["llm_review_grade", "llmReviewGrade", "semantic_grade", "semanticGrade", "semantic_review.grade", "semanticPreference.grade"]);
-      const finalGrade = extractGradeLetter(it, ["final_grade", "finalGrade", "adjusted_grade", "grade"]);
+      const { ruleGrade, semanticGrade, finalGrade } = getWeeklyReviewEvidence(it);
       const source = cleanJournalSource(it);
       return [
         it?.title || "",
@@ -180,10 +190,8 @@ const GRADE_ORDER = { A: 0, B: 1, C: 2, D: 3 };
 function toHumanReviewRows(triaged) {
   const rows = [];
   for (const it of triaged) {
-    const ruleGrade = extractGradeLetter(it, ["rule_grade", "ruleGrade", "original_grade", "initial_grade", "grade"]);
-    const semanticGrade = extractGradeLetter(it, ["llm_review_grade", "llmReviewGrade", "semantic_grade", "semanticGrade", "semantic_review.grade", "semanticPreference.grade"]);
-    const finalGrade = extractGradeLetter(it, ["final_grade", "finalGrade", "adjusted_grade", "grade"]);
-    if (!isHumanReviewItem(it)) continue;
+    const { ruleGrade, semanticGrade, finalGrade, needsReview, reviewReason } = getWeeklyReviewEvidence(it);
+    if (!needsReview) continue;
 
     // Divergence type (for display only)
     const gradesDiffer = ruleGrade && semanticGrade && ruleGrade !== semanticGrade;
@@ -197,10 +205,7 @@ function toHumanReviewRows(triaged) {
     }
 
     // Semantic reason
-    const semanticReason = String(
-      it?.semantic_reason || it?.semanticReason ||
-      it?.semantic_review?.reason || it?.semantic_adjustment_reason || ""
-    ).trim();
+    const semanticReason = reviewReason;
 
     const translated = it?.translatedTitle || it?.["标题翻译"] || it?.["中文标题"] || it?.shortTitle || it?.title || "";
     const source = cleanJournalSource(it);

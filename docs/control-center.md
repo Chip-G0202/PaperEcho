@@ -11,30 +11,38 @@ node workflow/tools/web/server.mjs
 打开 <http://127.0.0.1:8765>；终端 Ctrl+C 停止服务。无需安装新依赖、构建前端或启动数据库。服务不会启动 workflow，不会修改调度器，也不会进行 Zotero readiness probe。原 Desktop/Web/Local launcher 完全独立运行。
 
 1. **概览**：最近可用 Weekly、可识别的 Radar、最近运行结果、来源与审核数量。无可靠证据的状态显示未知；Zotero 只反映最近写入记录，不表示实时连接正常。
-2. **Weekly 文献**：每页 50 篇，基于实际运行根的 registered run manifest 查询。Desktop/Web 经过现有 verified-write filter；Local 展示 repository 当前文献，复用 Local Stage4 的筛选规则，不依赖会被清理的临时 export source。绝不直接展示 Stage1 全候选池。中文、长标题和缺 DOI 均支持；只要存在其他可靠 canonical identity 即可反馈。
+2. **文献**：当前结果的只读汇总，显示最终等级数量，点击等级按钮筛选，每页最多 50 篇。英文原始标题在前、中文翻译在后。基于实际运行根的 registered run manifest 查询；Desktop/Web 经过现有 verified-write filter，Local 复用 Local Stage4 筛选规则，不依赖临时 export source。绝不展示 Stage1 全候选池，也不在此页提交反馈。
 3. **研究反馈**：自然语言直接调用共享 evaluation 核心，先保存收据再尝试处理。需要原有 LLM 配置。失败保留输入，显示 blocker；重试相同请求不会重复生成已完成建议。网页不显示 prompt 或 raw LLM response。
-4. **待确认建议**：支持 Accept / Reject / Revise then accept。接受会再次询问人工确认；安全校验通过后才修改正式正文。拒绝不会写正式规则。
-5. **Settings**：按 General、Models、Sources、Search、RSS、Ranking / Review、Radar、Weekly、Integrity、Zotero、Notifications、Credentials、Advanced 分组。原配置文件仍由原 owner 持有；修改不会导致文件物理合并。
+4. **规则建议**：一次审阅一条，点击“接受”“拒绝”直接提交人工决策；“修改后接受”先进入编辑区，再显式提交。不重复弹窗确认，原安全校验仍是正式应用的必要条件。高风险或无可靠 mutation owner 的建议保持 pending，回执说明对应建议、原因与下一步；本次接受意图不代表正式规则已修改。
+5. **设置**：四组内部导航——研究与检索（Sources / Search / RSS）；评审与学习（Models / Ranking / Review / Radar / Weekly / Integrity）；连接与通知（Zotero / Notifications / Credentials）；工作区与高级（General / Advanced）。小枚举使用单选按钮，布尔项使用开关。原配置 owner、校验和安全写入契约不变。
 
 ## 反馈语义与存储
 
 ### 界面约定
 
-App Shell 由固定 Sidebar、页头和主内容组成；窄窗口通过“导航菜单”展开，正文随导航向下排列。当前入口为 Overview、Literature、Feedback、Settings、System，不放置尚未实现的未来模块。Literature 偏重浏览；Feedback 内的 Paper / Research / Rule Suggestions 使用带当前状态的原生按钮子导航，支持键盘 Tab、Enter 和浏览器历史导航。
+App Shell 由固定 Sidebar、页头和主内容组成；窄窗口通过“导航菜单”展开，正文随导航向下排列。当前入口为概览、文献、反馈、设置、系统，不放置尚未实现的未来模块。文献页严格只读；反馈内的文献等级、研究方向、规则建议使用原生按钮子导航。波形标识为可替换的简单 inline SVG，不是正式品牌资产的精确复用。
 
 Settings 按分类显示字段，分类切换不丢弃当前页尚未保存的输入；凭据仍为空密码框，仅写入、不回显。研究评价草稿只在当前页面会话内保留，不写浏览器持久存储。System 只展示已有状态的安全摘要，不显示绝对路径、不把历史证据当作实时健康检查。没有结构化推荐依据时不生成“Why Recommended”。
 
 可复用展示约定位于 `web/static/`：CSS custom properties 管理颜色、间距、圆角和 focus；`.subnav`、`.badge`、`.empty-state`、`.manual-action` 与字段错误提示承载一致状态。新增页面继续通过 service API 读取数据，动态文字使用 textContent；不得把 UI 状态改成业务决策或新增服务逻辑。
 
-UI 定向验证：`node --test workflow/tests/control_ui.test.mjs workflow/tests/control_http.test.mjs`。结构与安全契约测试不替代真实浏览器的交互／布局检查。
+UI 定向验证：`node --test workflow/tests/control_ui.test.mjs workflow/tests/control_http.test.mjs workflow/tests/spreadsheet_adapter_compat.test.mjs`。`control_ui.test.mjs` 同时加载 `tests/control_review_workspace.test.mjs`，验证实际按钮事件、队列保存与键盘隔离；轻量 DOM 测试替身不代替真实浏览器的交互／布局检查。运行产物使用 `tests/runs/`。
 
-| UI 值 | 原 workflow 值 | 意义 |
+### 连续等级审阅
+
+反馈回答“最终等级是否正确”，不会改写本次 rule / semantic / final grade、Weekly 结果或即时修改 Zotero。文献队列分类及等级字段兼容规则归 Stage4 `spreadsheet_adapter.mjs#getWeeklyReviewEvidence`，查询服务复用该 owner，Web 不根据等级差另推人工复核资格。现有 `needs_human_review` 及 legacy aliases 保持兼容；普通队列与人工复核队列互斥，保留输入结果顺序，默认定位尚未反馈且具可靠标识的文献。
+
+一次仅突出一篇，默认折叠详细信息；人工复核另列三个只读等级及已有复审依据，不补造推荐理由。点击即保存，成功后前进，失败停留并允许重试。上 / 下一篇可回看已处理条目，改选继续追加原 canonical revision。缺少可靠 identity 时禁止提交但允许跳过。进度按当前已保存反馈计数；页面内草稿、当前位置和高风险回执不形成第二份持久状态。
+
+文献工作区：1 升级、2 不变、3 降级、4 排除；规则工作区：1 接受、2 拒绝、3 进入修订；↑ / ↓ 回看或继续。快捷键仅绑定当前审阅工作区，在 input、textarea、select、contenteditable、dialog 或编辑状态内禁用；不拦截系统组合键，保存期间拒绝重复动作。鼠标和触屏有等价按钮。
+
+| 按钮 / 兼容 API 值 | 原 workflow 值 | 意义 |
 |---|---|---|
-| Highly Relevant | upgrade | 强正向反馈 |
-| Relevant | keep | 弱正向 / 保留 |
-| Maybe | downgrade | 降低优先级 |
-| Irrelevant | drop | 强负向反馈 |
-| Do not recommend similar | drop | 强负向反馈，保留独立 UI 值，不直接创建永久排除规则 |
+| 升级 / highly_relevant | upgrade | 提高最终等级的人工评价信号 |
+| 不变 / relevant | keep | 认可当前等级，保留原弱正向语义 |
+| 降级 / maybe | downgrade | 降低最终等级的人工评价信号 |
+| 排除 / irrelevant | drop | 强负向反馈，后续条目处理由原工作流执行 |
+| 历史兼容 / do_not_recommend_similar | drop | 旧值继续读取、显示为原强负反馈；不直接创建永久排除规则 |
 
 `review_results/文献评价/paper_feedback.json` 是 schemaVersion 1 的 canonical paper feedback state。每次有效提交追加 revision，保留 requestId、canonical identity aliases、时间与反馈上下文；当前有效反馈由最后一个 revision 推导。相同 requestId/内容幂等，改变内容应使用新 requestId。Title 仅作为上下文，不能单独用于 identity。
 

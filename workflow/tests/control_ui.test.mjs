@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
+import '../../tests/control_review_workspace.test.mjs';
 const html = await fs.readFile(new URL('../tools/web/static/index.html', import.meta.url), 'utf8');
 const css = await fs.readFile(new URL('../tools/web/static/styles.css', import.meta.url), 'utf8');
 const app = await fs.readFile(new URL('../tools/web/static/app.js', import.meta.url), 'utf8');
@@ -19,12 +20,12 @@ test('UI renders untrusted content through text nodes and keeps credentials writ
   assert.match(app, /input\.type = 'password'/);
   assert.match(app, /const value = input\.value; input\.value = ''/);
   assert.doesNotMatch(app, /input\.value\s*=\s*item\.(?:value|secret|password)/);
-  assert.match(app, /Test 未开放/);
+  assert.match(app, /连接测试尚未开放/);
 });
 test('UI feedback and responsive contracts retain fail-closed messaging and accessible state', () => {
   assert.match(app, /aria-label', '反馈类型'/);
   assert.match(app, /application_status === 'requires_manual_action'/);
-  assert.match(app, /未应用 \/ 需人工处理/);
+  assert.match(app, /尚未正式应用/);
   assert.match(app, /humanApproval: true/);
   assert.match(app, /aria-describedby/); assert.match(app, /aria-invalid/);
   assert.match(css, /--focus:/); assert.match(css, /:focus-visible/);

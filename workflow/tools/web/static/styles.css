@@ -1,6 +1,6 @@
 :root {
-  --bg:#f5f6f8; --surface:#fff; --surface-subtle:#f0f3f4; --text:#20323c; --secondary:#445864; --muted:#63737d;
-  --border:#dce3e6; --primary:#205f53; --primary-hover:#164a40; --tint:#e9f2ee;
+  --bg:#f6f7f4; --surface:#fff; --surface-subtle:#edf3ef; --text:#20352e; --secondary:#465c53; --muted:#61746b;
+  --border:#dce5df; --primary:#164e40; --primary-hover:#0e3a30; --tint:#e4f0e9; --mint:#d4eade;
   --success:#25654e; --warning:#80570e; --danger:#a13333; --info:#315d89; --focus:#3475aa;
   --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px; --space-7:48px;
   --radius:8px; --radius-lg:12px; --sidebar-width:238px;
@@ -27,3 +27,24 @@ fieldset{background:var(--surface);border:1px solid var(--border);border-radius:
 @media(max-width:760px){.sidebar{display:none;position:static;width:auto;border-right:0;border-bottom:1px solid var(--border);padding:18px}.sidebar[data-open=true]{display:flex}.brand{padding-bottom:12px}.sidebar-footer,.nav-label{display:none}.sidebar nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.workspace{margin-left:0}.topbar{height:auto;min-height:88px;padding:18px 20px}#menu-toggle{display:block}.content-wrap{padding:20px}.grid{gap:12px}.card{padding:16px}.metric{font-size:19px}article{padding:18px}.feedback-controls{align-items:stretch;flex-direction:column}.subnav{gap:2px}.subnav button{padding:8px 10px}.status-list{grid-template-columns:1fr;gap:4px;padding:18px}.status-list dd{margin-bottom:14px}fieldset,.research-form{padding:18px}.topbar h1{font-size:20px}}
 @media(max-width:420px){.grid{grid-template-columns:1fr}.sidebar nav{grid-template-columns:1fr}.content-wrap{padding:16px}h1{font-size:18px}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+
+/* Review workspaces keep one focused item in the DOM. Selection remains
+   operable; only in-flight requests and unavailable actions are disabled. */
+.brand-mark{flex-shrink:0;padding:4px;width:40px;height:40px;color:var(--primary);background:var(--mint)}
+.overview-summary{background:var(--tint);border-left:3px solid var(--primary);padding:14px 18px;border-radius:var(--radius);margin-top:20px}
+.grade-filters{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 24px}
+button[aria-pressed=true],.settings-nav button[aria-current=page]{background:var(--primary);color:var(--surface);border-color:var(--primary)}
+.badge.grade-A{background:var(--primary);color:var(--surface);border-color:var(--primary);font-weight:700}
+.badge.grade-B{background:var(--mint);color:var(--primary);border-color:#b6cfbf;font-weight:650}
+.badge.grade-C{background:#edf1ee;color:#53665b;border-color:#d8e1da}.badge.grade-D{background:#f6eeed;color:var(--danger)}
+.paper-title{font-size:20px;line-height:1.5;overflow-wrap:anywhere}.translated-title{font-size:15px;color:var(--secondary);line-height:1.7}
+.review-workspace{max-width:940px;min-width:0}.review-workspace:focus{outline:none}.focused-card{border:1px solid var(--border);border-radius:var(--radius-lg);padding:28px;background:var(--surface);margin:12px 0 16px;min-width:0}
+.focused-card h3{font-size:21px;line-height:1.5}.focused-card details{padding:12px 0;border-bottom:1px solid var(--border)}.focused-card h4{margin:16px 0 8px}.focused-card .feedback-state{font-size:14px;color:var(--primary);font-weight:600}
+.feedback-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.feedback-actions button{padding:12px 8px;color:var(--secondary)}.feedback-actions button[aria-pressed=true]{color:white}.rule-card .feedback-actions{grid-template-columns:repeat(3,minmax(0,1fr))}
+.queue-progress{font-size:14px;color:var(--secondary);margin:12px 0}.queue-receipt{padding:12px 16px;border-left:3px solid var(--primary);background:var(--tint);border-radius:var(--radius);font-size:14px;overflow-wrap:anywhere}.queue-receipt.error{color:var(--danger);background:#fff1ef;border-color:var(--danger)}.queue-receipt.warning{color:var(--warning);background:#fff8e9;border-color:var(--warning)}
+.completion{color:var(--success);font-size:14px}.shortcut-hint{color:var(--muted);font-size:12px}.review-navigation{justify-content:space-between}.grade-evidence{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:16px;background:var(--surface-subtle);border-radius:var(--radius)}.grade-evidence dt{grid-row:1}.grade-evidence dd{grid-row:2;font-size:20px;font-weight:650;color:var(--primary)}
+.settings-layout{display:grid;grid-template-columns:166px minmax(0,1fr);gap:24px;align-items:start}.settings-nav{position:sticky;top:20px;display:grid;gap:8px}.settings-nav button{text-align:left;font-size:14px}.settings-body{min-width:0}.settings-section{padding:20px 24px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);margin-bottom:20px}.settings-section h3{margin:0;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.setting-options{padding:8px 12px;margin:8px 0;border-radius:var(--radius);display:flex;gap:8px 20px;flex-wrap:wrap}.setting-options legend{font-size:13px}.setting-options label{display:flex;align-items:center;gap:8px;margin:4px 0}.setting-options input[type=radio]{width:auto;display:inline-block;accent-color:var(--primary);margin:0}
+input[role=switch]{appearance:none;width:40px;height:24px;border-radius:20px;background:#d3ddd6;border:1px solid #91a59a;vertical-align:middle;position:relative;padding:0}input[role=switch]:after{content:'';width:16px;height:16px;border-radius:50%;background:white;position:absolute;top:3px;left:3px}input[role=switch]:checked{background:var(--primary);border-color:var(--primary)}input[role=switch]:checked:after{left:19px}
+@media(max-width:1050px){.settings-layout{grid-template-columns:1fr}.settings-nav{position:static;display:flex;flex-wrap:wrap}}
+@media(max-width:760px){.focused-card{padding:18px}.focused-card h3,.paper-title{font-size:18px}.feedback-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.rule-card .feedback-actions{grid-template-columns:1fr}.settings-section{padding:18px}.grade-evidence{padding:12px;gap:4px}.queue-receipt{padding:10px 12px}}

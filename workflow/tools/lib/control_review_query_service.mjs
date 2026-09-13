@@ -7,6 +7,7 @@ import { feedbackIdentity } from './control_feedback_service.mjs';
 import { loadSourceSelectionConfig } from './literature_config.mjs';
 import { buildRuntimeConfig } from './runtime_config.mjs';
 import { buildLocalStage4ExportSource } from '../stage4/export_source_step.mjs';
+import { getWeeklyReviewEvidence } from '../stage4/spreadsheet_adapter.mjs';
 
 const inside = (root, candidate) => { const rel = path.relative(root, candidate); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
 export class ReviewQueryService {
@@ -80,13 +81,16 @@ export class ReviewQueryService {
       let keys = [];
       try { keys = feedbackIdentity(item); } catch {}
       const id = createHash('sha256').update(`${data.run.runId}:${offset + index}:${keys[0] || ''}`).digest('hex');
+      const evidence = getWeeklyReviewEvidence(item);
       return {
         id, feedbackAllowed: keys.length > 0, title: String(item.title || ''),
-        translatedTitle: String(item.translated_title || item.title_translation || item.shortTitle || ''),
+        translatedTitle: String(item.translatedTitle || item.translated_title || item.title_translation || item['标题翻译'] || item['中文标题'] || item.shortTitle || ''),
         authors: (Array.isArray(item.authors) ? item.authors : [item.authors || '']).map((author) => typeof author === 'string' ? author : [author?.firstName, author?.lastName].filter(Boolean).join(' ')), journal: String(item.journal || item.publicationTitle || ''), year: String(item.year || ''),
         doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), source: String(item.source || item.source_type || ''),
-        grade: item.final_grade || item.grade || '', zotero: this.localRepository ? 'not_used_local' : 'admitted',
-        integrity: item.integrity_status || null, needsReview: item.needs_human_review === true,
+        ...evidence,
+        grade: evidence.finalGrade, zotero: this.localRepository ? 'not_used_local' : 'admitted',
+        abstract: typeof item.abstract === 'string' ? item.abstract : '',
+        integrity: item.integrity_status || null,
         feedback: current.find((entry) => entry.keys.some((key) => keys.includes(key)))?.value || null,
       };
     });
@@ -119,7 +123,7 @@ export class ReviewQueryService {
       nextScheduledRun: null, zotero: weekly ? 'last_writeback_available_not_live_probe' : 'unknown',
       sources: loadSourceSelectionConfig({ root: this.root }).enabled_sources,
       counts: summary?.counts || null, integrity: summary?.integrity || null,
-      needsReview: weekly?.items.filter((item) => item.needs_human_review === true).length ?? null,
+      needsReview: weekly?.items.filter((item) => getWeeklyReviewEvidence(item).needsReview).length ?? null,
       pendingSuggestions: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
     };
   }
