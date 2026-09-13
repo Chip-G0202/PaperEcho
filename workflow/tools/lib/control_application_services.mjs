@@ -9,11 +9,14 @@ import { processResearchEvaluation } from '../stage1/manual_standard_evaluation.
 import { getPreferenceLearningConfig } from './preference_learning_support.mjs';
 import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 import { ReviewQueryService } from './control_review_query_service.mjs';
+import { buildRuntimeConfig } from './runtime_config.mjs';
 
-export function createControlServices({ root, reviewRoot = path.join(root, 'review_results', '文献评价'), env = process.env, llmClient = null } = {}) {
+export function createControlServices({ root, reviewRoot, env = process.env, llmClient = null, context = buildRuntimeConfig({ cwd: root, env, argv: [] }) } = {}) {
+  reviewRoot ||= context.reviewRoot;
+  env = context.env || env;
   const secrets = new SecretService({ root, env });
   const rules = new RuleSuggestionService({ reviewRoot });
-  const config = new ConfigService({ root, env });
+  const config = new ConfigService({ root, env, configPath: context.configPath });
   const feedback = new FeedbackService({
     reviewRoot,
     ruleDecision: (input) => rules.decideWithReceipt(input),
@@ -44,6 +47,6 @@ export function createControlServices({ root, reviewRoot = path.join(root, 'revi
       }, { staleMs: 600000, timeoutMs: 1000 });
     },
   });
-  const review = new ReviewQueryService({ root, reviewRoot, feedback, rules });
+  const review = new ReviewQueryService({ root, reviewRoot, feedback, rules, context });
   return { feedback, config, rules, secrets, review };
 }

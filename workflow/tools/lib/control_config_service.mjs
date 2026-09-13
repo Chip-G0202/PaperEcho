@@ -88,10 +88,11 @@ export function validateSetting(definition, value) {
   }
 }
 export class ConfigService {
-  constructor({ root, env = process.env, atomicOptions, verify = async () => {} }) { Object.assign(this, { root, env, atomicOptions, verify }); }
+  constructor({ root, env = process.env, atomicOptions, verify = async () => {}, configPath }) { Object.assign(this, { root, env, atomicOptions, verify, configPath }); }
+  ownerPath(file) { return file === 'paperecho.config.json' && this.configPath ? this.configPath : path.join(this.root, 'config', file); }
   async readOwner(file) {
     // Fixed registry owns paths; callers cannot choose arbitrary files.
-    return JSON.parse(await fs.readFile(path.join(this.root, 'config', file), 'utf8'));
+    return JSON.parse(await fs.readFile(this.ownerPath(file), 'utf8'));
   }
   async list() {
     const result = [];
@@ -110,7 +111,7 @@ export class ConfigService {
     const definition = CONFIG_REGISTRY.find((entry) => entry.id === id);
     if (!definition) throw new Error('SETTING_UNKNOWN');
     validateSetting(definition, value);
-    const file = path.join(this.root, 'config', definition.file);
+    const file = this.ownerPath(definition.file);
     return withAtomicJsonLock(file, async () => {
       const before = await this.readOwner(definition.file);
       const after = structuredClone(before);

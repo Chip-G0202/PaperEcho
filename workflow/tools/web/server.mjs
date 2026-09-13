@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createControlServices } from '../lib/control_application_services.mjs';
 import '../lib/env_file_bootstrap.mjs';
+import { resolveApplicationRuntimeContext } from '../lib/runtime_config.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
@@ -29,9 +30,9 @@ async function body(req) {
     return value;
   } catch { throw new Error('BODY_INVALID'); }
 }
-export async function startControlCenter({ root = path.resolve(here, '../../..'), host = '127.0.0.1', port = 8765, services } = {}) {
+export async function startControlCenter({ root = path.resolve(here, '../../..'), host = '127.0.0.1', port = 8765, services, env = process.env, argv = [] } = {}) {
   if (!['127.0.0.1', '::1'].includes(host)) throw new Error('LOOPBACK_BIND_REQUIRED');
-  services ||= createControlServices({ root });
+  services ||= createControlServices({ root, env, context: await resolveApplicationRuntimeContext({ cwd: root, env, argv }) });
   const session = randomBytes(32).toString('hex');
   const token = randomBytes(32).toString('hex');
   const server = http.createServer(async (req, res) => {
@@ -106,5 +107,5 @@ export async function startControlCenter({ root = path.resolve(here, '../../..')
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
-  startControlCenter().then(({ url }) => { console.log(`PaperEcho Control Center: ${url}`); }).catch(() => { console.error('CONTROL_CENTER_START_FAILED'); process.exitCode = 1; });
+  startControlCenter({ argv: process.argv.slice(2) }).then(({ url }) => { console.log(`PaperEcho Control Center: ${url}`); }).catch(() => { console.error('CONTROL_CENTER_START_FAILED'); process.exitCode = 1; });
 }

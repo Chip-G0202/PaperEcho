@@ -143,7 +143,7 @@ export async function prepareStage4ExportSource({
   };
 }
 
-export async function prepareLocalStage4ExportSource({ papers = [], sourcePath, runReport = {}, preferenceLearningAudit = {} } = {}) {
+export function buildLocalStage4ExportSource({ papers = [], runReport = {}, preferenceLearningAudit = {} } = {}) {
   const triaged = (Array.isArray(papers) ? papers : []).filter((paper) => {
     const grade = String(paper?.final_grade || paper?.grade || paper?.rule_grade || "").slice(0, 1).toUpperCase();
     return grade && grade !== "D";
@@ -167,8 +167,6 @@ export async function prepareLocalStage4ExportSource({ papers = [], sourcePath, 
       local: { zotero_backend_used: false, stage2_used: false, stage3_used: false },
     },
   };
-  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-  await fs.writeFile(sourcePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   return {
     runReport,
     writebackSummary: { writeback_items: [], failures: [] },
@@ -177,4 +175,11 @@ export async function prepareLocalStage4ExportSource({ papers = [], sourcePath, 
     sourceFilterAudit: { source_type: "local", input_count: papers.length, kept_count: triaged.length },
     fallbackExportFields: { local_export_mode: true, fallback_used: false, zotero_probe_attempted: false, zotero_writeback_attempted: false },
   };
+}
+
+export async function prepareLocalStage4ExportSource({ sourcePath, ...options } = {}) {
+  const result = buildLocalStage4ExportSource(options);
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(sourcePath, `${JSON.stringify(result.finalPayload, null, 2)}\n`, "utf8");
+  return result;
 }

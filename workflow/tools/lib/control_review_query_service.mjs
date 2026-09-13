@@ -5,23 +5,30 @@ import { buildStage4StandaloneExportSource } from '../stage4/finalize_exports_su
 import { buildRunSummary } from './run_summary.mjs';
 import { feedbackIdentity } from './control_feedback_service.mjs';
 import { loadSourceSelectionConfig } from './literature_config.mjs';
+import { buildRuntimeConfig } from './runtime_config.mjs';
+import { buildLocalStage4ExportSource } from '../stage4/export_source_step.mjs';
 
 const inside = (root, candidate) => { const rel = path.relative(root, candidate); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
 export class ReviewQueryService {
-  constructor({ root, reviewRoot = path.join(root, 'review_results', '文献评价'), feedback, rules }) {
+  constructor({ root, context = buildRuntimeConfig({ cwd: root, env: {}, argv: [] }), reviewRoot = context.reviewRoot, feedback, rules }) {
     Object.assign(this, { root: path.resolve(root), reviewRoot, feedback, rules });
-    this.researchRoot = path.join(this.root, 'review_results');
+    this.researchRoot = path.resolve(context.researchRoot);
+    this.localRepository = context.localRepository;
+    this.runRoot = context.runRoot || path.join(reviewRoot, 'runs');
+    this.allowedRoots = [reviewRoot, this.researchRoot, this.localRepository?.root].filter(Boolean).map((entry) => path.resolve(entry));
   }
   async read(file) {
-    if (!inside(this.root, path.resolve(file))) throw new Error('ARTIFACT_PATH_BLOCKED');
+    const allowed = this.allowedRoots.filter((root) => inside(root, path.resolve(file)));
+    if (!allowed.length) throw new Error('ARTIFACT_PATH_BLOCKED');
     try {
       const real = await fs.realpath(file);
-      if (!inside(await fs.realpath(this.root), real)) throw new Error('ARTIFACT_PATH_BLOCKED');
+      const roots = await Promise.all(allowed.map((root) => fs.realpath(root).catch(() => null)));
+      if (!roots.some((root) => root && inside(root, real))) throw new Error('ARTIFACT_PATH_BLOCKED');
       return JSON.parse(await fs.readFile(real, 'utf8'));
     } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   }
   async runs() {
-    const runRoot = path.join(this.reviewRoot, 'runs');
+    const runRoot = this.runRoot;
     let dirs;
     try { dirs = await fs.readdir(runRoot, { withFileTypes: true }); }
     catch (error) { if (error.code === 'ENOENT') return []; throw error; }
@@ -33,14 +40,25 @@ export class ReviewQueryService {
     return runs.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
   }
   pipeline(run) {
-    const artifact = run.artifacts?.find((entry) => entry.kind === 'pipeline' && entry.rootKey === 'research');
+    const base = this.localRepository?.root || this.researchRoot;
+    const artifact = run.artifacts?.find((entry) => entry.kind === 'pipeline' && entry.rootKey === (this.localRepository ? 'local' : 'research'));
     if (!artifact || typeof artifact.path !== 'string') return null;
-    const file = path.resolve(this.researchRoot, artifact.path);
-    return inside(this.researchRoot, file) ? file : null;
+    const file = path.resolve(base, artifact.path);
+    return inside(base, file) ? file : null;
   }
   async latestWeeklyData() {
     for (const run of await this.runs()) {
       if (!run.artifacts?.some((artifact) => artifact.kind === 'weekly_export')) continue;
+      if (this.localRepository) {
+        if (run.pipelineMode !== 'local' || run.status !== 'completed') continue;
+        const snapshot = await this.read(this.localRepository.papersPath);
+        if (!snapshot) continue;
+        if (snapshot.schema_version !== 1 || !Array.isArray(snapshot.papers)) throw new Error('LOCAL_PAPERS_SCHEMA_UNSUPPORTED');
+        const pipeline = this.pipeline(run);
+        const report = pipeline ? await this.read(path.join(pipeline, 'run_report.json')) : null;
+        const source = buildLocalStage4ExportSource({ papers: snapshot.papers, runReport: report || {} });
+        return { run, report: report || {}, writeback: null, items: source.finalPayload.triaged };
+      }
       const pipeline = this.pipeline(run);
       if (!pipeline) continue;
       const report = await this.read(path.join(pipeline, 'run_report.json'));
@@ -67,7 +85,7 @@ export class ReviewQueryService {
         translatedTitle: String(item.translated_title || item.title_translation || item.shortTitle || ''),
         authors: (Array.isArray(item.authors) ? item.authors : [item.authors || '']).map((author) => typeof author === 'string' ? author : [author?.firstName, author?.lastName].filter(Boolean).join(' ')), journal: String(item.journal || item.publicationTitle || ''), year: String(item.year || ''),
         doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), source: String(item.source || item.source_type || ''),
-        grade: item.final_grade || item.grade || '', zotero: 'admitted',
+        grade: item.final_grade || item.grade || '', zotero: this.localRepository ? 'not_used_local' : 'admitted',
         integrity: item.integrity_status || null, needsReview: item.needs_human_review === true,
         feedback: current.find((entry) => entry.keys.some((key) => keys.includes(key)))?.value || null,
       };

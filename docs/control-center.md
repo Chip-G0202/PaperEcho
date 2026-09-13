@@ -11,7 +11,7 @@ node workflow/tools/web/server.mjs
 打开 <http://127.0.0.1:8765>；终端 Ctrl+C 停止服务。无需安装新依赖、构建前端或启动数据库。服务不会启动 workflow，不会修改调度器，也不会进行 Zotero readiness probe。原 Desktop/Web/Local launcher 完全独立运行。
 
 1. **概览**：最近可用 Weekly、可识别的 Radar、最近运行结果、来源与审核数量。无可靠证据的状态显示未知；Zotero 只反映最近写入记录，不表示实时连接正常。
-2. **Weekly 文献**：每页 50 篇，基于 registered run manifest 找到成功 Stage4，再经过现有 verified-write filter，绝不直接展示 Stage1 全候选池。中文、长标题和缺 DOI 均支持；只要存在其他可靠 canonical identity 即可反馈。
+2. **Weekly 文献**：每页 50 篇，基于实际运行根的 registered run manifest 查询。Desktop/Web 经过现有 verified-write filter；Local 展示 repository 当前文献，复用 Local Stage4 的筛选规则，不依赖会被清理的临时 export source。绝不直接展示 Stage1 全候选池。中文、长标题和缺 DOI 均支持；只要存在其他可靠 canonical identity 即可反馈。
 3. **研究反馈**：自然语言直接调用共享 evaluation 核心，先保存收据再尝试处理。需要原有 LLM 配置。失败保留输入，显示 blocker；重试相同请求不会重复生成已完成建议。网页不显示 prompt 或 raw LLM response。
 4. **待确认建议**：支持 Accept / Reject / Revise then accept。接受会再次询问人工确认；安全校验通过后才修改正式正文。拒绝不会写正式规则。
 5. **Settings**：按 General、Models、Sources、Search、RSS、Ranking / Review、Radar、Weekly、Integrity、Zotero、Notifications、Credentials、Advanced 分组。原配置文件仍由原 owner 持有；修改不会导致文件物理合并。
@@ -43,7 +43,7 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 
 ## 当前能力边界
 
-- 查询覆盖默认 review root 下注册的 Desktop/Web Weekly runs。未注册的历史输出、外部自定义 outputRoot、Local repository review 查询不会自动扫描或迁移；继续使用原报告。
+- 查询覆盖正式 resolver 选定的 Desktop/Web runtime roots 和 Local output root。未注册历史输出不自动扫描或迁移；不会混入仓库默认根中其他实例的数据。
 - 下一次调度只有在可可靠读取时才应显示；当前显示未知。Weekly 间隔只读，不重写正式 scheduler state。
 - 等级复审和 literature overview 使用现有 preference learning 模型配置，不增加第二套模型 owner。
 - 缺少 owner JSON 时设置只显示未初始化；按原配置指南初始化后再使用网页。
@@ -56,11 +56,11 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 
 ## v2.4 最终验收差距分类
 
-审计基线为 `c9a337a`；沿用已通过的定向测试、check 和 1171/1171 全量回归，本次未修改业务代码或重跑全量测试。将上述 8 条边界与凭据、兼容约定拆分归并，并单列明确非目标，共 13 项：A 1、B 7、C 2、D 3。
+原审计基线为 `c9a337a`，在 `a8be516` 中分类为 13 项：A 1、B 7、C 2、D 3。本次只复验唯一 A 项：路径修复后 64 项定向测试、check、1176/1176 全量回归通过，A 项已 resolved；其余 12 项分类沿用，不扩大范围。
 
 | 名称 | 当前实际状态 | 对核心用户路径的影响与理由 | 分类 |
 |---|---|---|---|
-| 当前运行根及 Local 查询 | 网页固定查询仓库内默认 review root 的 Desktop/Web artifact；未接入配置的运行根或 Local output root | **阻断受影响用户的文献查看与论文反馈**。这些是已有受支持的运行配置，不是未注册历史数据；已有当前报告也可能显示为空 | A. Release blocker |
+| 当前运行根及 Local 查询 | 启动时复用 Runner 配置和 runtime_config，向查询、论文反馈、研究评价及建议服务注入同一上下文 | 默认、configured project/output/research roots、Local 均可查看当前文献并写入对应 review root；默认根冲突数据不被误读误写 | Resolved（原 A） |
 | 全量历史扫描／迁移 | 只支持显式单向 legacy import，不自动扫描全部历史输出 | 不影响新一期正常使用；原始 v2.4 明确不要求迁移所有历史数据 | C. Explicit v2.4 non-goal |
 | 下一次调度／实时状态 | 无可靠证据显示未知；Zotero 为历史写入状态，非实时连接检测 | 不影响查看、反馈或配置；不把未知状态冒充正常 | D. Deferred enhancement |
 | Weekly 间隔编辑 | 只读，正式 scheduler 仍由原 owner 管理 | 已配置用户可继续按原调度运行；网页调度管理不是日常反馈前提 | D. Deferred enhancement |
@@ -74,9 +74,11 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 | Legacy 与 identity | XLSX/DOCX 读写兼容，Web 单独提交 canonical feedback；identity 不确定时拒绝 | 正常网页反馈不需要打开 XLSX/DOCX；无危险双向同步，不能可靠匹配的个例不猜测 | B. Accepted safety boundary |
 | 外部产品与分发能力 | Bot／QQ／Feishu、Installer／Portable、Backup/Restore UI、auto-update、Electron/Tauri、cloud/multi-user、依赖升级不在范围 | 原始任务明确排除，不属于 v2.4 未完成项 | C. Explicit v2.4 non-goal |
 
-**结论：V2.4 NOT RELEASE READY。唯一 blocker 是当前运行数据的根目录／路径覆盖差距。** 默认根 Desktop/Web 的核心网页路径已有实现和回归证据；但尚不能把结论扩大到已有受支持的其他运行根与 Local 用户。
+**结论：V2.4 RELEASE READY。原唯一 blocker 已解决。** 其余 accepted safety boundaries、明确非目标及 deferred enhancements 不阻塞 v2.4；未创建 tag、发布或同步 Production。
 
-依据：`control_application_services.mjs` 默认把 feedback/review root 设为仓库下 `review_results/文献评价`；`control_review_query_service.mjs` 固定 researchRoot 并只读取该根的 manifests、Desktop source 和 writeback summary。原 Runner 的 `config_loader.mjs` 支持 `common.projectRoot`，`preflight.mjs` 使用实际 runtime.reviewRoot 或 Local outputRoot 下的 runs。网页未复用该选择，既无法查到这些当前报告，也没有为它们提供论文选择和反馈入口。该差距需要接入既有路径／查询 owner 并定向验证；本次只审计，不修改实现，不连接 Production。
+长期约定：Control Center/CLI/workflow 必须共享 `runtime_config.mjs` path owner，Web 不维护独立 root resolution。`resolveApplicationRuntimeContext` 复用 Runner 参数及配置优先级，组合 `buildRuntimeConfig`、`buildLocalRuntimeConfig` 与 LocalRepository 的既有路径；不执行 preflight、workflow 或 repository.load。网页支持既有 `--config`、`--mode`、Local `--output-root` 参数及原环境/config 覆盖，不新增 Web 专属 root 配置。未配置时保持默认根；指定但无数据的根显示空结果，不回退到其他实例；无效配置在监听前失败。
+
+canonical feedback、研究评价收据和 pending suggestions 均使用解析后的 runtime.reviewRoot（默认仍为 `review_results/文献评价`；Local 为 output root 下对应 review root）。Local 当前文献来自既有 papers snapshot，经共享 Stage4 builder 筛选；不调用会写索引的 repository.load。Runner settings 写入实际选中的配置文件；领域配置和凭据仍保持原 owner 位置。运行上下文在启动时确定，修改路径配置后需重启 Control Center，不迁移、复制或同步任何数据。
 
 ## 凭据安全写入约定
 
@@ -93,6 +95,7 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 ```sh
 node --test workflow/tests/control_services.test.mjs workflow/tests/control_http.test.mjs
 node --test workflow/tests/control_credentials.test.mjs
+node --test workflow/tests/control_runtime_roots.test.mjs workflow/tests/runtime_safety_config.test.mjs workflow/tests/runner_config.test.mjs workflow/tests/local_pipeline.test.mjs
 npm run check
 npm test
 ```

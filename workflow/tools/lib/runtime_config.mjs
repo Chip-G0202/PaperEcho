@@ -217,3 +217,27 @@ export function applySampleLimit(items = [], limit = null, appliedAt = "pre_tria
     },
   };
 }
+
+// Optional interfaces share Runner configuration precedence and the workflow path owners.
+export async function resolveApplicationRuntimeContext({ cwd = process.cwd(), env = process.env, argv = [] } = {}) {
+  const { parseRunnerArgs } = await import('../runner/args.mjs');
+  const { resolveRunnerConfiguration } = await import('../runner/config_loader.mjs');
+  const { existsSync } = await import('node:fs');
+  const cli = parseRunnerArgs(['--check', ...argv], { cwd, allowUnresolvedMode: true });
+  const defaultConfigPath = path.join(cwd, 'config', 'paperecho.config.json');
+  // The optional UI remains usable before a Runner config has been initialized.
+  if (!cli.mode && !cli.configPath && !env.PAPERECHO_CONFIG && !existsSync(defaultConfigPath)) cli.mode = 'desktop';
+  const resolved = await resolveRunnerConfiguration(cli, { cwd, env, defaultConfigPath });
+  let runtimeEnv = resolved.env;
+  let localRepository = null;
+  if (resolved.options.mode === 'local') {
+    const local = buildLocalRuntimeConfig({ cwd, argv: resolved.options.outputRoot ? ['--output-root', resolved.options.outputRoot] : [] });
+    runtimeEnv = { ...runtimeEnv, review_results_OUTPUT_ROOT: local.outputRoot };
+    const { LocalRepository } = await import('../local/local_repository.mjs');
+    localRepository = new LocalRepository(local.outputRoot);
+  }
+  const runtime = buildRuntimeConfig({ cwd, env: runtimeEnv, argv: [] });
+  return { ...runtime, env: runtimeEnv, mode: resolved.options.mode, configPath: resolved.options.configPath,
+    runRoot: localRepository?.runsDir || path.join(runtime.reviewRoot, 'runs'),
+    localRepository };
+}
