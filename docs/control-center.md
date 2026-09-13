@@ -52,7 +52,31 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 - Credentials 支持 configured/not configured、Replace、Clear；覆盖 TITLE_TRANSLATION_API_KEY、PREFERENCE_LEARNING_API_KEY、EASYSCHOLAR_SECRET_KEY、SMTP_PASS、ZOTERO_API_KEY。Configured 不等于连接有效。没有可复用的安全连接测试 owner，因此 Test 未开放。不提供 raw secret GET，不创建 credential vault。
 - 低风险规则正文变更先保存固定 `.backup`，再原子替换正文；日志写入失败时恢复正文。进程在正文提交后中断、决策日志提交前中断时，pending 保留，重试经已有 duplicate guard 不重复追加。
 
-上述边界是实际未覆盖能力，不能视为完整 v2.4 验收全部完成。没有 tag、release 或自动更新切换。
+这些边界不能统一等同于“v2.4 未完成”：安全限制、明确非目标和可推迟增强均不阻塞发布。发布判断应仅依据下方核心路径差距。没有 tag、release 或自动更新切换。
+
+## v2.4 最终验收差距分类
+
+审计基线为 `c9a337a`；沿用已通过的定向测试、check 和 1171/1171 全量回归，本次未修改业务代码或重跑全量测试。将上述 8 条边界与凭据、兼容约定拆分归并，并单列明确非目标，共 13 项：A 1、B 7、C 2、D 3。
+
+| 名称 | 当前实际状态 | 对核心用户路径的影响与理由 | 分类 |
+|---|---|---|---|
+| 当前运行根及 Local 查询 | 网页固定查询仓库内默认 review root 的 Desktop/Web artifact；未接入配置的运行根或 Local output root | **阻断受影响用户的文献查看与论文反馈**。这些是已有受支持的运行配置，不是未注册历史数据；已有当前报告也可能显示为空 | A. Release blocker |
+| 全量历史扫描／迁移 | 只支持显式单向 legacy import，不自动扫描全部历史输出 | 不影响新一期正常使用；原始 v2.4 明确不要求迁移所有历史数据 | C. Explicit v2.4 non-goal |
+| 下一次调度／实时状态 | 无可靠证据显示未知；Zotero 为历史写入状态，非实时连接检测 | 不影响查看、反馈或配置；不把未知状态冒充正常 | D. Deferred enhancement |
+| Weekly 间隔编辑 | 只读，正式 scheduler 仍由原 owner 管理 | 已配置用户可继续按原调度运行；网页调度管理不是日常反馈前提 | D. Deferred enhancement |
+| 模型能力共享 owner | 等级复审、overview 复用 preference learning 模型配置 | 常用模型可修改，不需要为每个能力制造独立配置 | B. Accepted safety boundary |
+| 缺失配置文件的初始化 | 显示未初始化，首次按原配置指南准备文件 | 初次安装配置入口未统一；已有 v2.3 项目的日常设置不因此缺失。不会自动选择或切换运行模式 | D. Deferred enhancement |
+| Config Registry 和检索式 owner | 固定字段白名单；keyword groups 存在时通过词组控件生成 PubMed query | 模型、sources、搜索、RSS、review、Radar、Weekly、Integrity、Zotero、邮件均有常用控件；拒绝任意 JSON/path 编辑不阻断正常设置 | B. Accepted safety boundary |
+| 高风险／删除／搜索建议 | 保持 pending，返回 requires_manual_action、target、risk、原因和下一步 | 普通建议可接受、拒绝、修订；危险变更不自动应用是明确安全策略，不是按钮失败 | B. Accepted safety boundary |
+| Credentials Test／原值读取 | 五类本地凭据可 Replace/Clear；Test 未开放，原值永不返回 | UI 明示 Configured 不等于连接成功；缺少安全 test owner 不影响凭据维护 | B. Accepted safety boundary |
+| 外部凭据和 env 格式 | 外部覆盖只读；含糊格式、重复 key、非 allowlist 值拒绝写入 | 支持格式的本地凭据可维护；避免破坏外部注入、其他 entries 或泄露 secret | B. Accepted safety boundary |
+| 规则两文件崩溃恢复 | 正文／日志分别原子写入；失败回滚，崩溃后保留 pending，经 duplicate guard 重试 | 不误报正式应用成功，不重复添加；保留既有物理 owner | B. Accepted safety boundary |
+| Legacy 与 identity | XLSX/DOCX 读写兼容，Web 单独提交 canonical feedback；identity 不确定时拒绝 | 正常网页反馈不需要打开 XLSX/DOCX；无危险双向同步，不能可靠匹配的个例不猜测 | B. Accepted safety boundary |
+| 外部产品与分发能力 | Bot／QQ／Feishu、Installer／Portable、Backup/Restore UI、auto-update、Electron/Tauri、cloud/multi-user、依赖升级不在范围 | 原始任务明确排除，不属于 v2.4 未完成项 | C. Explicit v2.4 non-goal |
+
+**结论：V2.4 NOT RELEASE READY。唯一 blocker 是当前运行数据的根目录／路径覆盖差距。** 默认根 Desktop/Web 的核心网页路径已有实现和回归证据；但尚不能把结论扩大到已有受支持的其他运行根与 Local 用户。
+
+依据：`control_application_services.mjs` 默认把 feedback/review root 设为仓库下 `review_results/文献评价`；`control_review_query_service.mjs` 固定 researchRoot 并只读取该根的 manifests、Desktop source 和 writeback summary。原 Runner 的 `config_loader.mjs` 支持 `common.projectRoot`，`preflight.mjs` 使用实际 runtime.reviewRoot 或 Local outputRoot 下的 runs。网页未复用该选择，既无法查到这些当前报告，也没有为它们提供论文选择和反馈入口。该差距需要接入既有路径／查询 owner 并定向验证；本次只审计，不修改实现，不连接 Production。
 
 ## 凭据安全写入约定
 
