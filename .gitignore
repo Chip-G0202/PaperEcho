@@ -1,5 +1,7 @@
 # Secrets and local env
 .env
+.env.*.tmp
+.env.lock
 .env.backup
 .env.backup.*
 .env.*.local

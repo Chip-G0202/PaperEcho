@@ -78,7 +78,11 @@ async function suggestions() {
       const actions = el('div', undefined, 'actions');
       for (const [decision, text] of [['accepted', 'Accept · 接受'], ['rejected', 'Reject · 拒绝'], ['revised', 'Revise then accept · 修改后接受']]) actions.append(button(text, async () => {
         if (!confirm(`确认${text}？正式变更仍需通过服务安全校验。`)) return;
-        await api('/api/decision', { id, decision, revisedRule: revised.value, humanApproval: true }); notice.textContent = '决策已保存。'; await render();
+        const result = await api('/api/decision', { id, decision, revisedRule: revised.value, humanApproval: true });
+        notice.textContent = result.application_status === 'requires_manual_action'
+          ? `未应用 · 需人工处理 · ${result.target} · 风险：${result.risk}。${result.explanation}${result.next_action}`
+          : '决策已保存。';
+        await render();
       }));
       card.append(label('修订内容（仅修改后接受时使用）', revised), actions);
     }
@@ -122,8 +126,24 @@ async function settings() {
       })); section.append(row);
     }
     if (group === 'Credentials') {
-      for (const item of await api('/api/credentials')) section.append(el('p', `${item.id}: ${item.configured ? 'Configured' : 'Not configured'}`));
-      section.append(el('p', '当前版本仅显示状态；replace / clear / test 尚无安全写入 owner，请继续使用现有密钥配置方式。', 'muted'));
+      for (const item of await api('/api/credentials')) {
+        const row = el('div', undefined, 'setting');
+        row.append(el('p', `${item.id}: ${item.configured ? 'Configured' : 'Not configured'}`));
+        if (item.writable) {
+          const input = el('input'); input.type = 'password'; input.autocomplete = 'new-password'; input.maxLength = 4096;
+          row.append(label('新凭据（不会回显原值）', input), button('Replace · 替换', async () => {
+            const value = input.value; input.value = '';
+            await api('/api/credentials', { id: item.id, action: 'replace', value });
+            notice.textContent = `凭据已替换。${item.reload}`; await render();
+          }), button('Clear · 清除', async () => {
+            if (!confirm(`清除 ${item.id}？依赖该凭据的功能可能暂不可用。`)) return;
+            input.value = ''; await api('/api/credentials', { id: item.id, action: 'clear' });
+            notice.textContent = `凭据已清除。${item.reload}`; await render();
+          }));
+        } else row.append(el('p', item.reason, 'muted'));
+        section.append(row);
+      }
+      section.append(el('p', 'Configured 仅表示已配置，不代表连接成功。暂无可复用的安全连接测试入口；Test 未开放。', 'muted'));
     }
     main.append(section);
   }

@@ -17,6 +17,18 @@ export class RuleSuggestionService {
     } catch (error) { if (error.code === 'ENOENT') return { suggestions: [] }; throw error; }
   }
   async list() { return (await this.readLog()).suggestions; }
+  async decideWithReceipt(input) {
+    try { return await this.decide(input); }
+    catch (error) {
+      if (!['NO_FORMAL_RULE_APPLY', 'FORMAL_MUTATION_OWNER_UNVERIFIED'].includes(error.message)) throw error;
+      const item = (await this.list()).find((entry) => (entry.suggestion_id || entry.id) === input.id);
+      return { id: input.id, status: item.status, requested_decision: input.decision,
+        application_status: 'requires_manual_action', formal_rules_modified: false,
+        target: item.target || 'screening_standards.md', risk: item.risk_level || 'unknown', reason: error.message,
+        explanation: error.message === 'NO_FORMAL_RULE_APPLY' ? '当前策略禁止正式规则写入，建议未应用。' : '该目标、变更类型或风险级别没有已验证的自动应用入口，建议未应用。',
+        next_action: '保留待处理或拒绝建议。确需变更时，使用现有规则/检索配置维护流程，人工核对范围、验证及备份；网页确认不能解除安全限制。' };
+    }
+  }
   async decide({ id, decision, revisedRule = '', humanApproval = false }) {
     if (!['accepted', 'rejected', 'revised'].includes(decision)) throw new Error('SUGGESTION_DECISION_INVALID');
     if (humanApproval !== true) throw new Error('HUMAN_APPROVAL_REQUIRED');

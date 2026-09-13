@@ -2,7 +2,7 @@
 
 日常配置推荐使用 [PaperEcho Control Center](../docs/control-center.md) 的 Settings。逻辑 registry 位于 `workflow/tools/lib/control_config_service.mjs`，配置仍保存在下列既有文件中，不新增 mega-config。Web 只提供 allowlist 字段；保存前进行类型、范围及相应 owner 校验，失败保留旧值，下次运行读取新值。
 
-Credentials 当前只显示配置状态，继续由环境/项目 `.env` 管理，不支持网页回显、replace、clear 或未经验证的 test。缺少既有配置文件时页面显示“尚未初始化”，不会创建一个可能改变 mode 选择的新配置文件。Weekly 调度间隔只读；PubMed keyword groups 由现有 owner 生成 query，不能通过 raw query 绕开它。
+Credentials 继续由环境/项目 `.env` 管理，网页支持 allowlist 本地凭据的状态、Replace、Clear，绝不回显原值；外部环境覆盖时只读。SecretService 保留其他 entries，严格检查可支持的单行格式后原子写入；不支持的格式保持原文件。Test 尚无可复用的安全 owner，未开放。缺少既有配置文件时页面显示“尚未初始化”，不会创建一个可能改变 mode 选择的新配置文件。Weekly 调度间隔只读；PubMed keyword groups 由现有 owner 生成 query，不能通过 raw query 绕开它。
 
 这里集中放置用户可直接修改的配置、规则和参数。
 

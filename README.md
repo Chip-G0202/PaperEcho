@@ -22,7 +22,7 @@ PaperEcho 不替代研究者作出判断。它负责整理不断传来的文献�
 
 推荐通过本地 **PaperEcho Control Center** 浏览最近 Weekly、提交论文反馈和研究评价、处理规则建议与管理常用设置。在项目根目录运行 `node workflow/tools/web/server.mjs`，打开 [本地 Control Center](http://127.0.0.1:8765)。关闭网页服务不影响原有 workflow。
 
-XLSX、`screening_standards.docx` 和直接配置编辑继续作为兼容入口。当前 Credentials 仅显示状态；高风险建议在没有安全 apply owner 时保持待确认。使用范围与升级边界见 [Control Center 使用与兼容说明](docs/control-center.md)。
+XLSX、`screening_standards.docx` 和直接配置编辑继续作为兼容入口。Credentials 支持本地凭据状态、替换和清除；高风险建议在没有安全 apply owner 时保持待确认，并说明未应用原因及人工处理方式。使用范围与升级边界见 [Control Center 使用与兼容说明](docs/control-center.md)。
 
 ### v2.3 稳定基线
 

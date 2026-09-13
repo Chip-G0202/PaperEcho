@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-function parseEnvFile(text) {
+export function parseEnvFile(text) {
   const out = {};
   const lines = String(text || "").split(/\r?\n/);
   for (const rawLine of lines) {

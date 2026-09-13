@@ -69,7 +69,7 @@ export async function startControlCenter({ root = path.resolve(here, '../../..')
         if (decoded === '/api/status') return send(200, await services.review.status());
         if (decoded === '/api/weekly') return send(200, await services.review.weekly({ offset: Number(url.searchParams.get('offset') || 0), limit: Number(url.searchParams.get('limit') || 50) }));
         if (decoded === '/api/settings') return send(200, await services.config.list());
-        if (decoded === '/api/credentials') return send(200, services.secrets.list());
+        if (decoded === '/api/credentials') return send(200, await services.secrets.list());
         if (decoded === '/api/suggestions') {
           const list = await services.rules.list();
           return send(200, list.map((entry) => Object.fromEntries(['id', 'suggestion_id', 'target', 'change_type', 'rule_text', 'suggested_rule', 'rationale', 'evidence_titles', 'evidence_text_excerpt', 'risk_level', 'status'].map((key) => [key, entry[key]]))));
@@ -79,6 +79,11 @@ export async function startControlCenter({ root = path.resolve(here, '../../..')
       if (req.headers.origin !== `http://${req.headers.host}`) return send(403, { error: 'ORIGIN_REJECTED' });
       if (!equal(req.headers['x-csrf-token'], token)) return send(403, { error: 'CSRF_REQUIRED' });
       const input = await body(req);
+      if (decoded === '/api/credentials') {
+        if (input.action === 'replace') return send(200, await services.secrets.replace(input.id, input.value));
+        if (input.action === 'clear') return send(200, await services.secrets.clear(input.id));
+        return send(400, { error: 'CREDENTIAL_ACTION_NOT_SUPPORTED' });
+      }
       if (decoded === '/api/feedback') {
         const paper = await services.review.resolvePaper(input.runId, input.paperId);
         return send(200, await services.feedback.submit({ kind: 'paper_feedback', paper, requestId: input.requestId, value: input.value, reason: input.reason }));

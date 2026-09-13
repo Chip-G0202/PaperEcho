@@ -48,11 +48,19 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 - 等级复审和 literature overview 使用现有 preference learning 模型配置，不增加第二套模型 owner。
 - 缺少 owner JSON 时设置只显示未初始化；按原配置指南初始化后再使用网页。
 - ConfigService 不提供 arbitrary JSON/path API。PubMed keyword groups 更新由现有 query builder 生成检索式；已有 keyword groups 时直接 query 编辑被拒绝。
-- 安全 apply 当前仅支持正文追加及修订后追加。高风险、删除、已有规则替换、搜索关键词 suggestion、其他 target mutation 返回 `FORMAL_MUTATION_OWNER_UNVERIFIED`，保持 pending；不把“接受状态”当作成功应用证据。可以拒绝这些建议，或继续使用已有明确安全的维护路径处理。
-- Credentials 仅显示 configured/not configured；没有安全写入/test owner，因此 replace/clear/test 未开放。不提供 raw secret GET，也不存储新的 credential vault。
+- 安全 apply 当前仅支持正文追加及修订后追加。高风险、删除、已有规则替换、搜索关键词 suggestion、其他 target mutation 保持 pending；Control Center 返回 `application_status: requires_manual_action`、target、risk、未应用原因和人工处理说明。这是预期安全行为，不表示按钮失效或正式规则已应用。可以拒绝建议，或通过现有规则/检索配置维护流程人工核对范围、验证和备份；网页确认不能解除 guard。
+- Credentials 支持 configured/not configured、Replace、Clear；覆盖 TITLE_TRANSLATION_API_KEY、PREFERENCE_LEARNING_API_KEY、EASYSCHOLAR_SECRET_KEY、SMTP_PASS、ZOTERO_API_KEY。Configured 不等于连接有效。没有可复用的安全连接测试 owner，因此 Test 未开放。不提供 raw secret GET，不创建 credential vault。
 - 低风险规则正文变更先保存固定 `.backup`，再原子替换正文；日志写入失败时恢复正文。进程在正文提交后中断、决策日志提交前中断时，pending 保留，重试经已有 duplicate guard 不重复追加。
 
 上述边界是实际未覆盖能力，不能视为完整 v2.4 验收全部完成。没有 tag、release 或自动更新切换。
+
+## 凭据安全写入约定
+
+`control_credentials_service.mjs` 中的 SecretService 是唯一网页凭据写入 owner；持久存储仍为项目 `.env`。只接受 allowlist key 和最多 4096 字符的单行值，不接受控制字符或同时包含两种引号的值。格式检查复用既有 loader 的解析结果，并仅支持无重复 key 的单行赋值、空行及注释；多行、export、含糊引号等格式拒绝写入，请通过原环境配置入口维护。未知 entries 保持原样。
+
+写入使用既有原子文件 owner 和锁，临时文件 POSIX mode 为 0600（Windows 继承目录 ACL），不生成含 secret 的备份；`.env`、临时文件和锁均被 gitignore 排除。写入失败不更新当前环境，错误仅返回固定代码。旧值在当前服务进程内继续用于脱敏，清除不会使旧值重新出现在响应中。
+
+当前进程中的外部环境值与本地文件不一致时该项只读，需在原注入入口维护后重启。本地修改对当前 Control Center 和下一次 workflow 生效，已运行的其他进程需重启。Clear 将目标值置空，不修改其他 key；例如 preference learning 仍可能按既有规则回退使用 title translation key。
 
 ## 安全与验证
 
@@ -60,6 +68,7 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 
 ```sh
 node --test workflow/tests/control_services.test.mjs workflow/tests/control_http.test.mjs
+node --test workflow/tests/control_credentials.test.mjs
 npm run check
 npm test
 ```

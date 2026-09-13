@@ -99,3 +99,39 @@ test('research submit, generated suggestion, accept and replay; settings valid/i
   }
   assert.equal((await app.get('/api/credentials')).json.find((item) => item.id === 'SMTP_PASS').configured, true);
 });
+
+test('credential HTTP replace/clear and high-risk decisions give explicit unapplied receipts', async (t) => {
+  const app = await setup(t);
+  const credential = 'http-private-中文-123';
+  const reply = await app.post('/api/credentials', { id: 'TITLE_TRANSLATION_API_KEY', action: 'replace', value: credential });
+  assert.equal(reply.status, 200); assert.equal(reply.text.includes(credential), false);
+  const listed = await app.get('/api/credentials');
+  assert.equal(listed.json.find((entry) => entry.id === 'TITLE_TRANSLATION_API_KEY').configured, true);
+  assert.equal(listed.text.includes(credential), false);
+  assert.equal((await app.post('/api/credentials', { id: 'PATH', action: 'replace', value: credential })).status, 400);
+  assert.equal((await app.post('/api/credentials', { id: 'TITLE_TRANSLATION_API_KEY', action: 'test' })).status, 400);
+  assert.equal((await app.post('/api/credentials', { id: 'TITLE_TRANSLATION_API_KEY', action: 'clear' })).status, 200);
+  assert.equal((await app.get('/api/credentials')).json.find((entry) => entry.id === 'TITLE_TRANSLATION_API_KEY').configured, false);
+  const { ruleSuggestionsLogPath } = await import('../tools/lib/screening_standards_paths.mjs');
+  const log = ruleSuggestionsLogPath(app.reviewRoot);
+  await app.write(log, { suggestions: [
+    { id: 'high', status: 'pending', target: 'pubmed_pmc_search.json', change_type: 'remove_keyword', risk_level: 'high', rule_text: '删除检索词' },
+    { id: 'low', status: 'pending', target: 'screening_standards.md', change_type: 'add_rule', risk_level: 'low', rule_text: '优先机制研究' },
+  ] });
+  const before = await fs.readFile(path.join(app.reviewRoot, 'screening_standards.md'), 'utf8');
+  const search = await fs.readFile(path.join(app.root, 'config', 'pubmed_pmc_search.json'), 'utf8');
+  for (const decision of ['accepted', 'revised']) {
+    const result = await app.post('/api/decision', { id: 'high', decision, revisedRule: '修订', humanApproval: true });
+    assert.equal(result.status, 200); assert.equal(result.json.status, 'pending');
+    assert.equal(result.json.application_status, 'requires_manual_action');
+    assert.equal(result.json.formal_rules_modified, false);
+    assert.equal(result.json.risk, 'high'); assert.equal(result.json.target, 'pubmed_pmc_search.json');
+    assert.ok(result.json.explanation && result.json.next_action);
+  }
+  assert.equal(await fs.readFile(path.join(app.reviewRoot, 'screening_standards.md'), 'utf8'), before);
+  assert.equal(await fs.readFile(path.join(app.root, 'config', 'pubmed_pmc_search.json'), 'utf8'), search);
+  assert.equal(JSON.parse(await fs.readFile(log, 'utf8')).suggestions[0].status, 'pending');
+  const low = await app.post('/api/decision', { id: 'low', decision: 'accepted', humanApproval: true });
+  assert.equal(low.json.status, 'accepted'); assert.equal(low.json.formal_rules_modified, true);
+  assert.equal(low.json.application_status, undefined);
+});

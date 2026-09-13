@@ -124,9 +124,9 @@ test('text and DOCX evaluation share proposal core, text never changes DOCX', as
   assert.equal(legacy.evaluation_text_hash, direct.evaluation_text_hash);
   assert.deepEqual(legacy.rules_added, direct.rules_added);
 });
-test('secret status never returns raw values and redaction removes supplied secrets', () => {
+test('secret status never returns raw values and redaction removes supplied secrets', async () => {
   const service = new SecretService({ env: { SMTP_PASS: 'unique-test-secret' } });
-  assert.equal(JSON.stringify(service.list()).includes('unique-test-secret'), false);
+  assert.equal(JSON.stringify(await service.list()).includes('unique-test-secret'), false);
   assert.equal(service.redact('failure unique-test-secret Bearer xyz'), 'failure [REDACTED] Bearer [REDACTED]');
-  assert.throws(() => service.replace('SMTP_PASS', 'new'), /UNAVAILABLE/);
+  await assert.rejects(service.replace('SMTP_PASS', 'new'), /UNAVAILABLE/);
 });

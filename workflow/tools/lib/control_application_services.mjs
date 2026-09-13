@@ -11,12 +11,12 @@ import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 import { ReviewQueryService } from './control_review_query_service.mjs';
 
 export function createControlServices({ root, reviewRoot = path.join(root, 'review_results', '文献评价'), env = process.env, llmClient = null } = {}) {
-  const secrets = new SecretService({ env });
+  const secrets = new SecretService({ root, env });
   const rules = new RuleSuggestionService({ reviewRoot });
   const config = new ConfigService({ root, env });
   const feedback = new FeedbackService({
     reviewRoot,
-    ruleDecision: (input) => rules.decide(input),
+    ruleDecision: (input) => rules.decideWithReceipt(input),
     researchEvaluation: async ({ text, requestId }) => {
       if (typeof text !== 'string' || !text.trim() || text.length > 20000) throw new Error('EVALUATION_TEXT_INVALID');
       if (!/^[a-zA-Z0-9_-]{1,100}$/.test(requestId || '')) throw new Error('EVALUATION_REQUEST_ID_REQUIRED');
