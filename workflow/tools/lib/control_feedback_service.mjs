@@ -31,6 +31,21 @@ export function currentPaperFeedback(state) {
   for (const entry of state.history) current.set(entry.identity, entry);
   return [...current.values()];
 }
+export function canonicalFeedbackActionRows(state, reviewRoot) {
+  return currentPaperFeedback(state).map((entry) => {
+    const value = (kind) => entry.keys.find((key) => key.startsWith(`${kind}:`))?.slice(kind.length + 1) || '';
+    return {
+      feedback_source: canonicalFeedbackPath(reviewRoot), row_number: entry.revision,
+      date: entry.created_at.slice(0, 10), feedback: entry.feedback,
+      doi: value('doi'), pmid: value('pmid'), pmcid: value('pmcid'),
+      // Deliberately omit title match keys. An unresolved canonical identifier
+      // must stay unresolved rather than becoming a legacy title search.
+      title: '', english_title: '', translated_title: '',
+      title_key: '', english_title_key: '', translated_title_key: '',
+      comment: entry.comment, canonical_identity: entry.identity,
+    };
+  });
+}
 export class FeedbackService {
   constructor({ reviewRoot, researchEvaluation, ruleDecision, atomicOptions } = {}) {
     Object.assign(this, { reviewRoot, researchEvaluation, ruleDecision, atomicOptions });

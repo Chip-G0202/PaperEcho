@@ -11,6 +11,16 @@
 
 ## 1. 能力归属表
 
+Control Center application boundary：
+
+- `workflow/tools/lib/control_application_services.mjs`：组合 services；纯文本评价调用 `stage1/manual_standard_evaluation.mjs` 的共享核心，propose 默认不变。
+- `control_feedback_service.mjs`：canonical paper feedback history/current、幂等提交和批量原子写入；`control_legacy_feedback_adapter.mjs`：单向 XLSX import。
+- `control_config_service.mjs`：固定字段 registry，映射现有 domain JSON；Runner 对象校验仍由 `runner/config_loader.mjs` 持有。
+- `control_rule_suggestion_service.mjs`：人工决策及安全 apply 编排；schema/dedup 仍归 `unified_pending_rule_suggestions.mjs`，正文插入逻辑复用 `screening_standards_rule_suggestions.mjs`。DOCX adapter 调同一 service。
+- `control_review_query_service.mjs`：registered run manifest/Stage4 artifact 只读查询，复用 verified-write filter。
+- `control_credentials_service.mjs`：SecretService 的配置状态和输出脱敏，无独立 credential store。
+- `workflow/tools/web/server.mjs` 与 `web/static/`：loopback HTTP 和 UI，不持有 retrieval、ranking、Zotero、learning 或配置文件写入逻辑。
+
 | 能力 | 当前 Owner | CLI Wrapper | 当前状态 |
 |------|-----------------|-------------|---------|
 | Zotero backend readiness | `workflow/tools/lib/ensure_zotero_backend_ready.mjs` | `workflow/tools/stage0/check_zotero_backend_ready.mjs` | ✅ 已收敛为 thin wrapper |

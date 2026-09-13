@@ -18,6 +18,14 @@ PaperEcho 不替代研究者作出判断。它负责整理不断传来的文献�
 
 ## 更新内容
 
+### Unified Control Center（v2.4 开发版）
+
+推荐通过本地 **PaperEcho Control Center** 浏览最近 Weekly、提交论文反馈和研究评价、处理规则建议与管理常用设置。在项目根目录运行 `node workflow/tools/web/server.mjs`，打开 [本地 Control Center](http://127.0.0.1:8765)。关闭网页服务不影响原有 workflow。
+
+XLSX、`screening_standards.docx` 和直接配置编辑继续作为兼容入口。当前 Credentials 仅显示状态；高风险建议在没有安全 apply owner 时保持待确认。使用范围与升级边界见 [Control Center 使用与兼容说明](docs/control-center.md)。
+
+### v2.3 稳定基线
+
 **PaperEcho V2.3** 让文献追踪从“每周整理一次”，变成更持续、更可靠的研究工作流：平时发现值得关注的新线索，每周统一整理入库，同时关注已收藏文献的撤稿、勘误等重要变化。
 
 - **每日 Radar，更早发现值得关注的新研究。** 每天轻量扫描，筛出值得及时关注的新文献；正式整理和 Zotero 入库仍由周度流程统一完成，避免日常提醒打乱已有文献库。

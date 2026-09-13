@@ -6,6 +6,7 @@ import { getDefaultZoteroLibraryIndexPath, readZoteroLibraryIndex } from "../lib
 import { buildMovePlan, scanFeedbackRows, scanLiteratureRecords } from "../maintenance/archive_history_by_feedback.mjs";
 import { applyCorrectionPlan, buildCorrectionPlan, enrichArchivePlanWithZoteroTitleMatches, readCollections } from "../maintenance/zotero_feedback_collection_corrections.mjs";
 import { buildZoteroCollectionGuard, summarizeCollectionScopeBlocks } from "../lib/zotero_collection_guard.mjs";
+import { readCanonicalFeedback, canonicalFeedbackActionRows } from '../lib/control_feedback_service.mjs';
 
 /**
  * Build collections from local library index to avoid expensive API calls
@@ -95,7 +96,9 @@ export async function runFeedbackItemActionsStep({
       lastKnownPhase = "feedback_item_actions.scanFeedbackRows";
       flushTimingDiagnostics("phase_started", { timing_name: lastKnownPhase });
       const scanFeedbackRowsStarted = Date.now();
-      const feedbackRows = await (dependencies.scanFeedbackRows || scanFeedbackRows)(reviewRoot);
+      const canonical = canonicalFeedbackActionRows(await readCanonicalFeedback(reviewRoot), reviewRoot);
+      const feedbackRows = canonical.length ? canonical : await (dependencies.scanFeedbackRows || scanFeedbackRows)(reviewRoot);
+      feedbackItemActionsReport.feedback_source_kind = canonical.length ? 'canonical_feedback' : 'legacy_workbook';
       recordTiming("feedback_item_actions.scanFeedbackRows", scanFeedbackRowsStarted, {
         rows_count: feedbackRows.length,
       });

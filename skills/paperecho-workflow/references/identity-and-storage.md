@@ -44,3 +44,6 @@ Local snapshots remove Zotero-only `itemKey`, collections, attachments, and rati
 ## Schema changes
 
 Before changing a shared schema or path, identify readers, writers, legacy migration, lock/atomic-write behavior, housekeeping protection, fixtures, and all three path tests. Add compatibility or an explicit migration; never silently create a new authority beside the old one.
+# Control Center feedback boundary
+
+`control_feedback_service.mjs` owns `paper_feedback.json` under the review root. It reuses `literature_identity.mjs`, excludes title-only identity, keeps revision history, and uses lock/atomic replacement. Legacy XLSX import is explicit, one-way and idempotent; uncertain identity blocks import. DOCX remains an input/export adapter. See [Control Center compatibility](../../../docs/control-center.md) for scope and Local JSONL precedence.

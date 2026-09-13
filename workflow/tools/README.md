@@ -1,5 +1,7 @@
 # PaperEcho tools
 
+日常反馈与配置入口：[Control Center](../../docs/control-center.md)。从项目根目录运行 `node workflow/tools/web/server.mjs`。这不会启动文献 workflow；正式生产执行仍使用下方固定 launcher。
+
 本目录包含 PaperEcho 的 shared Runner、底层 production entries、Stage owners、诊断和维护工具。强制规则以根 `AGENTS.md` 为准；本文件只说明当前调用面。
 
 ## 推荐交互式运行

@@ -56,9 +56,9 @@ const contract = {
   runtime: { node: ">=18.0.0", pwsh: ">=7.0.0", platforms: ["win32", "darwin"] },
 };
 
-async function temp(t, prefix = "paperecho-update-test-") {
+async function temp(t, prefix = "paperecho-update-test-", maxRetries = 0) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries, retryDelay: 20 }));
   return root;
 }
 
@@ -131,18 +131,22 @@ function fixtureRunner(targetRoot, liveRoot, calls = []) {
 }
 
 async function makeGitUpgrade(t) {
-  const root = await temp(t, "paperecho-update-git-");
+  // Windows can briefly retain directory handles after synchronous Git exits.
+  // Bound cleanup to three retries (120 ms total); persistent failures still fail the test.
+  const root = await temp(t, "paperecho-update-git-", process.platform === "win32" ? 3 : 0);
   const source = path.join(root, "source"); const live = path.join(root, "live");
   await fs.mkdir(source);
   const cmd = (args, cwd = source) => runCommand("git", args, { cwd });
   cmd(["init", "-q", "-b", "main"]); cmd(["config", "user.email", "fixture@example.test"]); cmd(["config", "user.name", "Fixture"]);
+  // Git auto-maintenance can detach and retain the fixture cwd after spawnSync returns.
+  cmd(["config", "maintenance.auto", "false"]); cmd(["config", "gc.auto", "0"]);
   await write(source, "docs/app.txt", "old\n"); await write(source, "config/user.json", "default-old\n");
   await write(source, "skills/paperecho-update/references/update-contract.json", `${JSON.stringify(contract)}\n`);
   cmd(["add", "docs/app.txt", "config/user.json", "skills/paperecho-update/references/update-contract.json"]); cmd(["commit", "-q", "-m", "old"]); cmd(["tag", "v2.2"]);
   const oldCommit = cmd(["rev-parse", "HEAD"]);
   await fs.writeFile(path.join(source, "docs/app.txt"), "new\n"); await fs.writeFile(path.join(source, "config/user.json"), "default-new\n"); await write(source, "config/new-user.json", "default-new-file\n");
   cmd(["add", "."]); cmd(["commit", "-q", "-m", "new"]); cmd(["tag", "v2.3"]); const newCommit = cmd(["rev-parse", "HEAD"]);
-  runCommand("git", ["clone", "-q", source, live]); cmd(["checkout", "-q", "-b", "stable", "v2.2"], live);
+  runCommand("git", ["clone", "-q", "-c", "maintenance.auto=false", "-c", "gc.auto=0", source, live]); cmd(["checkout", "-q", "-b", "stable", "v2.2"], live);
   await fs.writeFile(path.join(live, "config/user.json"), "my-user-config\n");
   const oldManaged = await fs.readFile(path.join(live, "docs/app.txt"), "utf8");
   const targetHash = (await hashFile(path.join(source, "docs/app.txt"))).hash;

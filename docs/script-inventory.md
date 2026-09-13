@@ -16,6 +16,8 @@
 
 ## Runner and launchers
 
+`node workflow/tools/web/server.mjs` 启动本地 Control Center（默认 `127.0.0.1:8765`）。它是可选交互入口，不是 production launcher，不启动 Stage1–Stage5、不操作调度器；业务请求只调用 `lib/control_*_service.mjs` application services。停止服务不影响上述固定运行链路。
+
 | Path | Role | Direct user run | Production entry | Called by Skill/Runner | Side effects | Scheduled automation |
 |---|---|---|---:|---|---|---|
 | `workflow/tools/runner/main.mjs` | shared config, preflight, production invocation, current-run validation | advanced use only; explicit `--mode` required | no | launchers call it | `--check` read-only; `--run` inherits selected entry effects | only through an owned wrapper |

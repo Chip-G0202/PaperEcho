@@ -6,8 +6,11 @@ import test from "node:test";
 
 import { translateTitlesBatch } from "../tools/lib/title_translation_support.mjs";
 
-test("title translation owns one bounded LLM controller and preserves input mapping", async () => {
+test("title translation owns one bounded LLM controller and preserves input mapping", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperecho-llm-adaptive-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  // This tests the 429 response, not wall-clock latency under parallel test load.
+  t.mock.method(Date, "now", () => 1700000000000);
   const titles = Array.from({ length: 8 }, (_, index) => `Title ${index}`);
   let active = 0;
   let peak = 0;
@@ -29,7 +32,7 @@ test("title translation owns one bounded LLM controller and preserves input mapp
       const call = calls++;
       active += 1;
       peak = Math.max(peak, active);
-      await new Promise((resolve) => setTimeout(resolve, call === 0 ? 1 : 4));
+      await Promise.resolve();
       active -= 1;
       return call === 0
         ? { ok: false, zh: title, reason: "HTTP_429", status: 429 }
@@ -44,4 +47,7 @@ test("title translation owns one bounded LLM controller and preserves input mapp
   assert.equal(result.usage.adaptive_concurrency.max_concurrency, 4);
   assert.equal(result.usage.adaptive_concurrency.current_concurrency, 2);
   assert.equal(result.usage.adaptive_concurrency.pressureSignals, 1);
+  assert.equal(result.usage.adaptive_concurrency.latencySignals, 0);
+  assert.equal(result.usage.adaptive_concurrency.decreases, 1);
+  assert.equal(active, 0);
 });

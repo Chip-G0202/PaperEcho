@@ -169,7 +169,10 @@ test("ready --run calls the fixed production entry once and validates once", asy
 test("preflight resolves the shared Stage0 entry for Desktop/Web and Local entry for Local", async (t) => {
   const paths = await fixture();
   t.after(() => fs.rm(paths.root, { recursive: true, force: true }));
-  const baseDeps = { env: {}, entries: entries(paths.entry), existsSync: (value) => value === paths.entry, resolveLlmRuntimeImpl: () => ({ apiKeyConfigured: true }) };
+  // Keep the fake entry outside this test's project, even with workspace-local TEMP.
+  const repoRoot = path.join(paths.root, 'project');
+  await fs.mkdir(repoRoot);
+  const baseDeps = { repoRoot, env: {}, entries: entries(paths.entry), existsSync: (value) => value === paths.entry, resolveLlmRuntimeImpl: () => ({ apiKeyConfigured: true }) };
   const desktop = await runPreflight({ ...localOptions(paths), mode: "desktop", input: "", outputRoot: "", llmMode: "" }, { ...baseDeps, desktopApplicationImpl: () => "zotero", findExecutableImpl: () => "zotero-cli" });
   const web = await runPreflight({ ...localOptions(paths), mode: "web", input: "", outputRoot: "", llmMode: "" }, { ...baseDeps, env: { ZOTERO_API_KEY: "secret" } });
   const local = await runPreflight(localOptions(paths), baseDeps);

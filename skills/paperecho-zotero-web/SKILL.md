@@ -9,6 +9,8 @@ No-desktop Zotero Web path for PaperEcho. Keep work narrow: prefer Stage2-only b
 
 ## Execution Intent Routing
 
+The optional [Control Center](../../docs/control-center.md) is a localhost interaction UI, distinct from the Zotero Web API path. It does not launch this path or call Zotero. Stage1 consumes canonical feedback with legacy XLSX fallback; production still follows the launcher below.
+
 - Production intent such as “运行”, “跑一次”, “完整流程”, “文献追踪”, “检查配置并启动”, or “配置完成，继续” must use only `node skills/paperecho-zotero-web/scripts/run.mjs`. Pass `--config config/paperecho.config.json` when using unified configuration. With sufficient parameters, invoke `--run`; when only safe configuration inspection is possible, invoke `--check`.
 - Development intent such as modifying, fixing, refactoring, auditing code, or updating tests must not invoke the production launcher. Use mocks and targeted validation.
 - Explanation intent must only explain or invoke `--check`; never invoke `--run`.

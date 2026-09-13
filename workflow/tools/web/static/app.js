@@ -59,6 +59,7 @@ async function research() {
   main.append(el('h2', '研究方向反馈'), el('p', '描述推荐过宽或过窄、希望增加的研究方向、需要调整的检索重点。处理结果先进入待确认建议。'));
   const input = el('textarea'); input.maxLength = 20000; input.rows = 8;
   const receipt = el('p'); let requestId = crypto.randomUUID();
+  input.addEventListener('input', () => { requestId = crypto.randomUUID(); });
   main.append(label('你的评价', input), button('提交研究评价', async () => {
     const result = await api('/api/research', { text: input.value, requestId });
     receipt.textContent = `状态：${result.status} · 新增建议：${result.suggestions} · ${result.warnings.join('、')}`;
@@ -129,8 +130,8 @@ async function settings() {
 }
 async function render() {
   main.setAttribute('aria-busy', 'true'); main.replaceChildren();
-  document.querySelectorAll('[data-page]').forEach((node) => node.setAttribute('aria-current', node.dataset.page === page ? 'page' : 'false'));
-  try { await ({ home, weekly, research, suggestions, settings })[page](); } catch (error) { notice.textContent = error.message; } finally { main.setAttribute('aria-busy', 'false'); }
+  document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = true; node.setAttribute('aria-current', node.dataset.page === page ? 'page' : 'false'); });
+  try { await ({ home, weekly, research, suggestions, settings })[page](); } catch (error) { notice.textContent = error.message; } finally { main.setAttribute('aria-busy', 'false'); document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = false; }); }
 }
 document.querySelectorAll('[data-page]').forEach((node) => node.addEventListener('click', () => { page = node.dataset.page; notice.textContent = ''; render(); }));
 api('/api/session').then((session) => { csrf = session.token; return render(); }).catch(() => { notice.textContent = '无法连接本地服务。'; });

@@ -49,3 +49,6 @@ node workflow/tools/maintenance/cleanup_runs.mjs --dry-run --force
 ## Required tests
 
 Use temporary roots to cover config parsing, strict cutoff, grouped deletion, current/running/monthly protection, protected names, dangerous roots, path escape, symlink fail-closed, 24-hour marker/lock, dry-run versus apply, Local/Desktop/Web integration, and registry-only immediate cleanup.
+# Control Center protected feedback
+
+`paper_feedback.json` and `research_evaluations/` contain long-lived user feedback, not ephemeral run output. Preserve them during run retention. The optional Control Center does not own cleanup, scheduler state or run lifecycle; see [Control Center](../../../docs/control-center.md).

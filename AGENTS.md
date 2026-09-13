@@ -557,6 +557,11 @@ node workflow/tools/stage0/check_zotero_backend_ready.mjs
 
 ## 模块归属与 CLI Wrapper 约定
 
+- **Local Control Center**：`workflow/tools/web/server.mjs` 只承接 loopback HTTP/static；业务走 `workflow/tools/lib/control_application_services.mjs` 组合的 services。禁止 Web handler 直接写 Zotero、规则正文或任意 config JSON。
+- **统一反馈与配置入口**：`control_feedback_service.mjs` 持有 canonical paper feedback history/current；`control_config_service.mjs` 持有固定字段 registry，保留原配置文件 owner。Legacy XLSX 单向 import、DOCX evaluation/decision adapter 继续支持，不做双向同步。
+- **人工建议与安全**：pending schema/dedup 仍归 `unified_pending_rule_suggestions.mjs`；DOCX/Web formal apply 均经 `control_rule_suggestion_service.mjs`。未验证的 target/change type 必须保持 pending，不能报告成功应用。Credentials 不回显；没有安全写入 owner 时只返回 configured 状态。
+- **验证与状态保护**：定向执行 `node --test workflow/tests/control_services.test.mjs workflow/tests/control_http.test.mjs`。新增 state `paper_feedback.json` 与 `research_evaluations/` 属于长期用户反馈，不能作为普通 run artifact 清理；验证只使用工作区 fixtures。
+
 - **CLI wrapper 调 lib owner**：CLI 脚本（`workflow/tools/*.mjs`）只做入口编排，核心逻辑由 `workflow/tools/lib/*.mjs` 提供。
 - **thin wrapper 标准**：CLI 不重复定义 lib 中已有的业务逻辑（如 probe、retry、格式化）。
 - **唯一 owner 原则**：每项能力有且只有一个 lib 模块作为 owner，避免平行竞争实现。
