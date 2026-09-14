@@ -85,8 +85,20 @@ test('default-browser commands are fixed argv, never a browser-controlled shell 
 });
 test('Windows and macOS wrappers use their own path, fixed arguments and shared owner; no bundled runtime', async () => {
   const read = (file) => fs.readFile(path.join(repo, file), 'utf8');
-  const vbs = await read('PaperEcho.vbs'); const cmd = await read('PaperEcho.cmd'); const mac = await read('PaperEcho.app/Contents/MacOS/PaperEcho'); const plist = await read('PaperEcho.app/Contents/Info.plist');
-  assert.match(vbs, /WScript\.ScriptFullName/); assert.match(vbs, /launcher\.mjs/); assert.match(vbs, /, 0, True/); assert.match(vbs, /Node\.js 18/);
+  const source = await read('workflow/tools/web/launcher-windows/PaperEchoLauncher.cs'); const cmd = await read('PaperEcho.cmd'); const mac = await read('PaperEcho.app/Contents/MacOS/PaperEcho'); const plist = await read('PaperEcho.app/Contents/Info.plist');
+  await assert.rejects(fs.access(path.join(repo, 'PaperEcho.vbs')), { code: 'ENOENT' });
+  assert.ok((await fs.stat(path.join(repo, 'PaperEcho.exe'))).size > 0);
+  assert.match(source, /AppDomain.CurrentDomain.BaseDirectory/);
+  assert.match(source, /Path.Combine\(root, "workflow", "tools", "web", "launcher.mjs"\)/);
+  assert.match(source, /args.Length != 0/); assert.match(source, /UseShellExecute = false/);
+  assert.match(source, /CreateNoWindow = true/); assert.match(source, /WorkingDirectory = root/);
+  assert.match(source, /child.WaitForExit\(\)/); assert.match(source, /MessageBox.Show/);
+  assert.match(source, /Path.IsPathRooted/); assert.match(source, /Environment.GetEnvironmentVariable\("PATH"\)/);
+  assert.doesNotMatch(source, /powershell\.exe|cmd\.exe|wscript|cscript|mshta|8765|HttpClient|Process.Start\("/i);
+  const build = await read('workflow/tools/web/launcher-windows/build.ps1');
+  assert.match(build, /\/target:winexe/); assert.match(build, /csc\.exe/);
+  assert.match(build, /LASTEXITCODE -ne 0/); assert.match(build, /finally/);
+  assert.doesNotMatch(build, /Invoke-WebRequest|ExecutionPolicy|Start-BitsTransfer|winget/i);
   assert.match(cmd, /%~dp0/); assert.doesNotMatch(cmd, /%\*/); assert.match(cmd, /--stop/);
   assert.ok(mac.startsWith('#!/bin/sh\n')); assert.doesNotMatch(mac, /\r|C:\\|GaoChen/); assert.match(mac, /launcher\.mjs/); assert.match(mac, /command -v node/); assert.match(mac, /osascript/);
   assert.match(plist, /CFBundleExecutable<\/key><string>PaperEcho<\/string>/); assert.match(plist, /LSUIElement<\/key><true\/>/);

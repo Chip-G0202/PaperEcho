@@ -4,7 +4,7 @@
 
 普通用户在已有 PaperEcho 项目目录中双击：
 
-- **Windows：`PaperEcho.vbs`**。隐藏启动窗口，服务就绪后打开默认浏览器。若 Windows Script Host 不可用，使用 `PaperEcho.cmd` 诊断备用入口，此时会显示终端。
+- **Windows：`PaperEcho.exe`**。GUI 启动器不显示控制台；服务就绪后打开默认浏览器。`PaperEcho.cmd` 仅用于故障排查，此时会显示终端。
 - **macOS：`PaperEcho.app`**。最薄的未签名应用包装，不含运行环境或用户数据；保留整个项目目录，不能单独搬走 `.app`。Git 中启动脚本为 executable、LF 换行。当前已检查 bundle/脚本契约，但尚未在 macOS Finder 实机验证；如果系统不能运行该包装，可双击 `PaperEcho.command` 诊断备用入口，此时仍会出现 Terminal，不能称为无终端启动。
 
 前置条件仍为 Node.js 18+ 与已安装的项目依赖。启动器不会下载、安装或升级运行环境。Windows 使用系统 PATH 中的 `node.exe`；macOS 检查 PATH 及标准 Homebrew/Node 安装位置。仅在终端初始化的版本管理器可能需要另行配置 GUI 可见的 Node 路径。
@@ -27,6 +27,10 @@ node workflow/tools/web/launcher.mjs --stop
 开发者仍可用 `node workflow/tools/web/server.mjs` 前台启动，并通过 Ctrl+C 停止。若自动打开浏览器失败，可手动访问上述地址；详细错误使用 `.cmd` / `.command` 或共享 Node 启动命令查看，错误不会包含凭据或原始配置堆栈。HTML `file://` 不承担启动本机进程的职责。
 
 启动器定向验证：`node --test tests/control_launcher.test.mjs`；正式 `npm test` 也通过 Control Center HTTP 测试入口加载这些测试。平台包装只负责查找 Node、调用共享 owner 和提示启动失败，不复制服务逻辑。原 Desktop/Web/Local workflow launcher 完全独立运行。
+
+Windows 的 `PaperEcho.exe` 是基于系统 .NET Framework 4.x 的小型 C# GUI 启动器，源码位于 `workflow/tools/web/launcher-windows/PaperEchoLauncher.cs`。开发者在 Windows 使用 PowerShell 7 运行 `./workflow/tools/web/launcher-windows/build.ps1`，通过已安装的 Framework 编译器重建根目录 EXE；不联网、不安装工具、不修改执行策略，临时产物自动清理。构建可重复执行，但 legacy 编译器不承诺二进制哈希逐字节相同。普通用户运行链只有 EXE → Node → `launcher.mjs`，无需启动 PowerShell 或脚本宿主；macOS 仍通过 `.app` 委托同一 owner。
+
+当前 EXE 使用默认 application icon，未签名；正式品牌图标和签名留待分发阶段。v2.4 源码分发仍要求系统已有 Node.js 与项目依赖，完整运行环境打包属于后续 Distribution 版本。
 
 1. **概览**：最近可用 Weekly、可识别的 Radar、最近运行结果、来源与审核数量。无可靠证据的状态显示未知；Zotero 只反映最近写入记录，不表示实时连接正常。
 2. **文献**：当前结果的只读汇总，显示最终等级数量，点击等级按钮筛选，每页最多 50 篇。英文原始标题在前、中文翻译在后。基于实际运行根的 registered run manifest 查询；Desktop/Web 经过现有 verified-write filter，Local 复用 Local Stage4 筛选规则，不依赖临时 export source。绝不展示 Stage1 全候选池，也不在此页提交反馈。
