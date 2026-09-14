@@ -2,12 +2,23 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { createControlServices } from '../lib/control_application_services.mjs';
 import '../lib/env_file_bootstrap.mjs';
 import { resolveApplicationRuntimeContext } from '../lib/runtime_config.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+export const CONTROL_CENTER_HOST = '127.0.0.1';
+export const CONTROL_CENTER_PORT = 8765;
+export const CONTROL_CENTER_PRODUCT = 'PaperEcho Control Center';
+export const CONTROL_CENTER_ROOT = path.resolve(here, '../../..');
+export function controlCenterInstance(root, context = {}) {
+  return createHash('sha256').update(JSON.stringify([path.resolve(root), context.configPath, context.mode, context.reviewRoot, context.researchRoot, context.localRepository?.root])).digest('hex');
+}
+export async function resolveControlCenterStartup({ root = CONTROL_CENTER_ROOT, env = process.env, argv = [] } = {}) {
+  const context = await resolveApplicationRuntimeContext({ cwd: root, env, argv });
+  return { root, env, argv, context };
+}
 const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
 export const MAX_BODY_BYTES = 65536;
 export function safeLink(value) {
@@ -30,9 +41,13 @@ async function body(req) {
     return value;
   } catch { throw new Error('BODY_INVALID'); }
 }
-export async function startControlCenter({ root = path.resolve(here, '../../..'), host = '127.0.0.1', port = 8765, services, env = process.env, argv = [] } = {}) {
+export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CONTROL_CENTER_HOST, port = CONTROL_CENTER_PORT, services, env = process.env, argv = [], context } = {}) {
   if (!['127.0.0.1', '::1'].includes(host)) throw new Error('LOOPBACK_BIND_REQUIRED');
-  services ||= createControlServices({ root, env, context: await resolveApplicationRuntimeContext({ cwd: root, env, argv }) });
+  if (!services) {
+    context ||= (await resolveControlCenterStartup({ root, env, argv })).context;
+    services = createControlServices({ root, env, context });
+  }
+  const instance = controlCenterInstance(root, context);
   const session = randomBytes(32).toString('hex');
   const token = randomBytes(32).toString('hex');
   const server = http.createServer(async (req, res) => {
@@ -54,6 +69,7 @@ export async function startControlCenter({ root = path.resolve(here, '../../..')
       if (decoded.includes('..') || decoded.includes('\\') || decoded.includes('\0')) return send(404, { error: 'NOT_FOUND' });
       const url = new URL(req.url, `http://${req.headers.host}`);
       const cookieName = `paperecho_${actualPort}`;
+      if (req.method === 'GET' && decoded === '/api/ready') return send(200, { product: CONTROL_CENTER_PRODUCT, protocol: 1, ready: true, instance });
       if (req.method === 'GET' && decoded === '/api/session') {
         res.setHeader('Set-Cookie', `${cookieName}=${session}; HttpOnly; SameSite=Strict; Path=/`);
         return send(200, { token });
@@ -80,6 +96,13 @@ export async function startControlCenter({ root = path.resolve(here, '../../..')
       if (req.headers.origin !== `http://${req.headers.host}`) return send(403, { error: 'ORIGIN_REJECTED' });
       if (!equal(req.headers['x-csrf-token'], token)) return send(403, { error: 'CSRF_REQUIRED' });
       const input = await body(req);
+      if (decoded === '/api/shutdown') {
+        res.once('finish', () => {
+          const timer = setTimeout(() => server.closeAllConnections(), 2000); timer.unref();
+          server.close(() => clearTimeout(timer)); server.closeIdleConnections?.();
+        });
+        return send(202, { status: 'stopping' });
+      }
       if (decoded === '/api/credentials') {
         if (input.action === 'replace') return send(200, await services.secrets.replace(input.id, input.value));
         if (input.action === 'clear') return send(200, await services.secrets.clear(input.id));

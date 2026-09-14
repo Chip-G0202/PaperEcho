@@ -1,0 +1,38 @@
+#!/bin/sh
+# Finder supplies a minimal PATH; cover standard system/Homebrew Node installs.
+entry_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P) || exit 1
+repo_root=$(CDPATH= cd -- "$entry_dir/../../.." && pwd -P) || exit 1
+if [ "$#" -gt 0 ] && { [ "$#" -ne 1 ] || [ "$1" != "--stop" ]; }; then
+  exit 1
+fi
+node_bin=$(command -v node 2>/dev/null || true)
+if [ -z "$node_bin" ]; then
+  for candidate in /opt/homebrew/bin/node /usr/local/bin/node; do
+    if [ -x "$candidate" ]; then node_bin=$candidate; break; fi
+  done
+fi
+if [ -z "$node_bin" ]; then
+  /usr/bin/osascript -e 'display alert "PaperEcho 无法启动" message "未检测到 Node.js。请安装或配置 Node.js 18 及以上版本；启动器不会自动安装运行环境。" as critical'
+  exit 2
+fi
+cd -- "$repo_root" || exit 1
+if [ "$#" -eq 1 ]; then
+  "$node_bin" "$repo_root/workflow/tools/web/launcher.mjs" --stop
+else
+  "$node_bin" "$repo_root/workflow/tools/web/launcher.mjs"
+fi
+result=$?
+case "$result" in
+  0) exit 0 ;;
+  2) message='需要 Node.js 18 或更高版本。请安装或配置所需运行环境。' ;;
+  3) message='8765 端口被其他程序或工作区占用，请先关闭对应程序。启动器不会强杀进程。' ;;
+  4) message='Control Center 未在规定时间内就绪，请检查环境与配置。' ;;
+  6) message='服务已就绪，但默认浏览器未能打开。请手动访问 http://127.0.0.1:8765。' ;;
+  *) message='启动失败，请检查 Node.js 18+、项目依赖和配置。可使用 PaperEcho.command 查看诊断信息。' ;;
+esac
+/usr/bin/osascript - "$message" <<'APPLESCRIPT'
+on run argv
+  display alert "PaperEcho 无法启动" message (item 1 of argv) as critical
+end run
+APPLESCRIPT
+exit "$result"

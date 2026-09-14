@@ -1,4 +1,5 @@
 import test from 'node:test';
+import '../../tests/control_launcher.test.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';

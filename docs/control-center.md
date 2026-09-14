@@ -2,13 +2,31 @@
 
 ## 启动与使用
 
-在已有 PaperEcho 项目根目录运行：
+普通用户在已有 PaperEcho 项目目录中双击：
+
+- **Windows：`PaperEcho.vbs`**。隐藏启动窗口，服务就绪后打开默认浏览器。若 Windows Script Host 不可用，使用 `PaperEcho.cmd` 诊断备用入口，此时会显示终端。
+- **macOS：`PaperEcho.app`**。最薄的未签名应用包装，不含运行环境或用户数据；保留整个项目目录，不能单独搬走 `.app`。Git 中启动脚本为 executable、LF 换行。当前已检查 bundle/脚本契约，但尚未在 macOS Finder 实机验证；如果系统不能运行该包装，可双击 `PaperEcho.command` 诊断备用入口，此时仍会出现 Terminal，不能称为无终端启动。
+
+前置条件仍为 Node.js 18+ 与已安装的项目依赖。启动器不会下载、安装或升级运行环境。Windows 使用系统 PATH 中的 `node.exe`；macOS 检查 PATH 及标准 Homebrew/Node 安装位置。仅在终端初始化的版本管理器可能需要另行配置 GUI 可见的 Node 路径。
+
+服务默认只监听 <http://127.0.0.1:8765>。共享 `workflow/tools/web/launcher.mjs` 调用原 server/bootstrap 与正式 Runner/runtime loader，不维护另一套路径配置。它检查产品、协议和不含原始路径的工作区指纹；同一实例就绪则直接打开，不重复启动。其他程序或另一工作区占用端口时明确报错，不强杀、不换端口。首次启动最多等待约 15 秒就绪，再调用系统默认浏览器。
+
+包装进程退出后后台 Node 服务继续运行；关闭浏览器不会停止服务。系统注销或重启后后台进程结束，不设置自动启动或调度任务。启动器不执行 workflow、不修改调度器、不探测 Zotero。
+
+### 高级启动与故障诊断
+
+在项目目录运行以下命令；原有配置参数仍通过同一个 Runner loader 解析：
 
 ```sh
-node workflow/tools/web/server.mjs
+node workflow/tools/web/launcher.mjs
+node workflow/tools/web/launcher.mjs --stop
 ```
 
-打开 <http://127.0.0.1:8765>；终端 Ctrl+C 停止服务。无需安装新依赖、构建前端或启动数据库。服务不会启动 workflow，不会修改调度器，也不会进行 Zotero readiness probe。原 Desktop/Web/Local launcher 完全独立运行。
+`--stop` 只停止匹配当前工作区指纹的实例，使用现有 session、Origin、CSRF 校验。Windows 也可运行 `PaperEcho.cmd --stop`。使用自定义 `--config` 启动时，停止应传入同一配置参数；修改运行根配置前先停止原实例。后台服务没有托盘菜单或独立守护进程管理器。
+
+开发者仍可用 `node workflow/tools/web/server.mjs` 前台启动，并通过 Ctrl+C 停止。若自动打开浏览器失败，可手动访问上述地址；详细错误使用 `.cmd` / `.command` 或共享 Node 启动命令查看，错误不会包含凭据或原始配置堆栈。HTML `file://` 不承担启动本机进程的职责。
+
+启动器定向验证：`node --test tests/control_launcher.test.mjs`；正式 `npm test` 也通过 Control Center HTTP 测试入口加载这些测试。平台包装只负责查找 Node、调用共享 owner 和提示启动失败，不复制服务逻辑。原 Desktop/Web/Local workflow launcher 完全独立运行。
 
 1. **概览**：最近可用 Weekly、可识别的 Radar、最近运行结果、来源与审核数量。无可靠证据的状态显示未知；Zotero 只反映最近写入记录，不表示实时连接正常。
 2. **文献**：当前结果的只读汇总，显示最终等级数量，点击等级按钮筛选，每页最多 50 篇。英文原始标题在前、中文翻译在后。基于实际运行根的 registered run manifest 查询；Desktop/Web 经过现有 verified-write filter，Local 复用 Local Stage4 筛选规则，不依赖临时 export source。绝不展示 Stage1 全候选池，也不在此页提交反馈。

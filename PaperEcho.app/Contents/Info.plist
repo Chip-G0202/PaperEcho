@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>PaperEcho</string>
+  <key>CFBundleDisplayName</key><string>PaperEcho</string>
+  <key>CFBundleIdentifier</key><string>org.paperecho.control-center</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>PaperEcho</string>
+  <key>CFBundleVersion</key><string>2.4</string>
+  <key>LSUIElement</key><true/>
+</dict></plist>

@@ -1,0 +1,4 @@
+/PaperEcho.app/Contents/MacOS/PaperEcho text eol=lf
+/PaperEcho.command text eol=lf
+/PaperEcho.cmd text eol=crlf
+/PaperEcho.vbs text eol=crlf
