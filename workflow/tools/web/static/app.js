@@ -49,7 +49,7 @@ function button(text, action) { const node = el('button', text); node.type = 'bu
 function select(values, selected) { const node = el('select'); for (const [value, label] of values) { const option = el('option', label); option.value = value; node.append(option); } node.value = selected || ''; return node; }
 function label(text, input) { const node = el('label', text); input.id ||= `field-${crypto.randomUUID()}`; input.setAttribute('aria-label', text); node.htmlFor = input.id; node.append(input); return node; }
 function demoBanner(text, exit) { const bar = el('section', undefined, 'demo-banner'); bar.setAttribute('aria-label', '示例模式'); const copy = el('div'); copy.append(el('strong', '示例模式'), el('span', text)); const close = button('退出示例', exit); bar.append(copy, close); return bar; }
-function pageIntro(title, text) { const intro = el('header', undefined, 'page-intro'); intro.append(el('h2', title), el('p', text, 'lead')); return intro; }
+function pageIntro(title, text) { const intro = el('header', undefined, 'page-intro page-header'); intro.append(el('h2', title), el('p', text, 'lead')); return intro; }
 async function api(url, value) {
   const response = await fetch(url, value === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(value) }).catch(() => { throw new Error('无法连接本地服务，请检查服务是否仍在运行。'); });
   const result = await response.json().catch(() => { throw new Error('服务响应暂不可用，请刷新页面后重试。'); });
@@ -120,35 +120,35 @@ async function home() {
   if (homeView === 'weekly-demo') { weeklyDemo(); return; }
   const status = await api('/api/status'); const weeklyData = await loadWeekly(); const visibleWeekly = displayablePapers(weeklyData.items); const grades = gradeCounts(visibleWeekly);
   main.append(pageIntro('研究工作空间', '从最近的文献开始，让每次反馈帮助下一次推荐。'));
-  const grid = el('div', undefined, 'grid');
+  const grid = el('div', undefined, 'grid page-summary');
   const date = (value) => value ? new Date(value).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }) : '暂无记录';
   for (const [name, value] of [['最近 Weekly', date(status.lastWeekly)], ['最近 Radar', date(status.lastRadar)], ['本次文献数量', visibleWeekly.length], ['待确认规则建议', status.pendingSuggestions ?? '暂无统计']]) {
     const card = el('section', undefined, 'card'); card.append(el('h3', name), el('p', String(value), 'metric')); grid.append(card);
   }
   main.append(grid, el('p', `A级 ${grades.A} · B级 ${grades.B} · C级 ${grades.C} · 待处理反馈 ${visibleWeekly.filter((item) => !item.feedback).length}`, 'overview-summary'));
-  const strip = el('div', undefined, 'summary-strip'); strip.append(el('p', `最近运行：${status.lastRun?.status === 'completed' ? '已完成' : status.lastRun?.status === 'failed' ? '未完成，请检查运行报告' : '暂无可靠状态'}`), el('p', `需人工复核：${status.needsReview ?? '暂无统计'}`)); main.append(strip);
+  const strip = el('div', undefined, 'summary-strip page-summary'); strip.append(el('p', `最近运行：${status.lastRun?.status === 'completed' ? '已完成' : status.lastRun?.status === 'failed' ? '未完成，请检查运行报告' : '暂无可靠状态'}`), el('p', `需人工复核：${status.needsReview ?? '暂无统计'}`)); main.append(strip);
   if (status.integrity) main.append(el('p', `完整性提醒：新撤稿 ${status.integrity.newlyConfirmedRetractions ?? 0} · 更正 ${status.integrity.newCorrections ?? 0} · 关注声明 ${status.integrity.newExpressionsOfConcern ?? 0}`, 'meta'));
   if (status.nextScheduledRun) main.append(el('p', `下一次运行：${date(status.nextScheduledRun)}`, 'meta'));
-  const actions = el('div', undefined, 'actions quick-links'); const review = button('开始文献审阅', () => navigate('feedback/papers')); review.className = 'primary'; actions.append(review, button('提交研究方向反馈', () => navigate('feedback/research'))); main.append(actions);
-  const previews = el('section', undefined, 'experience-grid');
+  const actions = el('div', undefined, 'actions quick-links page-toolbar'); const review = button('开始文献审阅', () => navigate('feedback/papers')); review.className = 'primary'; actions.append(review, button('提交研究方向反馈', () => navigate('feedback/research'))); main.append(actions);
+  const previews = el('section', undefined, 'experience-grid page-content');
   for (const [title, text, route] of [['Daily Radar 示例', '查看当日发现、紧急队列与来源分布。', 'home/radar-demo'], ['Weekly 示例', '查看一周候选、写回与完整性摘要。', 'home/weekly-demo']]) { const card = el('article', undefined, 'experience-card'); card.append(el('p', '只读演示', 'eyebrow'), el('h3', title), el('p', text, 'meta'), button('查看示例', () => navigate(route))); previews.append(card); }
   main.append(previews);
 }
 function radarDemo() {
   main.append(pageIntro('Daily Radar · 今日速览', '把当天值得立即查看的信号放在一页内。以下均为演示内容。'), demoBanner('仅展示界面结构，不读取或改变真实 Radar、调度与运行状态。', () => navigate('home')));
-  const metrics = el('div', undefined, 'grid metric-grid');
+  const metrics = el('div', undefined, 'grid metric-grid page-summary');
   for (const [name, value, note] of [['今日发现', '18', '筛选前 42 条'], ['紧急关注', '2', '撤稿/关键更新信号'], ['去重后', '31', '合并 11 条重复记录'], ['进入候选', '12', 'A 3 · B 5 · C 4']]) { const card = el('section', undefined, 'card'); card.append(el('h3', name), el('p', value, 'metric'), el('p', note, 'meta')); metrics.append(card); }
-  const distribution = el('section', undefined, 'card source-distribution'); distribution.append(el('h3', '来源分布'));
+  const distribution = el('section', undefined, 'card source-distribution page-content'); distribution.append(el('h3', '来源分布'));
   for (const [name, value] of [['PubMed / PMC', 68], ['RSS 订阅', 32]]) { const row = el('div', undefined, 'source-row'); const track = el('span', undefined, 'source-track'); const fill = el('span', undefined, 'source-fill'); fill.style.width = `${value}%`; track.append(fill); row.append(el('span', name), track, el('strong', `${value}%`)); distribution.append(row); }
   main.append(metrics, distribution, el('h3', '紧急队列'));
   for (const item of demoPapers.slice(0, 2)) { const card = el('article', undefined, 'radar-item'); paperHeading(card, item); card.append(el('p', item.id === 'demo-1' ? '信号：出现与核心队列直接相关的早期机制证据。' : '信号：多组学结果可能改变本周的优先阅读顺序。', 'radar-signal')); main.append(card); }
 }
 function weeklyDemo() {
   main.append(pageIntro('Weekly · 本周研究回声', '快速确认本周新增了什么、流向哪里，以及哪些环节值得留意。'), demoBanner('仅用于体验周报结构，不代表系统已运行，也不会写入真实报告。', () => navigate('home')));
-  const counts = gradeCounts(demoPapers); const hero = el('section', undefined, 'weekly-hero'); hero.append(el('p', '本周候选', 'eyebrow'), el('strong', String(demoPapers.length)), el('p', `A级 ${counts.A} · B级 ${counts.B} · C级 ${counts.C}`)); main.append(hero);
-  const flow = el('div', undefined, 'weekly-flow');
+  const counts = gradeCounts(demoPapers); const hero = el('section', undefined, 'weekly-hero page-summary'); hero.append(el('p', '本周候选', 'eyebrow'), el('strong', String(demoPapers.length)), el('p', `A级 ${counts.A} · B级 ${counts.B} · C级 ${counts.C}`)); main.append(hero);
+  const flow = el('div', undefined, 'weekly-flow page-content');
   for (const [title, value, note, tone] of [['合并与去重', '42 → 31', '11 条重复记录已合并', 'success'], ['Zotero 写回', '6 条', '演示：全部进入日期与等级集合', 'success'], ['完整性检查', '1 条提醒', '演示：需要人工查看来源更新', 'warning']]) { const card = el('section', undefined, 'card'); card.append(el('span', tone === 'warning' ? '需留意' : '已完成', `badge ${tone}`), el('h3', title), el('p', value, 'metric'), el('p', note, 'meta')); flow.append(card); }
-  const outcome = el('section', undefined, 'weekly-outcome'); outcome.append(el('h3', '本周处理结果'), el('p', '6 篇进入阅读队列，3 篇建议优先精读，1 条完整性提醒等待人工核对。'), el('p', '示例数据不会生成 XLSX、DOCX、Zotero 写入或调度记录。', 'meta')); main.append(flow, outcome);
+  const outcome = el('section', undefined, 'weekly-outcome page-content'); outcome.append(el('h3', '本周处理结果'), el('p', '6 篇进入阅读队列，3 篇建议优先精读，1 条完整性提醒等待人工核对。'), el('p', '示例数据不会生成 XLSX、DOCX、Zotero 写入或调度记录。', 'meta')); main.append(flow, outcome);
 }
 function empty(title, text) { const box = el('section', undefined, 'empty-state'); box.append(el('h3', title), el('p', text)); main.append(box); }
 async function system() {
@@ -160,7 +160,7 @@ async function system() {
 async function feedback() {
   const intro = { papers: ['文献等级审阅', '判断最终等级是否准确；反馈会作为后续工作流的人工纠正信号。'], research: ['研究方向反馈', '告诉 PaperEcho 最近推荐结果哪里与你的研究需求不一致。'], suggestions: ['规则建议审阅', '核对由研究反馈生成的建议；安全校验始终生效。'] }[feedbackView];
   main.append(pageIntro(...intro));
-  const nav = el('nav', undefined, 'subnav'); nav.setAttribute('aria-label', '反馈类型');
+  const nav = el('nav', undefined, 'subnav page-toolbar'); nav.setAttribute('aria-label', '反馈类型');
   for (const [key, text] of [['papers', '文献等级'], ['research', '研究方向'], ['suggestions', '规则建议']]) { const item = button(text, () => navigate(`feedback/${key}`)); item.setAttribute('aria-current', feedbackView === key ? 'page' : 'false'); nav.append(item); }
   if (feedbackView === 'papers') await paperReview(false, nav);
   else { main.append(nav); await (feedbackView === 'research' ? research(false) : suggestions(false)); }
@@ -169,12 +169,12 @@ async function weekly() {
   const data = demoMode.weekly ? { runId: 'demo', total: demoPapers.length, items: structuredClone(demoPapers), demo: true } : await loadWeekly();
   main.append(pageIntro('本次文献汇总', '紧凑浏览当前运行结果；仅显示 A、B、C 级文献。'));
   if (data.demo) main.append(demoBanner('这些文献是前端演示条目，不来自真实周报，也不会进入反馈或运行状态。', () => { demoMode.weekly = false; render(); }));
-  else { const actions = el('div', undefined, 'actions'); actions.append(button('体验示例文献', () => { demoMode.weekly = true; render(); })); main.append(actions); }
+  else { const actions = el('div', undefined, 'actions page-toolbar'); actions.append(button('体验示例文献', () => { demoMode.weekly = true; render(); })); main.append(actions); }
   const visibleItems = displayablePapers(data.items);
   if (!visibleItems.length) { empty('暂时没有可查看的文献', '当前实例尚无可用的 A、B、C 级文献。你可以先体验示例内容。'); return; }
-  const counts = gradeCounts(visibleItems); const filters = el('nav', undefined, 'grade-filters'); filters.setAttribute('aria-label', '按最终等级筛选');
-  main.append(el('p', `本次共 ${visibleItems.length} 篇 · A级 ${counts.A} · B级 ${counts.B} · C级 ${counts.C}`, 'summary-strip'), filters);
-  const list = el('section'); main.append(list); let selected = 'all'; let start = 0;
+  const counts = gradeCounts(visibleItems); const filters = el('nav', undefined, 'grade-filters page-toolbar'); filters.setAttribute('aria-label', '按最终等级筛选');
+  main.append(el('p', `本次共 ${visibleItems.length} 篇 · A级 ${counts.A} · B级 ${counts.B} · C级 ${counts.C}`, 'summary-strip page-summary'), filters);
+  const list = el('section', undefined, 'document-list page-content document-column'); main.append(list); let selected = 'all'; let start = 0;
   const draw = () => {
     filters.replaceChildren(); list.replaceChildren();
     for (const [grade, count] of [['all', visibleItems.length], ...Object.entries(counts)]) {
@@ -211,10 +211,10 @@ async function paperReview(showIntro = true, sectionNav = null) {
   const data = demoMode.feedback ? { runId: 'demo', total: demoFeedbackItems.length, items: demoFeedbackItems, demo: true } : await loadWeekly();
   if (showIntro) main.append(pageIntro('文献等级审阅', '判断最终等级是否准确；反馈会作为后续工作流的人工纠正信号。'));
   if (data.demo) main.append(demoBanner('按钮和快捷键均可体验，选择只保留在当前页面会话，不会提交真实反馈。', () => { demoMode.feedback = false; reviewSection = 'normal'; render(); }));
-  else { const actions = el('div', undefined, 'actions'); actions.append(button('体验示例审阅', () => { demoMode.feedback = true; demoFeedbackItems = structuredClone(demoPapers); reviewSection = 'normal'; render(); })); main.append(actions); }
+  else { const actions = el('div', undefined, 'actions page-toolbar'); actions.append(button('体验示例审阅', () => { demoMode.feedback = true; demoFeedbackItems = structuredClone(demoPapers); reviewSection = 'normal'; render(); })); main.append(actions); }
   if (sectionNav) main.append(sectionNav);
-  const tabs = el('nav', undefined, 'subnav'); tabs.setAttribute('aria-label', '文献审阅队列'); main.append(tabs);
-  const workspace = el('section', undefined, 'review-workspace'); workspace.tabIndex = -1; workspace.setAttribute('aria-label', '文献审阅工作区'); main.append(workspace);
+  const tabs = el('nav', undefined, 'subnav page-toolbar'); tabs.setAttribute('aria-label', '文献审阅队列'); main.append(tabs);
+  const workspace = el('section', undefined, 'review-workspace page-content document-column'); workspace.tabIndex = -1; workspace.setAttribute('aria-label', '文献审阅工作区'); main.append(workspace);
   // needsReview comes exclusively from the shared Weekly exporter owner.
   const visibleItems = displayablePapers(data.items);
   const groups = { normal: visibleItems.filter((item) => !item.needsReview), manual: visibleItems.filter((item) => item.needsReview) };
@@ -239,23 +239,24 @@ async function paperReview(showIntro = true, sectionNav = null) {
     const actions = el('div', undefined, 'actions feedback-actions');
     for (const [i, value] of feedbackActions.entries()) {
       const action = button(`${feedbackLabels[value]} ${i + 1}`, () => choose(value));
-      const boundaryDisabled = value === 'highly_relevant' && displayGrade(item) === 'A' || value === 'maybe' && displayGrade(item) === 'C';
+      const boundaryDisabled = value === 'highly_relevant' && displayGrade(item) === 'A';
       action.dataset.action = value; action.setAttribute('aria-label', feedbackLabels[value]); action.setAttribute('aria-pressed', String(item.feedback === value || value === 'irrelevant' && item.feedback === 'do_not_recommend_similar')); action.disabled = queue.busy || !item.feedbackAllowed || boundaryDisabled;
-      if (boundaryDisabled) action.title = displayGrade(item) === 'A' ? 'A级已是最高展示等级' : 'C级已是最低展示等级';
+      if (value === 'irrelevant') action.className = 'danger';
+      if (boundaryDisabled) action.title = 'A级已是最高展示等级';
       actions.append(action);
     }
     card.append(el('h4', '最终等级是否正确？'), actions);
     if (displayGrade(item) === 'A') card.append(el('p', 'A级已是最高展示等级，“升级”不可用；仍可选择不变、降级或排除。', 'boundary-hint'));
-    if (displayGrade(item) === 'C') card.append(el('p', 'C级已是最低展示等级，“降级”不可用；仍可选择升级、不变或排除。', 'boundary-hint'));
+    if (displayGrade(item) === 'C') card.append(el('p', 'C级仍可选择降级或排除：降级表示当前等级偏高，排除表示不应进入有效推荐；两种反馈会分别记录。', 'boundary-hint'));
     if (!item.feedbackAllowed) card.append(el('p', '缺少可靠文献标识，无法安全记录反馈；可跳过此篇。', 'warning'));
-    workspace.append(card, el('p', '可使用键盘快速操作：1=升级，2=不变，3=降级，4=排除；↑/↓ 可切换上一篇/下一篇。正在输入时将暂停快捷键。', 'shortcut-hint'));
+    workspace.append(card, el('p', '你也可以使用键盘快速审阅：1 升级 · 2 不变 · 3 降级 · 4 排除，↑ / ↓ 可切换上一篇和下一篇。正在输入文字时，快捷键会自动暂停。', 'shortcut-hint'));
     reviewNavigation(workspace, queue, draw);
     if (focus) workspace.focus();
   };
   const choose = async (value) => {
     if (queue.busy) return;
     const currentGrade = displayGrade(queue.items[queue.index]);
-    if (value === 'highly_relevant' && currentGrade === 'A' || value === 'maybe' && currentGrade === 'C') return;
+    if (value === 'highly_relevant' && currentGrade === 'A') return;
     const pending = queue.submit(value,
       (item, requestId) => data.demo ? Promise.resolve({ revision: 1, demo: true, requestId }) : api('/api/feedback', { runId: data.runId, paperId: item.id, value, reason: '', requestId }),
       (item) => { item.feedback = value; });
@@ -273,7 +274,7 @@ async function paperReview(showIntro = true, sectionNav = null) {
 }
 async function research(showIntro = true) {
   if (showIntro) main.append(pageIntro('研究方向反馈', '告诉 PaperEcho 最近推荐结果哪里与你的研究需求不一致。'));
-  const form = el('section', undefined, 'research-form');
+  const form = el('section', undefined, 'research-form page-content document-column');
   const input = el('textarea'); input.maxLength = 20000; input.rows = 8; input.value = researchDraft; input.placeholder = '例如：推荐范围偏宽，希望更多关注具有机制验证的纵向研究，减少纯描述性研究。';
   const receipt = el('p', '', 'receipt'); receipt.setAttribute('role', 'status');
   input.addEventListener('input', () => { researchDraft = input.value; researchRequestId = crypto.randomUUID(); });
@@ -297,7 +298,7 @@ async function suggestions(showIntro = true) {
   const pending = (item) => ['pending', 'candidate'].includes(item.status);
   const queue = createReviewQueue(rows, (item) => !pending(item) || decisionReceipts.has(idOf(item)), pending);
   let editing = false; let draft = ''; let message = ''; let messageKind = 'success';
-  const workspace = el('section', undefined, 'review-workspace'); workspace.tabIndex = -1; workspace.setAttribute('aria-label', '规则建议审阅工作区'); main.append(workspace);
+  const workspace = el('section', undefined, 'review-workspace page-content document-column'); workspace.tabIndex = -1; workspace.setAttribute('aria-label', '规则建议审阅工作区'); main.append(workspace);
   const draw = (focus = false) => {
     workspace.replaceChildren();
     const item = rows[queue.index]; const id = idOf(item); const receipt = decisionReceipts.get(id);
@@ -365,6 +366,7 @@ function rssEditor(setting, container) {
 const settingGroupNames = { General: '运行方式', Models: '模型与 AI', Sources: '检索来源', Search: '检索周期', RSS: 'RSS 订阅', 'Ranking / Review': '评审体验', Radar: 'Daily Radar', Weekly: 'Weekly 周报', Integrity: '文献完整性', Zotero: 'Zotero', Notifications: '邮件通知', Credentials: '凭据' };
 function visibleSetting(setting) {
   if (setting.id === 'sources.domain') return false;
+  if (setting.id === 'review.batch') return false;
   if (setting.category === 'Search') return ['pubmed.days', 'openalex.days'].includes(setting.id);
   return setting.category !== 'Advanced';
 }
@@ -374,7 +376,7 @@ function settingControl(setting) {
     input = el('fieldset', undefined, 'setting-options source-options'); input.append(el('legend', setting.description));
     const labels = { rss: 'RSS 订阅', pubmed_pmc: 'PubMed / PMC', openalex: 'OpenAlex', semantic_scholar: 'Semantic Scholar' };
     for (const value of setting.validation.values) { const checkbox = el('input'); checkbox.type = 'checkbox'; checkbox.value = value; checkbox.checked = (setting.value || []).includes(value); input.append(label(labels[value] || value, checkbox)); }
-    Object.defineProperty(input, 'value', { get: () => input.querySelectorAll('input').filter((entry) => entry.checked).map((entry) => entry.value) });
+    Object.defineProperty(input, 'value', { get: () => [...input.querySelectorAll('input')].filter((entry) => entry.checked).map((entry) => entry.value) });
   } else if (setting.type === 'enum' && setting.validation.values.length <= 5) {
     input = el('fieldset', undefined, 'setting-options'); input.append(el('legend', setting.description)); const name = `option-${crypto.randomUUID()}`;
     for (const value of setting.validation.values) { const radio = el('input'); radio.type = 'radio'; radio.name = name; radio.value = value; radio.checked = value === setting.value; const text = ({ local: '本地', desktop: '桌面', web: '网页', disabled: '停用', enabled: '启用', strict: '严格', warn: '提醒', off: '关闭', on: '开启', auto: '自动', standard: '标准运行', complete: '完整运行', radar: '每日速览' })[value] || value; input.append(label(text, radio)); }
@@ -394,7 +396,7 @@ async function settings() {
   main.append(pageIntro('工作空间设置', '这里只保留日常最常用的选项；检索词、检索式和底层参数继续由原配置维护。'));
   const data = await api('/api/settings');
   const groups = settingGroups.flatMap((entry) => entry[2]);
-  const layout = el('div', undefined, 'settings-layout'); const nav = el('nav', undefined, 'settings-nav'); nav.setAttribute('aria-label', '设置大类'); const body = el('div', undefined, 'settings-body'); layout.append(nav, body); main.append(layout);
+  const layout = el('div', undefined, 'settings-layout page-content'); const nav = el('nav', undefined, 'settings-nav'); nav.setAttribute('aria-label', '设置大类'); const body = el('div', undefined, 'settings-body'); layout.append(nav, body); main.append(layout);
   const switchGroup = (key) => { settingsGroup = key; nav.querySelectorAll('button').forEach((item) => item.setAttribute('aria-current', item.dataset.group === key ? 'page' : 'false')); body.querySelectorAll('[data-settings-group]').forEach((section) => { section.hidden = section.dataset.settingsGroup !== key; }); };
   for (const [key, title] of settingGroups) { const item = button(title, () => switchGroup(key)); item.dataset.group = key; item.setAttribute('aria-current', key === settingsGroup ? 'page' : 'false'); nav.append(item); }
   const appendSettingsControls = (container, entries, saveName, saveLabel = '保存本组') => {
@@ -404,30 +406,28 @@ async function settings() {
       if (setting.id === 'sources.override') setting.description = '选择启用的来源';
       if (setting.id === 'pubmed.days') setting.description = 'PubMed / PMC 检索天数';
       if (setting.id === 'openalex.days') setting.description = 'OpenAlex 检索天数';
-      if (setting.id === 'review.batch') setting.description = '人工复核批量大小';
       const row = el('div', undefined, 'setting');
       if (!setting.available) { unavailable += 1; continue; }
       if (setting.readOnly) { row.append(el('p', `${setting.description}：${setting.value}（只读）`)); container.append(row); continue; }
       if (setting.type === 'rss') { const read = rssEditor(setting, row); saves.push({ setting, read, input: row }); container.append(row); continue; }
       const input = settingControl(setting);
       if (input.className.includes('setting-options')) row.append(input); else row.append(label(setting.description, input));
-      if (setting.id === 'review.batch') row.append(el('small', '每次工作流运行时，进入等级复审或人工复核阶段的候选条目上限，用于控制单轮处理量。'));
-      else if (setting.validation.min !== undefined || setting.validation.max !== undefined) row.append(el('small', `允许范围：${setting.validation.min ?? '不限'}–${setting.validation.max ?? '不限'}`));
+      if (setting.validation.min !== undefined || setting.validation.max !== undefined) row.append(el('small', `允许范围：${setting.validation.min ?? '不限'}–${setting.validation.max ?? '不限'}`));
       saves.push({ setting, input, read: () => settingValue(setting, input) }); container.append(row);
     }
     if (unavailable) container.append(el('p', '部分选项尚未配置，已从日常界面收起。', 'meta'));
     if (!saves.length) return;
-    const actions = el('div', undefined, 'actions group-save'); const save = button(saveLabel, async () => {
+    const actions = el('div', undefined, 'actions group-save section-actions'); const save = button(saveLabel, async () => {
       const values = saves.map((entry) => { if (entry.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); return [entry.setting.id, entry.read()]; });
       let saved = 0;
       try { for (const [id, value] of values) { await api('/api/settings', { id, value }); saved += 1; } }
       catch (error) { if (saved) throw new Error(`已保存 ${saved} / ${values.length} 项；其余项目未完成。${error.message}`); throw error; }
       notice.textContent = `“${saveName}”已保存，下次运行生效。`;
-    }); save.className = 'primary'; actions.append(save, el('span', `共 ${saves.length} 项`, 'meta')); container.append(actions);
+    }); save.className = 'primary'; actions.append(save); container.append(actions);
   };
   for (const group of groups) {
     const owner = settingGroups.find((entry) => entry[2].includes(group))[0];
-    const section = el('section', undefined, 'settings-section'); section.dataset.settingsGroup = owner; section.hidden = owner !== settingsGroup; section.append(el('h3', settingGroupNames[group]));
+    const section = el('section', undefined, 'settings-section section'); section.dataset.settingsGroup = owner; section.hidden = owner !== settingsGroup; section.append(el('h3', settingGroupNames[group], 'section-header'));
     const entries = data.filter((entry) => entry.category === group && visibleSetting(entry));
     if (group === 'Models') {
       section.append(el('p', '两类模型功能分别保存；等级复审和文献综述复用偏好学习模型。', 'meta'));

@@ -31,10 +31,27 @@ test('demo and simplified Settings copy stay explicit and remove the old footer 
 });
 test('compact UI hierarchy removes D and redundant review details', () => {
   assert.match(app, /function pageIntro/); assert.match(app, /displayablePapers/);
-  assert.match(app, /人工复核批量大小/); assert.match(app, /进入等级复审或人工复核阶段的候选条目上限/);
-  assert.match(app, /可使用键盘快速操作：1=升级/); assert.doesNotMatch(app, /补充原因（可选）|等级复审依据：/);
-  assert.doesNotMatch(css, /\.badge\.grade-D/); assert.match(css, /\.source-options label\{min-height:46px/);
+  assert.match(app, /setting\.id === 'review\.batch'\) return false/); assert.doesNotMatch(app, /人工复核批量大小|进入等级复审或人工复核阶段的候选条目上限/);
+  assert.match(app, /你也可以使用键盘快速审阅：1 升级/); assert.doesNotMatch(app, /补充原因（可选）|等级复审依据：/);
+  assert.doesNotMatch(css, /\.badge\.grade-D/); assert.match(css, /\.source-options label\{min-height:48px/);
   assert.match(css, /\.settings-subgroup\+\.settings-subgroup\{border-top:1px/); assert.match(css, /\.group-save\{justify-content:flex-start/);
+});
+test('desktop workspace and shared content columns stay left aligned', () => {
+  assert.match(css, /\.content-wrap\{max-width:none;margin:0;/);
+  assert.match(css, /main\{width:100%;max-width:1120px;[^}]*margin:0 auto 0 0/);
+  assert.match(css, /\.review-workspace\{width:100%;max-width:none/);
+  assert.match(css, /\.research-form\{width:100%;max-width:none/);
+  assert.match(app, /document-list page-content document-column/);
+  assert.match(app, /review-workspace page-content document-column/);
+  assert.match(app, /research-form page-content document-column/);
+});
+test('Settings exposes product controls while hiding internal LLM request batching', () => {
+  assert.match(app, /setting\.id === 'review\.batch'\) return false/);
+  assert.match(app, /group-save section-actions/);
+  assert.doesNotMatch(app, /`共 \$\{saves\.length\} 项`/);
+  assert.match(app, /\[\.\.\.input\.querySelectorAll\('input'\)\]\.filter/);
+  assert.match(css, /\.source-options label:has\(input:checked\)/);
+  assert.match(css, /\.source-options label:has\(input:focus-visible\)/);
 });
 test('UI renders untrusted content through text nodes and keeps credentials write-only', () => {
   assert.doesNotMatch(app, /\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML|document\.write\(/);
