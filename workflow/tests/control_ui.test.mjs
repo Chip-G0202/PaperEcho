@@ -18,8 +18,9 @@ test('UI shell keeps five real routes, skip target, live status and collapsible 
 test('brand asset is a referenced green SVG favicon with balanced echo geometry', () => {
   assert.match(html, /rel="icon" href="\/paperecho-mark\.svg" type="image\/svg\+xml"/);
   assert.match(html, /<img class="brand-mark" src="\/paperecho-mark\.svg"/);
-  assert.match(logo, /linearGradient/); assert.match(logo, /#b9ead2/); assert.match(logo, /#17684f/);
-  assert.match(logo, /M22 20c-6 6-6 18 0 24/); assert.match(logo, /M42 20c6 6 6 18 0 24/);
+  assert.match(logo, /linearGradient/); assert.match(logo, /#bdebd7/); assert.match(logo, /#17684f/);
+  assert.match(logo, /x="4" y="26" width="8" height="12"/); assert.match(logo, /x="52" y="26" width="8" height="12"/);
+  assert.match(logo, /x="16" y="18" width="8" height="28"/); assert.match(logo, /x="40" y="18" width="8" height="28"/);
   assert.doesNotMatch(html, /Replaceable vector placeholder/);
 });
 test('demo and simplified Settings copy stay explicit and remove the old footer claim', () => {
@@ -27,6 +28,13 @@ test('demo and simplified Settings copy stay explicit and remove the old footer 
   assert.match(app, /按钮和快捷键均可体验/); assert.match(app, /data\.demo \? Promise\.resolve/);
   assert.match(app, /setting\.id === 'sources\.domain'/); assert.match(app, /\['pubmed\.days', 'openalex\.days'\]/);
   assert.match(app, /保存本组/); assert.doesNotMatch(html, /本地研究工作空间 · XLSX \/ DOCX 继续兼容 · 反馈不会直接生成永久排除规则/);
+});
+test('compact UI hierarchy removes D and redundant review details', () => {
+  assert.match(app, /function pageIntro/); assert.match(app, /displayablePapers/);
+  assert.match(app, /人工复核批量大小/); assert.match(app, /进入等级复审或人工复核阶段的候选条目上限/);
+  assert.match(app, /可使用键盘快速操作：1=升级/); assert.doesNotMatch(app, /补充原因（可选）|等级复审依据：/);
+  assert.doesNotMatch(css, /\.badge\.grade-D/); assert.match(css, /\.source-options label\{min-height:46px/);
+  assert.match(css, /\.settings-subgroup\+\.settings-subgroup\{border-top:1px/); assert.match(css, /\.group-save\{justify-content:flex-start/);
 });
 test('UI renders untrusted content through text nodes and keeps credentials write-only', () => {
   assert.doesNotMatch(app, /\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML|document\.write\(/);

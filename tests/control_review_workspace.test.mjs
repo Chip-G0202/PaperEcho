@@ -69,15 +69,16 @@ test('Weekly view model reuses exporter grade precedence and every legacy manual
   assert.equal(data.items[0].ruleGrade, 'B'); assert.equal(data.items[0].semanticGrade, 'A'); assert.equal(data.items[0].finalGrade, 'C'); assert.equal(data.items[0].grade, 'C');
   assert.equal(data.items[0].reviewReason, '原有依据'); assert.equal(JSON.stringify(source), before);
 });
-test('Literature counts all final grades, filters without feedback actions, English before Chinese', async () => {
+test('Literature shows only compact A/B/C cards and filters without feedback actions', async () => {
   const app = ui(); const items = papers(101); items[100].finalGrade = 'D';
+  items[0].abstract = '不应显示的摘要'; items[0].reviewReason = '不应显示的复审依据';
   app.setApi(async () => ({ total: items.length, runId: 'fixture', items })); await app.weekly();
   assert.equal(app.main.querySelectorAll('article').length, 50);
+  assert.match(app.main.textContent, /本次共 100 篇/);
   assert.match(app.main.textContent, /A级 34 · B级 33 · C级 33/);
-  assert.doesNotMatch(app.main.textContent, /去反馈|前往论文反馈|保存反馈|升级 1/);
+  assert.doesNotMatch(app.main.textContent, /去反馈|前往论文反馈|保存反馈|升级 1|D级|不应显示的摘要|不应显示的复审依据|作者：|Zotero：/);
   assert.ok(app.main.textContent.indexOf(items[0].title) < app.main.textContent.indexOf(items[0].translatedTitle));
   await byText(app.main, 'A级 34').click(); assert.equal(app.main.querySelectorAll('article').length, 34);
-  await byText(app.main, 'D级 1').click(); assert.equal(app.main.querySelectorAll('article').length, 1); assert.match(app.main.textContent, /D级 · 排除等级/);
 });
 test('Weekly pagination fetches beyond 200; a changed run fails closed', async () => {
   const app = ui(); const items = papers(1000); const requests = [];
@@ -90,7 +91,7 @@ test('single paper card: immediate click saves existing values, advances, revisi
   const base = new URL('./runs/control-review/', import.meta.url); await fs.mkdir(base, { recursive: true });
   const root = await fs.mkdtemp(path.join(fileURLToPath(base), 'feedback-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const service = new FeedbackService({ reviewRoot: root }); const items = papers(); const before = items.map((item) => [item.ruleGrade, item.semanticGrade, item.finalGrade]);
+  const service = new FeedbackService({ reviewRoot: root }); const items = papers(); items[0].finalGrade = 'B'; const before = items.map((item) => [item.ruleGrade, item.semanticGrade, item.finalGrade]);
   const app = ui(); const calls = [];
   app.setApi(async (url, payload) => { if (!payload) return { runId: 'fixture', total: items.length, items }; calls.push(payload); return service.submit({ kind: 'paper_feedback', paper: items.find((item) => item.id === payload.paperId), ...payload }); });
   await app.paperReview(); assert.equal(app.main.querySelectorAll('article').length, 1); assert.doesNotMatch(app.main.textContent, /保存反馈/);
@@ -113,7 +114,7 @@ test('save failure keeps card and selection, bounded concurrent submissions, ret
   await byText(app.main, '不变 2').click(); assert.equal(calls[1].requestId, calls[0].requestId); assert.equal(currentTitle(app.main), items[1].title);
 });
 test('keyboard 1/2/3/4 and arrows operate only in workspace; input/editor/combinations suppressed', async () => {
-  const app = ui(); const items = papers(8); const calls = [];
+  const app = ui(); const items = papers(8); items.forEach((item) => { item.finalGrade = 'B'; }); const calls = [];
   app.setApi(async (url, payload) => { if (!payload) return { runId: 'fixture', total: 8, items }; calls.push(payload); return { revision: calls.length }; });
   await app.paperReview();
   for (const tag of ['input', 'textarea', 'select', 'div', 'section']) {
@@ -149,11 +150,12 @@ test('Settings has four navigation groups, preserved inputs, radios/toggles, bla
 test('demo fixtures render Literature and both Feedback queues without calling mutation APIs', async () => {
   const app = ui(); const calls = []; app.setApi(async (url, value) => { calls.push([url, value]); return { runId: 'real-empty', total: 0, items: [] }; });
   app.demoMode.weekly = true; await app.weekly();
-  assert.match(app.main.textContent, /示例模式/); assert.match(app.main.textContent, /推荐依据/);
+  assert.match(app.main.textContent, /示例模式/); assert.match(app.main.textContent, /推荐理由/);
   assert.equal(app.main.querySelectorAll('article').length, 6); assert.match(app.main.textContent, /A级 2 · B级 2 · C级 2/);
   app.main.replaceChildren(); app.demoMode.feedback = true; await app.paperReview();
   assert.match(app.main.textContent, /常规文献 3/); assert.match(app.main.textContent, /需人工复核 3/);
-  await byText(app.main, '升级 1').click();
+  assert.equal(byText(app.main, '升级 1').disabled, true);
+  await byText(app.main, '不变 2').click();
   await byText(app.main, '需人工复核 3').click();
   assert.match(app.main.textContent, /规则等级.*语义等级.*最终等级/);
   assert.equal(calls.some(([url, value]) => url === '/api/feedback' && value), false);
@@ -177,8 +179,21 @@ test('Settings hides research and query editors, uses source checkboxes and one 
   assert.equal(sourceSection.querySelectorAll('button').filter((node) => node.textContent === '保存本组').length, 1);
   const modelSection = app.main.querySelectorAll('.settings-section').find((node) => /模型与 AI/.test(node.textContent));
   assert.match(modelSection.textContent, /标题翻译 模型名称.*标题翻译 API 地址/);
-  await byText(modelSection, '保存本组').click(); assert.deepEqual(calls.map((entry) => entry.id), ['translation.model', 'translation.endpoint', 'translation.temperature']);
-  assert.match(app.notice.textContent, /“模型与 AI”已保存/);
+  assert.match(modelSection.textContent, /标题翻译.*偏好学习/);
+  await byText(modelSection, '保存标题翻译').click(); assert.deepEqual(calls.map((entry) => entry.id), ['translation.model', 'translation.endpoint', 'translation.temperature']);
+  assert.match(app.notice.textContent, /“标题翻译”已保存/);
+});
+test('Feedback hides final D items and enforces A/C action boundaries for mouse and keyboard', async () => {
+  const app = ui(); const items = papers(4); const calls = [];
+  items[0].finalGrade = 'A'; items[1].finalGrade = 'C'; items[2].finalGrade = 'D'; items[3].finalGrade = 'B';
+  items.forEach((item) => { item.needsReview = false; });
+  app.setApi(async (url, payload) => { if (!payload) return { runId: 'fixture', total: items.length, items }; calls.push(payload); return { revision: calls.length }; });
+  await app.paperReview();
+  assert.match(app.main.textContent, /常规文献 3/); assert.doesNotMatch(app.main.textContent, new RegExp(items[2].title));
+  assert.equal(byText(app.main, '升级 1').disabled, true); assert.equal(byText(app.main, '排除 4').disabled, false);
+  await key(work(app.main), '1'); assert.equal(calls.length, 0);
+  await byText(app.main, '下一篇 ↓').click(); assert.equal(byText(app.main, '降级 3').disabled, true); assert.equal(byText(app.main, '排除 4').disabled, false);
+  await key(work(app.main), '3'); assert.equal(calls.length, 0);
 });
 test('zero results, missing identifier, completed queue and neutral selection stay usable', async () => {
   const app = ui(); app.setApi(async () => ({ runId: null, total: 0, items: [] })); await app.paperReview(); assert.match(app.main.textContent, /此队列暂无文献/);
