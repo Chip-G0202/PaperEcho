@@ -1,8 +1,8 @@
 # 内部模块归属与 CLI Wrapper 收敛记录
 
-本文档记录 v1.3 能力归属审计结果、唯一 owner 指定、CLI wrapper 收敛原则，以及后续删除/归档候选。
+本文档第 1 节维护当前能力 owner，第 2 节说明 wrapper 原则；其余收敛过程与候选保留历史背景，不表示 v2.4 仍有同样待办。目录和测试导航见 [Repository map](repository-map.md)。
 
-## 生成时间
+## 历史审计起点
 
 - 日期：2026-05-31
 - 范围：10 项核心能力的审计与收敛
@@ -64,9 +64,9 @@ Control Center application boundary：
 
 ---
 
-## 3. 暂不处理的高风险重复点
+## 3. Historical：当时记录的高风险重复点
 
-以下重复点在本轮审计中识别，但因涉及高风险模块（writeback、export、translation），暂不处理：
+以下是历史审计记录，部分条目已追加后续状态；路径和重复程度不能作为当前事实直接采用。执行任何未来重构前应重新定向验证，不据此恢复已退役入口。
 
 ### 3.1 日期格式化函数重复
 
@@ -104,7 +104,7 @@ Control Center application boundary：
 
 ---
 
-## 4. 后续删除/归档候选
+## 4. Historical：当时的删除/归档候选
 
 | 文件 | 当前状态 | 删除条件 |
 |------|---------|---------|
@@ -113,9 +113,9 @@ Control Center application boundary：
 
 ---
 
-## 5. 下一轮建议
+## 5. Historical：当时的下一轮建议
 
-### 低风险（可立即执行）
+### 当时评估为低风险（当前执行前仍须验证）
 
 1. **统一日期格式化函数**：将 `fmtDate`、`yyMd`、`isoWeek`、`weekNumber`、`weekLabel` 统一到 `runtime_config.mjs`，其他文件改为 import
 2. **提取 `parseDateNameToDate`**：提取到 `runtime_config.mjs` 或新模块

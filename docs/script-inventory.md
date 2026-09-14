@@ -16,7 +16,9 @@
 
 ## Runner and launchers
 
-`node workflow/tools/web/server.mjs` 启动本地 Control Center（默认 `127.0.0.1:8765`）。它是可选交互入口，不是 production launcher，不启动 Stage1–Stage5、不操作调度器；业务请求只调用 `lib/control_*_service.mjs` application services。停止服务不影响上述固定运行链路。
+普通用户通过根目录 `PaperEcho.exe`（Windows）或 `PaperEcho.app`（macOS）委托 `workflow/tools/web/launcher.mjs`，由共享 owner 处理实例复用、ready 与浏览器打开。`.cmd` / `.command` 是诊断备用入口；Windows 构建源码位于 `workflow/tools/web/launcher-windows/`。
+
+`node workflow/tools/web/server.mjs` 保留为前台开发入口（默认 `127.0.0.1:8765`）。Control Center 是可选交互入口，不是 production launcher，不启动 Stage1–Stage5、不操作调度器；业务请求只调用 application services。停止服务不影响上述固定运行链路。这里的 `web/` UI 不等同于表中 Zotero Web API mode。
 
 | Path | Role | Direct user run | Production entry | Called by Skill/Runner | Side effects | Scheduled automation |
 |---|---|---|---:|---|---|---|

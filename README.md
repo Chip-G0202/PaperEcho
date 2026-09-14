@@ -4,6 +4,8 @@
 
 [快速开始](#快速开始) | [V2.3 更新](#更新内容) | [目录结构](#目录结构) | [English](#english-version)
 
+开发者导航：[Repository map 与测试定位](docs/repository-map.md) · [文档索引](docs/README.md) · [Config map](config/README.md) · [执行约束 AGENTS.md](AGENTS.md)。
+
 ## 这是什么
 
 > **听见文献回声，找到值得追随的研究线索。**
