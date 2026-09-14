@@ -6,9 +6,12 @@ let page = 'home';
 let feedbackView = 'papers';
 let researchDraft = '';
 let researchRequestId = crypto.randomUUID();
-let settingsGroup = 'research';
+let settingsGroup = 'common';
 let reviewSection = 'normal';
 let activeReview = null;
+let homeView = 'overview';
+const demoMode = { weekly: false, feedback: false };
+let demoFeedbackItems = null;
 const decisionReceipts = new Map();
 const pageNames = { home: '概览 · Overview', weekly: '文献 · Literature', feedback: '反馈 · Feedback', settings: '设置 · Settings', system: '系统 · System' };
 const reasonLabels = ['不符合主题', '暴露因素不符', '研究人群不符', '模型不符', '方法不符', '文献类型不符', '范围过宽', '关联过弱', '其他'];
@@ -19,12 +22,20 @@ const feedbackActions = ['highly_relevant', 'relevant', 'maybe', 'irrelevant'];
 const statusLabels = { pending: '待确认', candidate: '候选', accepted: '已接受', revised: '已修改接受', rejected: '已拒绝', superseded: '已被替代', expired: '已过期' };
 const riskLabels = { low: '低', medium: '中', high: '高' };
 const settingGroups = [
-  ['research', '研究与检索', ['Sources', 'Search', 'RSS']],
-  ['review', '评审与学习', ['Models', 'Ranking / Review', 'Radar', 'Weekly', 'Integrity']],
+  ['common', '常用设置', ['General', 'Sources', 'Search', 'RSS']],
+  ['review', '模型与审阅', ['Models', 'Ranking / Review']],
+  ['automation', '自动化', ['Radar', 'Weekly', 'Integrity']],
   ['connections', '连接与通知', ['Zotero', 'Notifications', 'Credentials']],
-  ['workspace', '工作区与高级', ['General', 'Advanced']],
 ];
 const reasons = ['', 'topic_mismatch', 'exposure_mismatch', 'population_mismatch', 'model_mismatch', 'method_mismatch', 'publication_type_mismatch', 'too_broad', 'too_peripheral', 'other'];
+const demoPapers = [
+  { id: 'demo-1', title: 'Longitudinal immune signatures associated with early vascular remodeling', translatedTitle: '与早期血管重塑相关的纵向免疫特征', authors: ['演示作者甲', '演示作者乙'], finalGrade: 'A', ruleGrade: 'A', semanticGrade: 'A', source: 'PubMed / PMC', journal: 'Demo Translational Medicine', year: '2026', recommendationReason: '纵向设计与机制指标同时匹配当前研究方向。', abstract: '示例摘要：连续随访免疫信号与早期血管变化，用于演示长标题、摘要和推荐依据的排版。', zotero: 'unknown', feedbackAllowed: true, feedback: null, needsReview: false },
+  { id: 'demo-2', title: 'Multi-omic profiling reveals context-dependent inflammatory trajectories in aging cohorts', translatedTitle: '多组学分析揭示老龄队列中情境依赖的炎症轨迹', authors: ['演示作者丙'], finalGrade: 'A', ruleGrade: 'B', semanticGrade: 'A', source: 'RSS 订阅', journal: 'Demo Systems Biology', year: '2026', recommendationReason: '多组学与队列证据互补，具备较高的课题迁移价值。', zotero: 'unknown', feedbackAllowed: true, feedback: null, needsReview: false },
+  { id: 'demo-3', title: 'A pragmatic framework for evaluating reproducibility in biomarker studies', translatedTitle: '生物标志物研究可重复性评价的实用框架', authors: ['演示作者丁'], finalGrade: 'B', ruleGrade: 'B', semanticGrade: 'B', source: 'PubMed / PMC', journal: 'Demo Methods', year: '2025', recommendationReason: '方法学相关，但与核心疾病问题的直接关联较弱。', zotero: 'unknown', feedbackAllowed: true, feedback: null, needsReview: false },
+  { id: 'demo-4', title: 'Environmental exposure patterns and cardiometabolic resilience across adulthood', translatedTitle: '成年期环境暴露模式与心代谢韧性', authors: ['演示作者戊'], finalGrade: 'B', ruleGrade: 'A', semanticGrade: 'B', source: 'RSS 订阅', journal: 'Demo Population Health', year: '2026', recommendationReason: '暴露因素相关，适合作为专题背景与比较证据。', zotero: 'unknown', feedbackAllowed: true, feedback: null, needsReview: true, reviewReason: '规则系统给出 A，语义复审认为与核心终点距离较远，最终采用 B。' },
+  { id: 'demo-5', title: 'Short-term dietary variation and exploratory metabolite associations', translatedTitle: '短期饮食变化与探索性代谢物关联', authors: ['演示作者己'], finalGrade: 'C', ruleGrade: 'B', semanticGrade: 'C', source: 'PubMed / PMC', journal: 'Demo Nutrition Research', year: '2025', recommendationReason: '属于领域相关探索，研究周期与证据强度有限。', zotero: 'unknown', feedbackAllowed: true, feedback: null, needsReview: true, reviewReason: '语义复审下调至 C，保留人工确认入口。' },
+  { id: 'demo-6', title: 'Community implementation notes for a digital prevention program', translatedTitle: '数字化预防项目的社区实施记录', authors: ['演示作者庚'], finalGrade: 'C', ruleGrade: 'C', semanticGrade: 'D', source: 'RSS 订阅', journal: 'Demo Implementation Science', year: '2024', recommendationReason: '可补充实施背景，但不直接回答当前核心问题。', zotero: 'unknown', feedbackAllowed: true, feedback: null, needsReview: true, reviewReason: '语义等级为 D；安全策略阻止自动排除，等待人工确认。' },
+];
 function el(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; }
 function button(text, action) { const node = el('button', text); node.type = 'button'; node.addEventListener('click', async () => {
   node.disabled = true; node.setAttribute('aria-busy', 'true'); notice.dataset.kind = 'success';
@@ -39,6 +50,7 @@ function button(text, action) { const node = el('button', text); node.type = 'bu
 }); return node; }
 function select(values, selected) { const node = el('select'); for (const [value, label] of values) { const option = el('option', label); option.value = value; node.append(option); } node.value = selected || ''; return node; }
 function label(text, input) { const node = el('label', text); input.id ||= `field-${crypto.randomUUID()}`; input.setAttribute('aria-label', text); node.htmlFor = input.id; node.append(input); return node; }
+function demoBanner(text, exit) { const bar = el('section', undefined, 'demo-banner'); bar.setAttribute('aria-label', '示例模式'); const copy = el('div'); copy.append(el('strong', '示例模式'), el('span', text)); const close = button('退出示例', exit); bar.append(copy, close); return bar; }
 async function api(url, value) {
   const response = await fetch(url, value === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(value) }).catch(() => { throw new Error('无法连接本地服务，请检查服务是否仍在运行。'); });
   const result = await response.json().catch(() => { throw new Error('服务响应暂不可用，请刷新页面后重试。'); });
@@ -98,6 +110,7 @@ function gradeBadge(value) {
 function paperHeading(card, item) {
   card.append(el('h3', item.title || '原始标题未提供', 'paper-title'));
   if (item.translatedTitle && item.translatedTitle !== item.title) card.append(el('p', item.translatedTitle, 'translated-title'));
+  if (item.recommendationReason) card.append(el('p', `推荐依据：${item.recommendationReason}`, 'recommendation-reason'));
   card.append(el('p', [item.journal, item.year, item.source].filter(Boolean).join(' · '), 'meta'));
   const badges = el('div', undefined, 'badge-row'); badges.append(gradeBadge(item.finalGrade ?? item.grade));
   if (item.integrity) badges.append(el('span', `完整性状态：${({ correction: '更正', retracted: '已撤稿', clear: '未发现警报', unknown: '未知' })[item.integrity] || item.integrity}`, 'badge warning'));
@@ -113,6 +126,8 @@ function paperDetails(card, item) {
   if (item.reviewReason) card.append(el('h4', '等级复审依据'), el('p', item.reviewReason));
 }
 async function home() {
+  if (homeView === 'radar-demo') { radarDemo(); return; }
+  if (homeView === 'weekly-demo') { weeklyDemo(); return; }
   const status = await api('/api/status'); const weeklyData = await loadWeekly(); const grades = gradeCounts(weeklyData.items);
   main.append(el('h2', '研究工作空间'), el('p', '从最近的文献开始，让每次反馈帮助下一次推荐。', 'lead'));
   const grid = el('div', undefined, 'grid');
@@ -125,6 +140,25 @@ async function home() {
   if (status.integrity) main.append(el('p', `完整性提醒：新撤稿 ${status.integrity.newlyConfirmedRetractions ?? 0} · 更正 ${status.integrity.newCorrections ?? 0} · 关注声明 ${status.integrity.newExpressionsOfConcern ?? 0}`, 'meta'));
   if (status.nextScheduledRun) main.append(el('p', `下一次运行：${date(status.nextScheduledRun)}`, 'meta'));
   const actions = el('div', undefined, 'actions quick-links'); const review = button('开始文献审阅', () => navigate('feedback/papers')); review.className = 'primary'; actions.append(review, button('提交研究方向反馈', () => navigate('feedback/research'))); main.append(actions);
+  const previews = el('section', undefined, 'experience-grid');
+  for (const [title, text, route] of [['Daily Radar 示例', '查看当日发现、紧急队列与来源分布。', 'home/radar-demo'], ['Weekly 示例', '查看一周候选、写回与完整性摘要。', 'home/weekly-demo']]) { const card = el('article', undefined, 'experience-card'); card.append(el('p', '只读演示', 'eyebrow'), el('h3', title), el('p', text, 'meta'), button('查看示例', () => navigate(route))); previews.append(card); }
+  main.append(previews);
+}
+function radarDemo() {
+  main.append(demoBanner('仅展示界面结构，不读取或改变真实 Radar、调度与运行状态。', () => navigate('home')), el('h2', 'Daily Radar · 今日速览'), el('p', '把当天值得立即查看的信号放在一页内。以下均为演示内容。', 'lead'));
+  const metrics = el('div', undefined, 'grid metric-grid');
+  for (const [name, value, note] of [['今日发现', '18', '筛选前 42 条'], ['紧急关注', '2', '撤稿/关键更新信号'], ['去重后', '31', '合并 11 条重复记录'], ['进入候选', '12', 'A 3 · B 5 · C 4']]) { const card = el('section', undefined, 'card'); card.append(el('h3', name), el('p', value, 'metric'), el('p', note, 'meta')); metrics.append(card); }
+  const distribution = el('section', undefined, 'card source-distribution'); distribution.append(el('h3', '来源分布'));
+  for (const [name, value] of [['PubMed / PMC', 68], ['RSS 订阅', 32]]) { const row = el('div', undefined, 'source-row'); const track = el('span', undefined, 'source-track'); const fill = el('span', undefined, 'source-fill'); fill.style.width = `${value}%`; track.append(fill); row.append(el('span', name), track, el('strong', `${value}%`)); distribution.append(row); }
+  main.append(metrics, distribution, el('h3', '紧急队列'));
+  for (const item of demoPapers.slice(0, 2)) { const card = el('article', undefined, 'radar-item'); paperHeading(card, item); card.append(el('p', item.id === 'demo-1' ? '信号：出现与核心队列直接相关的早期机制证据。' : '信号：多组学结果可能改变本周的优先阅读顺序。', 'radar-signal')); main.append(card); }
+}
+function weeklyDemo() {
+  main.append(demoBanner('仅用于体验周报结构，不代表系统已运行，也不会写入真实报告。', () => navigate('home')), el('h2', 'Weekly · 本周研究回声'), el('p', '快速确认本周新增了什么、流向哪里，以及哪些环节值得留意。', 'lead'));
+  const counts = gradeCounts(demoPapers); const hero = el('section', undefined, 'weekly-hero'); hero.append(el('p', '本周候选', 'eyebrow'), el('strong', String(demoPapers.length)), el('p', `A级 ${counts.A} · B级 ${counts.B} · C级 ${counts.C}`)); main.append(hero);
+  const flow = el('div', undefined, 'weekly-flow');
+  for (const [title, value, note, tone] of [['合并与去重', '42 → 31', '11 条重复记录已合并', 'success'], ['Zotero 写回', '6 条', '演示：全部进入日期与等级集合', 'success'], ['完整性检查', '1 条提醒', '演示：需要人工查看来源更新', 'warning']]) { const card = el('section', undefined, 'card'); card.append(el('span', tone === 'warning' ? '需留意' : '已完成', `badge ${tone}`), el('h3', title), el('p', value, 'metric'), el('p', note, 'meta')); flow.append(card); }
+  const outcome = el('section', undefined, 'weekly-outcome'); outcome.append(el('h3', '本周处理结果'), el('p', '6 篇进入阅读队列，3 篇建议优先精读，1 条完整性提醒等待人工核对。'), el('p', '示例数据不会生成 XLSX、DOCX、Zotero 写入或调度记录。', 'meta')); main.append(flow, outcome);
 }
 function empty(title, text) { const box = el('section', undefined, 'empty-state'); box.append(el('h3', title), el('p', text)); main.append(box); }
 async function system() {
@@ -139,9 +173,11 @@ async function feedback() {
   main.append(nav); await (feedbackView === 'papers' ? paperReview() : feedbackView === 'research' ? research() : suggestions());
 }
 async function weekly() {
-  const data = await loadWeekly();
+  const data = demoMode.weekly ? { runId: 'demo', total: demoPapers.length, items: structuredClone(demoPapers), demo: true } : await loadWeekly();
   main.append(el('h2', '本次文献汇总'), el('p', '只读浏览当前运行结果；等级和依据均保留系统原始判断。', 'lead'));
-  if (!data.total) { empty('暂时没有可查看的文献', '当前实例尚无可用周报或本地文献结果。完成原有工作流后可重新读取。'); return; }
+  if (data.demo) main.append(demoBanner('这些文献是前端演示条目，不来自真实周报，也不会进入反馈或运行状态。', () => { demoMode.weekly = false; render(); }));
+  else { const actions = el('div', undefined, 'actions'); actions.append(button('体验示例文献', () => { demoMode.weekly = true; render(); })); main.append(actions); }
+  if (!data.total) { empty('暂时没有可查看的文献', '当前实例尚无可用周报或本地文献结果。你可以先体验示例内容。'); return; }
   const counts = gradeCounts(data.items); const filters = el('nav', undefined, 'grade-filters'); filters.setAttribute('aria-label', '按最终等级筛选');
   main.append(el('p', `本次共 ${data.total} 篇 · A级 ${counts.A} · B级 ${counts.B} · C级 ${counts.C}`, 'summary-strip'), filters);
   const list = el('section'); main.append(list); let selected = 'all'; let start = 0;
@@ -177,7 +213,10 @@ function bindReview(workspace, mode, queue, draw, choose, isEditing = () => fals
   });
 }
 async function paperReview() {
-  const data = await loadWeekly(); main.append(el('h2', '文献等级审阅'), el('p', '最终等级是否正确？反馈作为人工纠正信号记录，保留本次系统等级；后续学习及条目处理仍由原工作流执行。', 'lead'));
+  if (demoMode.feedback && !demoFeedbackItems) demoFeedbackItems = structuredClone(demoPapers);
+  const data = demoMode.feedback ? { runId: 'demo', total: demoFeedbackItems.length, items: demoFeedbackItems, demo: true } : await loadWeekly(); main.append(el('h2', '文献等级审阅'), el('p', '最终等级是否正确？反馈作为人工纠正信号记录，保留本次系统等级；后续学习及条目处理仍由原工作流执行。', 'lead'));
+  if (data.demo) main.append(demoBanner('按钮和快捷键均可体验，选择只保留在当前页面会话，不会提交真实反馈。', () => { demoMode.feedback = false; reviewSection = 'normal'; render(); }));
+  else { const actions = el('div', undefined, 'actions'); actions.append(button('体验示例审阅', () => { demoMode.feedback = true; demoFeedbackItems = structuredClone(demoPapers); reviewSection = 'normal'; render(); })); main.append(actions); }
   const tabs = el('nav', undefined, 'subnav'); tabs.setAttribute('aria-label', '文献审阅队列'); main.append(tabs);
   const workspace = el('section', undefined, 'review-workspace'); workspace.tabIndex = -1; workspace.setAttribute('aria-label', '文献审阅工作区'); main.append(workspace);
   // needsReview comes exclusively from the shared Weekly exporter owner.
@@ -219,10 +258,10 @@ async function paperReview() {
     if (queue.busy) return;
     reason ??= workspace.querySelector('select')?.value || '';
     const pending = queue.submit(value + ':' + reason,
-      (item, requestId) => api('/api/feedback', { runId: data.runId, paperId: item.id, value, reason, requestId }),
+      (item, requestId) => data.demo ? Promise.resolve({ revision: 1, demo: true, requestId }) : api('/api/feedback', { runId: data.runId, paperId: item.id, value, reason, requestId }),
       (item) => { item.feedback = value; });
     draw();
-    try { const saved = await pending; if (saved) { message = `已记录：${feedbackLabels[value]} · ${saved.item.title.slice(0, 90)}。`; messageKind = 'success'; } }
+    try { const saved = await pending; if (saved) { message = data.demo ? `示例选择：${feedbackLabels[value]} · 未写入真实数据。` : `已记录：${feedbackLabels[value]} · ${saved.item.title.slice(0, 90)}。`; messageKind = 'success'; } }
     catch (error) { message = error.message + ' 当前文献未前进，请重试。'; messageKind = 'error'; }
     draw(true);
   };
@@ -321,46 +360,74 @@ function rssEditor(setting, container) {
       row.append(label('名称', name), label('RSS URL', url), label('启用', enabled), button('删除该订阅', () => { entries.splice(index, 1); draw(); })); list.append(row);
     });
   };
-  draw(); container.append(list, button('添加 RSS', () => { entries.push({ name: '', url: '', enabled: false }); draw(); }), button('保存订阅列表', async () => { await api('/api/settings', { id: setting.id, value: entries }); notice.textContent = 'RSS 已保存，下次运行生效。'; }));
+  draw(); container.append(list, button('添加 RSS', () => { entries.push({ name: '', url: '', enabled: false }); draw(); }));
+  return () => structuredClone(entries);
+}
+const settingGroupNames = { General: '运行方式', Models: '模型与 AI', Sources: '检索来源', Search: '检索周期', RSS: 'RSS 订阅', 'Ranking / Review': '评审体验', Radar: 'Daily Radar', Weekly: 'Weekly 周报', Integrity: '文献完整性', Zotero: 'Zotero', Notifications: '邮件通知', Credentials: '凭据' };
+function visibleSetting(setting) {
+  if (setting.id === 'sources.domain') return false;
+  if (setting.category === 'Search') return ['pubmed.days', 'openalex.days'].includes(setting.id);
+  return setting.category !== 'Advanced';
+}
+function settingControl(setting) {
+  let input;
+  if (setting.id === 'sources.override') {
+    input = el('fieldset', undefined, 'setting-options source-options'); input.append(el('legend', setting.description));
+    const labels = { rss: 'RSS 订阅', pubmed_pmc: 'PubMed / PMC', openalex: 'OpenAlex', semantic_scholar: 'Semantic Scholar' };
+    for (const value of setting.validation.values) { const checkbox = el('input'); checkbox.type = 'checkbox'; checkbox.value = value; checkbox.checked = (setting.value || []).includes(value); input.append(label(labels[value] || value, checkbox)); }
+    Object.defineProperty(input, 'value', { get: () => input.querySelectorAll('input').filter((entry) => entry.checked).map((entry) => entry.value) });
+  } else if (setting.type === 'enum' && setting.validation.values.length <= 5) {
+    input = el('fieldset', undefined, 'setting-options'); input.append(el('legend', setting.description)); const name = `option-${crypto.randomUUID()}`;
+    for (const value of setting.validation.values) { const radio = el('input'); radio.type = 'radio'; radio.name = name; radio.value = value; radio.checked = value === setting.value; const text = ({ local: '本地', desktop: '桌面', web: '网页', disabled: '停用', enabled: '启用', strict: '严格', warn: '提醒', off: '关闭', on: '开启', auto: '自动', standard: '标准运行', complete: '完整运行', radar: '每日速览' })[value] || value; input.append(label(text, radio)); }
+    Object.defineProperty(input, 'value', { get: () => input.querySelector('input:checked')?.value });
+  } else if (setting.type === 'enum') input = select(setting.validation.values.map((value) => [value, value]), setting.value);
+  else if (setting.type === 'boolean') { input = el('input'); input.type = 'checkbox'; input.setAttribute('role', 'switch'); input.checked = setting.value === true; }
+  else { input = el('input'); input.type = ['integer', 'number'].includes(setting.type) ? 'number' : setting.type === 'email' ? 'email' : setting.type === 'url' ? 'url' : 'text'; input.value = Array.isArray(setting.value) ? setting.value.join(', ') : setting.value ?? ''; if (setting.validation.min !== undefined) input.min = setting.validation.min; if (setting.validation.max !== undefined) input.max = setting.validation.max; if (setting.type === 'number') input.step = 'any'; }
+  return input;
+}
+function settingValue(setting, input) {
+  if (setting.id === 'sources.override') return input.value;
+  if (setting.type === 'boolean') return input.checked;
+  if (['integer', 'number'].includes(setting.type)) return Number(input.value);
+  return input.value;
 }
 async function settings() {
-  main.append(el('h2', '工作空间设置'), el('p', '按研究需求调整常用设置。每项独立校验与保存，下次工作流运行生效。', 'lead'));
+  main.append(el('h2', '工作空间设置'), el('p', '这里只保留日常最常用的选项；检索词、检索式和底层参数继续由原配置维护。', 'lead'));
   const data = await api('/api/settings');
-  const groups = ['General', 'Models', 'Sources', 'Search', 'RSS', 'Ranking / Review', 'Radar', 'Weekly', 'Integrity', 'Zotero', 'Notifications', 'Credentials', 'Advanced'];
-  const groupNames = ['常规', '模型', '检索来源', '检索条件', 'RSS 订阅', '排序与复审', '每日 Radar', 'Weekly 周报', '文献完整性', 'Zotero', '邮件通知', '凭据', '高级选项'];
+  const groups = settingGroups.flatMap((entry) => entry[2]);
   const layout = el('div', undefined, 'settings-layout'); const nav = el('nav', undefined, 'settings-nav'); nav.setAttribute('aria-label', '设置大类'); const body = el('div', undefined, 'settings-body'); layout.append(nav, body); main.append(layout);
   const switchGroup = (key) => { settingsGroup = key; nav.querySelectorAll('button').forEach((item) => item.setAttribute('aria-current', item.dataset.group === key ? 'page' : 'false')); body.querySelectorAll('[data-settings-group]').forEach((section) => { section.hidden = section.dataset.settingsGroup !== key; }); };
   for (const [key, title] of settingGroups) { const item = button(title, () => switchGroup(key)); item.dataset.group = key; item.setAttribute('aria-current', key === settingsGroup ? 'page' : 'false'); nav.append(item); }
   for (const group of groups) {
     const owner = settingGroups.find((entry) => entry[2].includes(group))[0];
-    const section = el('section', undefined, 'settings-section'); section.dataset.settingsGroup = owner; section.hidden = owner !== settingsGroup; section.append(el('h3', groupNames[groups.indexOf(group)]));
+    const section = el('section', undefined, 'settings-section'); section.dataset.settingsGroup = owner; section.hidden = owner !== settingsGroup; section.append(el('h3', settingGroupNames[group]));
     if (group === 'Models') section.append(el('p', '标题翻译独立配置；等级复审和文献综述复用偏好学习模型。', 'meta'));
-    for (const entry of data.filter((entry) => entry.category === group)) {
-      const setting = { ...entry, description: entry.description.replace(/required/g, '必要').replace(/optional/g, '补充').replace(/negative/g, '排除').replace(/owner/g, '配置服务').replace(/workflow/g, '工作流') };
+    const saves = []; let unavailable = 0;
+    for (const entry of data.filter((entry) => entry.category === group && visibleSetting(entry))) {
+      const setting = { ...entry, description: entry.description.replace(/translation/g, '标题翻译').replace(/preference/g, '偏好学习').replace(/required/g, '必要').replace(/optional/g, '补充').replace(/negative/g, '排除').replace(/owner/g, '配置服务').replace(/workflow/g, '工作流') };
+      if (setting.id === 'pubmed.days') setting.description = 'PubMed / PMC 检索天数';
+      if (setting.id === 'openalex.days') setting.description = 'OpenAlex 检索天数';
       const row = el('div', undefined, 'setting');
-      if (!setting.available) { row.append(el('p', `${setting.description}：当前配置尚未初始化`)); section.append(row); continue; }
+      if (!setting.available) { unavailable += 1; continue; }
       if (setting.readOnly) { row.append(el('p', `${setting.description}：${setting.value}（只读）`)); section.append(row); continue; }
-      if (setting.type === 'rss') { rssEditor(setting, row); section.append(row); continue; }
-      let input;
-      if (setting.type === 'enum' && setting.validation.values.length <= 5) {
-        input = el('fieldset', undefined, 'setting-options'); input.append(el('legend', setting.description)); const name = `option-${crypto.randomUUID()}`;
-        for (const value of setting.validation.values) { const radio = el('input'); radio.type = 'radio'; radio.name = name; radio.value = value; radio.checked = value === setting.value; const text = ({ local: '本地', desktop: '桌面', web: '网页', disabled: '停用', enabled: '启用', strict: '严格', warn: '提醒', off: '关闭', on: '开启', auto: '自动', biomedical: '生物医学', non_biomedical_stem: '非生物医学理工', education_social_science: '教育与社会科学', mixed_biomedical_technical: '生物医学与技术交叉', unknown: '尚未指定', standard: '标准运行', complete: '完整运行', radar: '每日速览' })[value] || value; input.append(label(text, radio)); }
-        Object.defineProperty(input, 'value', { get: () => input.querySelector('input:checked')?.value });
-      }
-      else if (setting.type === 'enum') input = select(setting.validation.values.map((value) => [value, value]), setting.value);
-      else if (setting.type === 'boolean') { input = el('input'); input.type = 'checkbox'; input.setAttribute('role', 'switch'); input.checked = setting.value === true; }
-      else { input = el('input'); input.type = ['integer', 'number'].includes(setting.type) ? 'number' : setting.type === 'email' ? 'email' : setting.type === 'url' ? 'url' : 'text'; input.value = Array.isArray(setting.value) ? setting.value.map((entry) => Array.isArray(entry) ? entry.join(' | ') : entry).join(', ') : setting.value ?? ''; if (setting.validation.min !== undefined) input.min = setting.validation.min; if (setting.validation.max !== undefined) input.max = setting.validation.max; if (setting.type === 'number') input.step = 'any'; }
-      if (input.className === 'setting-options') row.append(input); else row.append(label(setting.description, input));
+      if (setting.type === 'rss') { const read = rssEditor(setting, row); saves.push({ setting, read, input: row }); section.append(row); continue; }
+      const input = settingControl(setting);
+      if (input.className.includes('setting-options')) row.append(input); else row.append(label(setting.description, input));
       if (setting.validation.min !== undefined || setting.validation.max !== undefined) row.append(el('small', `允许范围：${setting.validation.min ?? '不限'}–${setting.validation.max ?? '不限'}`));
-      if (['list', 'keywords'].includes(setting.type)) row.append(el('small', '逗号分隔；必要检索词的同义词组内用 | 分隔。'));
-      row.append(button('保存', async () => {
-        let value = setting.type === 'boolean' ? input.checked : ['integer', 'number'].includes(setting.type) ? Number(input.value) : input.value;
-        if (['list', 'keywords'].includes(setting.type)) value = input.value.split(',').map((entry) => entry.trim()).filter(Boolean).map((entry) => setting.id === 'pubmed.required' && entry.includes('|') ? entry.split('|').map((term) => term.trim()) : entry);
-        if (!input.checkValidity()) throw new Error('请按字段要求输入有效值，原设置未改变。');
-        await api('/api/settings', { id: setting.id, value }); notice.textContent = '设置已保存，下次运行生效。';
-      })); section.append(row);
+      saves.push({ setting, input, read: () => settingValue(setting, input) }); section.append(row);
+    }
+    if (unavailable) section.append(el('p', '部分选项尚未配置，已从日常界面收起。', 'meta'));
+    if (saves.length) {
+      const actions = el('div', undefined, 'actions group-save'); const save = button('保存本组', async () => {
+        const values = saves.map((entry) => { if (entry.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); return [entry.setting.id, entry.read()]; });
+        let saved = 0;
+        try { for (const [id, value] of values) { await api('/api/settings', { id, value }); saved += 1; } }
+        catch (error) { if (saved) throw new Error(`已保存 ${saved} / ${values.length} 项；其余项目未完成。${error.message}`); throw error; }
+        notice.textContent = `“${settingGroupNames[group]}”已保存，下次运行生效。`;
+      }); save.className = 'primary'; actions.append(save, el('span', `共 ${saves.length} 项`, 'meta')); section.append(actions);
     }
     if (group === 'Credentials') {
+      section.append(el('p', '凭据是敏感操作，仍需逐项明确替换或清除；原值永不回显。', 'meta'));
       for (const item of await api('/api/credentials')) {
         const row = el('div', undefined, 'setting');
         row.append(el('p', `${({ TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '偏好学习 API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero API 密钥' })[item.id] || '凭据'}：${item.configured ? '已配置' : '未配置'}`));
@@ -394,7 +461,7 @@ async function render() {
 function navigate(route) { if (main.getAttribute('aria-busy') === 'true' || activeReview?.queue.busy) return; location.hash = route; }
 function route() {
   if (location.hash === '#content' && main.getAttribute('aria-busy') === 'false') { main.focus(); return; }
-  const [next, view] = location.hash.slice(1).split('/'); page = Object.hasOwn(pageNames, next) ? next : 'home'; feedbackView = ['papers', 'research', 'suggestions'].includes(view) ? view : 'papers';
+  const [next, view] = location.hash.slice(1).split('/'); page = Object.hasOwn(pageNames, next) ? next : 'home'; feedbackView = ['papers', 'research', 'suggestions'].includes(view) ? view : 'papers'; homeView = page === 'home' && ['radar-demo', 'weekly-demo'].includes(view) ? view : 'overview';
   notice.textContent = ''; document.querySelector('#sidebar').dataset.open = 'false'; document.querySelector('#menu-toggle').setAttribute('aria-expanded', 'false');
   return render().then(() => (activeReview?.workspace || main).focus());
 }

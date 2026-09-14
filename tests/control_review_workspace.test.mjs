@@ -13,7 +13,7 @@ const script = await fs.readFile(new URL('../workflow/tools/web/static/app.js', 
 // Minimal DOM test double for event wiring, not layout or browser conformance.
 // Real browser verification remains required for keyboard focus and rendering.
 class Element {
-  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.dataset = {}; this.listeners = {}; this.className = ''; this.value = ''; this.ownText = ''; }
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.dataset = {}; this.listeners = {}; this.className = ''; this.value = ''; this.ownText = ''; this.style = {}; }
   set textContent(value) { this.ownText = String(value); this.children = []; }
   get textContent() { return this.ownText + this.children.map((node) => node.textContent).join(' '); }
   append(...nodes) { for (const node of nodes) { node.parentElement = this; this.children.push(node); } }
@@ -46,7 +46,7 @@ function ui() {
   const main = new Element('main'); const notice = new Element('p');
   const nodes = { '#content': main, '#notice': notice, '#page-title': new Element('h1'), '#menu-toggle': new Element('button') };
   const context = vm.createContext({ document: { querySelector: (key) => nodes[key], querySelectorAll: () => [], createElement: (tag) => new Element(tag) }, window: { addEventListener() {} }, fetch: () => new Promise(() => {}), crypto: { randomUUID }, URL, structuredClone, location: { hash: '' } });
-  vm.runInContext(script + '\nglobalThis.testing = { createReviewQueue, shortcutAction, gradeCounts, loadWeekly, weekly, paperReview, suggestions, settings, settingGroups, setApi: (value) => { api = value; } };', context);
+  vm.runInContext(script + '\nglobalThis.testing = { createReviewQueue, shortcutAction, gradeCounts, loadWeekly, home, weekly, paperReview, suggestions, settings, settingGroups, demoMode, demoPapers, setApi: (value) => { api = value; } };', context);
   return { ...context.testing, main, notice };
 }
 const papers = (count = 100) => Array.from({ length: count }, (_, i) => ({ id: String(i), title: `English ${i} — ${'long title '.repeat(i === 0 ? 80 : 1)}`, translatedTitle: `中文副标题 ${i}`, authors: ['测试作者'], finalGrade: ['A', 'B', 'C'][i % 3], ruleGrade: 'B', semanticGrade: 'A', needsReview: i === count - 1, reviewReason: i === count - 1 ? '既有等级复审依据' : '', source: 'PubMed', journal: 'Journal', year: '2026', doi: i ? '' : '10.1234/test', pmid: String(1000 + i), zotero: 'not_used_local', feedbackAllowed: true, feedback: null }));
@@ -145,6 +145,40 @@ test('Settings has four navigation groups, preserved inputs, radios/toggles, bla
   assert.equal(app.main.querySelectorAll('input').filter((node) => node.type === 'radio').length, 2);
   assert.equal(app.main.querySelectorAll('input').find((node) => node.type === 'password').value, ''); assert.match(app.main.textContent, /连接测试尚未开放/);
   await byText(app.main, '连接与通知').click(); assert.equal(byText(app.main, '连接与通知').getAttribute('aria-current'), 'page');
+});
+test('demo fixtures render Literature and both Feedback queues without calling mutation APIs', async () => {
+  const app = ui(); const calls = []; app.setApi(async (url, value) => { calls.push([url, value]); return { runId: 'real-empty', total: 0, items: [] }; });
+  app.demoMode.weekly = true; await app.weekly();
+  assert.match(app.main.textContent, /示例模式/); assert.match(app.main.textContent, /推荐依据/);
+  assert.equal(app.main.querySelectorAll('article').length, 6); assert.match(app.main.textContent, /A级 2 · B级 2 · C级 2/);
+  app.main.replaceChildren(); app.demoMode.feedback = true; await app.paperReview();
+  assert.match(app.main.textContent, /常规文献 3/); assert.match(app.main.textContent, /需人工复核 3/);
+  await byText(app.main, '升级 1').click();
+  await byText(app.main, '需人工复核 3').click();
+  assert.match(app.main.textContent, /规则等级.*语义等级.*最终等级/);
+  assert.equal(calls.some(([url, value]) => url === '/api/feedback' && value), false);
+  assert.match(app.main.textContent, /不会提交真实反馈|未写入真实数据/);
+});
+test('Settings hides research and query editors, uses source checkboxes and one save per section', async () => {
+  const app = ui(); const calls = []; const settings = [
+    { category: 'Sources', available: true, id: 'sources.domain', description: '研究领域', type: 'enum', value: 'biomedical', validation: { values: ['biomedical', 'unknown'] } },
+    { category: 'Sources', available: true, id: 'sources.override', description: '显式检索源', type: 'list', value: ['rss', 'pubmed_pmc'], validation: { values: ['rss', 'pubmed_pmc', 'openalex'] } },
+    { category: 'Search', available: true, id: 'pubmed.required', description: 'required 检索词', type: 'keywords', value: ['immune'], validation: {} },
+    { category: 'Search', available: true, id: 'pubmed.query', description: 'pubmed 检索式', type: 'string', value: 'immune', validation: {} },
+    { category: 'Search', available: true, id: 'pubmed.days', description: '检索天数', type: 'integer', value: 10, validation: { min: 1, max: 366 } },
+    { category: 'Models', available: true, id: 'translation.model', description: 'translation 模型名称', type: 'string', value: 'demo-model', validation: { maxLength: 200 } },
+    { category: 'Models', available: true, id: 'translation.endpoint', description: 'translation API 地址', type: 'url', value: 'https://example.test', validation: {} },
+    { category: 'Models', available: true, id: 'translation.temperature', description: '采样温度', type: 'number', value: 0.2, validation: { min: 0, max: 2 } },
+  ];
+  app.setApi(async (url, value) => { if (url === '/api/credentials') return []; if (!value) return settings; calls.push(value); return { saved: true }; });
+  await app.settings(); assert.doesNotMatch(app.main.textContent, /研究领域|required 检索词|pubmed 检索式/);
+  const sourceSection = app.main.querySelectorAll('.settings-section').find((node) => /检索来源/.test(node.textContent));
+  assert.equal(sourceSection.querySelectorAll('input').filter((node) => node.type === 'checkbox').length, 3);
+  assert.equal(sourceSection.querySelectorAll('button').filter((node) => node.textContent === '保存本组').length, 1);
+  const modelSection = app.main.querySelectorAll('.settings-section').find((node) => /模型与 AI/.test(node.textContent));
+  assert.match(modelSection.textContent, /标题翻译 模型名称.*标题翻译 API 地址/);
+  await byText(modelSection, '保存本组').click(); assert.deepEqual(calls.map((entry) => entry.id), ['translation.model', 'translation.endpoint', 'translation.temperature']);
+  assert.match(app.notice.textContent, /“模型与 AI”已保存/);
 });
 test('zero results, missing identifier, completed queue and neutral selection stay usable', async () => {
   const app = ui(); app.setApi(async () => ({ runId: null, total: 0, items: [] })); await app.paperReview(); assert.match(app.main.textContent, /此队列暂无文献/);

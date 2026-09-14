@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">PaperEcho</title>
+  <desc id="desc">由中心信号与对称回声波纹组成的绿色标志</desc>
+  <defs>
+    <linearGradient id="echo" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b9ead2"/>
+      <stop offset="0.48" stop-color="#54b98d"/>
+      <stop offset="1" stop-color="#17684f"/>
+    </linearGradient>
+    <linearGradient id="core" x1="32" y1="20" x2="32" y2="44" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#effbf5"/>
+      <stop offset="1" stop-color="#c8efdc"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="17" fill="url(#echo)"/>
+  <g fill="none" stroke="#f6fffa" stroke-linecap="round" stroke-width="4">
+    <path d="M22 20c-6 6-6 18 0 24" opacity=".78"/>
+    <path d="M42 20c6 6 6 18 0 24" opacity=".78"/>
+    <path d="M15 15c-10 10-10 24 0 34" opacity=".48"/>
+    <path d="M49 15c10 10 10 24 0 34" opacity=".48"/>
+  </g>
+  <rect x="28" y="19" width="8" height="26" rx="4" fill="url(#core)"/>
+  <circle cx="32" cy="32" r="3" fill="#17684f"/>
+</svg>

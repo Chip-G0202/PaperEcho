@@ -19,7 +19,7 @@ export async function resolveControlCenterStartup({ root = CONTROL_CENTER_ROOT, 
   const context = await resolveApplicationRuntimeContext({ cwd: root, env, argv });
   return { root, env, argv, context };
 }
-const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']]]);
+const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/paperecho-mark.svg', ['paperecho-mark.svg', 'image/svg+xml']]]);
 export const MAX_BODY_BYTES = 65536;
 export function safeLink(value) {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : null; } catch { return null; }
