@@ -86,6 +86,7 @@ test('default-browser commands are fixed argv, never a browser-controlled shell 
 test('Windows and macOS wrappers use their own path, fixed arguments and shared owner; no bundled runtime', async () => {
   const read = (file) => fs.readFile(path.join(repo, file), 'utf8');
   const source = await read('workflow/tools/web/launcher-windows/PaperEchoLauncher.cs'); const cmd = await read('PaperEcho.cmd'); const mac = await read('PaperEcho.app/Contents/MacOS/PaperEcho'); const plist = await read('PaperEcho.app/Contents/Info.plist');
+  // Historical EXE migration invariant: the retired VBS entry must not return.
   await assert.rejects(fs.access(path.join(repo, 'PaperEcho.vbs')), { code: 'ENOENT' });
   assert.ok((await fs.stat(path.join(repo, 'PaperEcho.exe'))).size > 0);
   assert.match(source, /AppDomain.CurrentDomain.BaseDirectory/);
