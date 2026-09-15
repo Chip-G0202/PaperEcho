@@ -491,9 +491,10 @@ function visibleSetting(setting) {
 }
 function currentSettingText(setting) {
   if (setting.value === null || setting.value === undefined || setting.value === '') return '未配置';
-  if (setting.type === 'url') { try { return `已配置 · ${new URL(setting.value).hostname}`; } catch { return '已配置'; } }
-  if (['runtime.projectRoot', 'local.input', 'local.output', 'local.feedback', 'desktop.zoteroExe', 'translation.model', 'preference.model', 'web.userId'].includes(setting.id)) return String(setting.value);
-  return ['number', 'integer'].includes(setting.type) ? String(setting.value) : '已配置';
+  const prefix = setting.ownerPresent === false ? '默认值 · ' : '';
+  if (setting.type === 'url') { try { return `${prefix || '已配置 · '}${new URL(setting.value).hostname}`; } catch { return prefix ? `${prefix}已提供` : '已配置'; } }
+  if (['runtime.projectRoot', 'local.input', 'local.output', 'local.feedback', 'desktop.zoteroExe', 'translation.model', 'preference.model', 'web.userId'].includes(setting.id)) return `${prefix}${String(setting.value)}`;
+  return `${prefix}${['number', 'integer'].includes(setting.type) ? String(setting.value) : '已配置'}`;
 }
 function settingControl(setting) {
   let input;
@@ -532,25 +533,32 @@ function settingValue(setting, input) {
   if (['integer', 'number'].includes(setting.type)) return Number(input.value);
   return input.value;
 }
-function appendCredentialEditor(section, item) {
-  if (!item) return;
+function appendCredentialEditor(section, item, onStatusChange = () => {}) {
+  if (!item) return null;
   const names = { TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API 密钥' };
-  const row = el('div', undefined, 'setting'); row.append(el('p', `${names[item.id] || '凭据'}：${item.configured ? '已配置' : '未配置'}`));
+  const row = el('div', undefined, 'setting'); const status = el('p');
+  const sync = () => { status.textContent = `${names[item.id] || '凭据'}：${item.configured ? '已配置' : '未配置'}`; };
+  sync(); row.append(status);
   if (item.writable) {
-    const input = el('input'); input.type = 'password'; input.autocomplete = 'new-password'; input.maxLength = 4096; input.placeholder = '输入新值；原值不会回显';
-    row.append(label('替换凭据', input), button('替换', async () => { const value = input.value; input.value = ''; await api('/api/credentials', { id: item.id, action: 'replace', value }); notice.textContent = `凭据已替换。${item.reload}`; await render(); }), button('清除', async () => { if (!confirm(`清除 ${item.id}？依赖该凭据的功能可能暂不可用。`)) return; input.value = ''; await api('/api/credentials', { id: item.id, action: 'clear' }); notice.textContent = `凭据已清除。${item.reload}`; await render(); }));
+    const input = el('input'); input.type = 'password'; input.autocomplete = 'new-password'; input.maxLength = 4096; input.placeholder = item.id === 'ZOTERO_API_KEY' ? '请输入 Zotero API Key' : '输入新值；原值不会回显';
+    row.append(label('替换凭据', input), button('替换', async () => { const value = input.value; await api('/api/credentials', { id: item.id, action: 'replace', value }); input.value = ''; item.configured = true; sync(); onStatusChange(); notice.textContent = `凭据已替换。${item.reload}`; }), button('清除', async () => { if (!confirm(`清除 ${item.id}？依赖该凭据的功能可能暂不可用。`)) return; await api('/api/credentials', { id: item.id, action: 'clear' }); input.value = ''; item.configured = false; sync(); onStatusChange(); notice.textContent = `凭据已清除。${item.reload}`; }));
   } else row.append(el('p', item.reason, 'muted'));
-  section.append(row);
+  section.append(row); return row;
 }
 const runtimePaths = {
-  local: { title: '本地运行', summary: '不使用 Zotero，直接使用 PaperEcho 本地研究目录。', fit: '适合希望以本地目录作为输入与输出的工作方式。', data: '从项目根目录与本地输入目录读取。', result: '写入配置的本地输出与反馈目录。', needs: '不需要 Zotero Desktop，也不需要 Zotero Web API 凭据。' },
+  local: { title: '本地运行', summary: '不使用 Zotero，直接使用 PaperEcho 本地研究目录。', fit: '适合希望以本地目录作为输入与输出的工作方式。', data: '从配置的 JSON / JSONL 文件或目录读取。', result: '写入配置的本地输出目录；反馈文件可选。', needs: '不需要 Zotero Desktop，也不需要 Zotero Web API 凭据。' },
   desktop: { title: 'Zotero Desktop', summary: '让 PaperEcho 与当前电脑上的 Zotero Desktop 配合工作。', fit: '适合已经安装 Zotero Desktop，并希望使用本机文献库的人。', data: '由既有 Desktop owner 连接本机 Zotero 工作流。', result: '按正式 Desktop owner 写入本机 Zotero 集合与本地报告。', needs: '需要 Zotero Desktop；不需要 Zotero Web API Key。' },
   web: { title: 'Zotero Web', summary: '通过 Zotero 官方 Web API 访问指定 Library。', fit: '适合不依赖本机 Zotero Desktop，或需要远程访问 Library 的场景。', data: '使用 Zotero 用户 ID、API 地址与写入凭据访问 Library。', result: '由既有 Web backend owner 完成读取与写入。', needs: '不需要 Zotero Desktop；需要 Zotero Web API 凭据。' },
 };
 const runtimeExamples = {
-  local: { 'runtime.projectRoot': 'C:\\Users\\Name\\Documents\\PaperEcho-Research', 'local.input': 'input', 'local.output': 'C:\\Users\\Name\\Documents\\PaperEcho-Output', 'local.feedback': 'feedback' },
+  local: { 'local.input': 'input', 'local.output': 'C:\\Users\\Name\\Documents\\PaperEcho-Output', 'local.feedback': 'feedback' },
   desktop: { 'runtime.projectRoot': 'C:\\Users\\Name\\Documents\\PaperEcho-Research', 'desktop.zoteroExe': 'C:\\Program Files\\Zotero\\zotero.exe' },
   web: { 'runtime.projectRoot': 'C:\\Users\\Name\\Documents\\PaperEcho-Research', 'web.userId': '1234567', 'web.apiBase': 'https://api.zotero.org' },
+};
+const runtimePathFields = {
+  local: [{ id: 'local.input', required: true }, { id: 'local.output', required: true }, { id: 'local.feedback', required: false }],
+  desktop: [{ id: 'runtime.projectRoot', required: false }, { id: 'desktop.zoteroExe', required: false }],
+  web: [{ id: 'runtime.projectRoot', required: false }, { id: 'web.userId', required: false }, { id: 'web.apiBase', required: false }],
 };
 function runtimePathOptions(selected, onChange) {
   const fieldset = el('fieldset', undefined, 'runtime-path-options'); fieldset.append(el('legend', '选择运行路径')); const name = `runtime-path-${crypto.randomUUID()}`;
@@ -573,16 +581,16 @@ async function settings(group = settingsGroup, view = settingsView) {
   else if (runtimeDemo) main.append(demoBanner('以下配置仅用于展示不同运行路径，不会修改真实设置。刷新页面后自动退出。', () => { demoMode.runtime = false; runtimeDemoMode = 'local'; return render(); }));
   else { const actions = el('div', undefined, 'actions page-toolbar'); actions.append(button(settingsGroup === 'runtime' ? '查看运行路径示例' : '体验设置示例', () => { if (settingsGroup === 'runtime') { demoMode.runtime = true; runtimeDemoMode = 'local'; } else demoMode.settings = true; return render(); })); main.append(actions); }
   const groupPath = { common: 'general', review: 'models', runtime: 'runtime', automation: 'automation', connections: 'connections' }[settingsGroup];
-  const hasContent = ([key, , categories]) => key === 'credentials' ? credentials.length > 0 : categories.some((category) => data.some((entry) => entry.category === category && visibleSetting(entry) && (category !== 'Models' || entry.id.startsWith(`${key}.`))));
+  const hasContent = ([key, , categories]) => ['translation', 'preference', 'path'].includes(key) || (key === 'credentials' ? credentials.length > 0 : categories.some((category) => data.some((entry) => entry.category === category && visibleSetting(entry) && (category !== 'Models' || entry.id.startsWith(`${key}.`)))));
   const views = settingViews[settingsGroup].filter(hasContent);
   if (!views.some(([key]) => key === settingsView)) settingsView = views[0]?.[0] || settingViews[settingsGroup][0][0];
   if (views.length > 1) main.append(tertiaryNav('设置任务', views.map(([key, title]) => [key, title]), settingsView, `settings/${groupPath}`));
   const body = el('div', undefined, 'settings-body page-content'); main.append(body);
-  const appendSettingsControls = (container, entries, saveName, saveLabel = '保存本组', featureToggleIds = []) => {
+  const appendSettingsControls = (container, entries, saveName, saveLabel = '保存本组', featureToggleIds = [], featureOptions = {}) => {
     const toggleIds = new Set(featureToggleIds); const saves = []; const dependentRows = []; const featureToggles = []; let unavailable = 0;
     const orderedEntries = toggleIds.size ? [...entries].sort((a, b) => Number(toggleIds.has(b.id)) - Number(toggleIds.has(a.id))) : entries;
     for (const entry of orderedEntries) {
-      const setting = { ...entry, optionScope: settingsView, description: entry.description.replace(/translation/g, '标题翻译').replace(/preference/g, '偏好学习').replace(/required/g, '必要').replace(/optional/g, '补充').replace(/negative/g, '排除').replace(/owner/g, '配置服务').replace(/workflow/g, '工作流') };
+      const setting = { ...entry, sourceEntry: entry, optionScope: settingsView, description: entry.description.replace(/translation/g, '标题翻译').replace(/preference/g, '偏好学习').replace(/required/g, '必要').replace(/optional/g, '补充').replace(/negative/g, '排除').replace(/owner/g, '配置服务').replace(/workflow/g, '工作流') };
       if (setting.id === 'sources.override') setting.description = settingsView === 'rss' ? 'RSS 订阅状态' : '选择 PaperEcho 用于检索论文的数据库来源';
       if (setting.id === 'pubmed.days') setting.description = 'PubMed / PMC 检索天数';
       if (setting.id === 'openalex.days') setting.description = 'OpenAlex 检索天数';
@@ -596,17 +604,24 @@ async function settings(group = settingsGroup, view = settingsView) {
       if (setting.type === 'rss') { const read = rssEditor(setting, row); saves.push({ setting, read, input: row }); container.append(row); continue; }
       const input = settingControl(setting);
       if (setting.synthetic) { input.addEventListener('change', () => { setting.changed = true; }); }
-      if (toggle) { featureToggles.push(input); input.id ||= `field-${crypto.randomUUID()}`; input.setAttribute('aria-label', setting.description); const switchLabel = el('label'); switchLabel.htmlFor = input.id; const switchCopy = el('span', undefined, 'feature-toggle-copy'); switchCopy.append(el('strong', setting.description), el('small', setting.value === true ? '当前已开启' : '当前已关闭')); switchLabel.append(switchCopy, input); row.append(switchLabel); if (setting.mixed) row.append(el('p', '现有两个开关状态不一致；切换并保存后会同步。', 'meta')); }
-      else { if (toggleIds.size) dependentRows.push({ row, input }); if (input.className.includes('setting-options')) row.append(input); else { row.append(el('p', `当前：${currentSettingText(setting)}`, 'setting-current'), label(`${setting.description}（留空不变）`, input)); } }
+      if (toggle) { featureToggles.push(input); input.id ||= `field-${crypto.randomUUID()}`; input.setAttribute('aria-label', setting.description); const switchLabel = el('label'); switchLabel.htmlFor = input.id; const switchCopy = el('span', undefined, 'feature-toggle-copy'); const stateText = el('small', setting.value === true ? '当前已开启' : '当前已关闭'); switchCopy.append(el('strong', setting.description), stateText); switchLabel.append(switchCopy, input); row.append(switchLabel); input.addEventListener('change', () => { stateText.textContent = `待保存：${input.checked ? '开启' : '关闭'}`; }); if (setting.mixed) row.append(el('p', '现有两个开关状态不一致；切换并保存后会同步。', 'meta')); setting.stateText = stateText; }
+      else { if (toggleIds.size) dependentRows.push({ row, input }); if (input.className.includes('setting-options')) row.append(input); else if (setting.type === 'boolean') { const stateText = el('p', setting.value === true ? '当前已开启' : '当前已关闭', 'meta'); row.append(label(setting.description, input), stateText); setting.stateText = stateText; } else { const currentValue = el('p', `当前：${currentSettingText(setting)}`, 'setting-current'); row.append(currentValue, label(`${setting.description}（留空不变）`, input)); setting.currentValue = currentValue; } }
       if (setting.validation.min !== undefined || setting.validation.max !== undefined) row.append(el('small', `允许范围：${setting.validation.min ?? '不限'}–${setting.validation.max ?? '不限'}`));
       saves.push({ setting, input, read: () => settingValue(setting, input) }); container.append(row);
+    }
+    let syncFeatureStatus = () => {};
+    if (toggleIds.size && featureOptions.statusText) {
+      const row = el('div', undefined, 'feature-dependent capability-status'); const status = el('p'); syncFeatureStatus = () => { status.textContent = typeof featureOptions.statusText === 'function' ? featureOptions.statusText() : featureOptions.statusText; }; syncFeatureStatus(); row.append(el('strong', '当前配置状态'), status); container.append(row); dependentRows.push({ row });
+    }
+    for (const item of featureOptions.credentials || []) {
+      const row = appendCredentialEditor(container, item, syncFeatureStatus); if (row) { row.className += ' feature-dependent'; dependentRows.push({ row }); }
     }
     if (featureToggles.length) {
       const detailsId = `feature-details-${crypto.randomUUID()}`;
       const syncFeatureState = () => {
         const expanded = featureToggles.some((input) => input.checked); container.dataset.featureCollapsed = String(!expanded);
         for (const input of featureToggles) { input.setAttribute('aria-controls', detailsId); input.setAttribute('aria-expanded', String(expanded)); }
-        dependentRows.forEach(({ row, input }, index) => { if (index === 0) row.id ||= detailsId; row.hidden = !expanded; input.disabled = !expanded; });
+        dependentRows.forEach(({ row, input }, index) => { if (index === 0) row.id ||= detailsId; row.hidden = !expanded; if (input) input.disabled = !expanded; });
       };
       for (const input of featureToggles) input.addEventListener('change', syncFeatureState); syncFeatureState();
     }
@@ -617,6 +632,13 @@ async function settings(group = settingsGroup, view = settingsView) {
       if (demoMode.settings) { notice.textContent = `“${saveName}”示例已暂存于当前页面，未写入真实配置。`; return; }
       if (!values.length) { notice.textContent = '没有需要修改的设置。留空字段保持原值。'; return; }
       await api('/api/settings', { updates: values.map(([id, value]) => ({ id, value })) });
+      for (const entry of saves) {
+        const value = entry.read();
+        if (toggleIds.has(entry.setting.id)) { entry.setting.value = entry.input.checked; entry.setting.sourceEntry.value = entry.input.checked; if (entry.setting.stateText) entry.setting.stateText.textContent = entry.input.checked ? '当前已开启' : '当前已关闭'; }
+        else if (entry.setting.type === 'boolean') { entry.setting.value = entry.input.checked; entry.setting.sourceEntry.value = entry.input.checked; if (entry.setting.stateText) entry.setting.stateText.textContent = entry.input.checked ? '当前已开启' : '当前已关闭'; }
+        else if (value !== undefined && entry.input.dataset?.replacement === 'true') { entry.setting.value = value; entry.setting.sourceEntry.value = value; entry.input.value = ''; if (entry.setting.currentValue) entry.setting.currentValue.textContent = `当前：${currentSettingText(entry.setting)}`; }
+      }
+      syncFeatureStatus();
       notice.textContent = `“${saveName}”已保存，下次运行生效。`;
     }); save.className = 'primary'; actions.append(save); container.append(actions);
   };
@@ -624,39 +646,57 @@ async function settings(group = settingsGroup, view = settingsView) {
   if (settingsGroup === 'review') {
     const title = settingsView === 'translation' ? '标题翻译' : '偏好学习';
     const entries = settingsView === 'translation'
-      ? data.filter((entry) => entry.category === 'Models' && entry.id.startsWith('translation.'))
-      : (() => { const preference = data.find((entry) => entry.id === 'preference.enabled'); const review = data.find((entry) => entry.id === 'review.enabled'); const combined = preference && review ? { ...preference, available: preference.available && review.available, id: 'review-learning.combined', description: '启用智能评审与偏好学习', value: preference.value === true && review.value === true, mixed: preference.value !== review.value, synthetic: true, changed: false, writeIds: ['review.enabled', 'preference.enabled'] } : null; return [combined, ...data.filter((entry) => entry.id.startsWith('preference.') && entry.id !== 'preference.enabled')].filter(Boolean); })();
+      ? (() => { const rows = data.filter((entry) => entry.category === 'Models' && entry.id.startsWith('translation.')); return rows.some((entry) => entry.id === 'translation.enabled') ? rows : [{ category: 'Models', available: false, id: 'translation.enabled', description: '启用标题翻译', type: 'boolean', value: false, validation: {} }, ...rows]; })()
+      : (() => { const preference = data.find((entry) => entry.id === 'preference.enabled'); const review = data.find((entry) => entry.id === 'review.enabled'); const combined = { ...(preference || {}), category: 'Models', available: Boolean(preference?.available && review?.available), id: 'review-learning.combined', description: '启用智能评审与偏好学习', type: 'boolean', validation: {}, value: preference?.value === true && review?.value === true, mixed: Boolean(preference && review && preference.value !== review.value), synthetic: true, changed: false, writeIds: ['review.enabled', 'preference.enabled'] }; return [combined, ...data.filter((entry) => entry.id.startsWith('preference.') && entry.id !== 'preference.enabled' && visibleSetting(entry))]; })();
+    const requiredIds = settingsView === 'translation' ? ['translation.model', 'translation.endpoint'] : ['preference.model', 'preference.endpoint'];
+    const credentialId = settingsView === 'translation' ? 'TITLE_TRANSLATION_API_KEY' : 'PREFERENCE_LEARNING_API_KEY';
+    const credential = credentials.find((entry) => entry.id === credentialId);
+    const capabilityStatus = () => { const missing = requiredIds.filter((id) => !String(entries.find((entry) => entry.id === id)?.value || '').trim()).map((id) => id.endsWith('.model') ? '模型名称' : 'API 地址'); if (!credential?.configured) missing.push('API 密钥'); return missing.length ? `功能已开启时，还需要完成以下配置：${missing.join('、')}。` : '必要参数已配置；真实可用性仍由运行前检查确认。'; };
     const section = el('section', undefined, 'settings-section section');
-    section.append(el('h3', title, 'section-header'), el('p', settingsView === 'translation' ? '关闭后 Stage 3 跳过标题翻译；既有模型参数会保留。' : '一个开关同时控制等级复审与 LLM 偏好学习；底层两个兼容字段仍分别保留。', 'meta'));
-    appendSettingsControls(section, entries, title, `保存${title}`, settingsView === 'translation' ? ['translation.enabled'] : ['review-learning.combined']);
+    section.append(el('h3', settingsView === 'translation' ? '标题翻译' : '智能评审与偏好学习', 'section-header'), el('p', settingsView === 'translation' ? '开启后使用配置的模型生成中文标题；关闭不会清空已有配置。' : '一个开关同时控制等级复审与 LLM 偏好学习；关闭不会清空已有配置。', 'meta'));
+    appendSettingsControls(section, entries, title, `保存${title}`, settingsView === 'translation' ? ['translation.enabled'] : ['review-learning.combined'], { statusText: capabilityStatus, credentials: credential ? [credential] : [] });
     body.append(section); return;
   }
   if (settingsGroup === 'runtime') {
     const section = el('section', undefined, 'settings-section runtime-settings'); section.append(el('h3', runtimeDemo ? '运行路径示例' : '选择运行路径', 'section-header'), el('p', '三种路径互斥；只显示当前路径需要的设置。固定启动入口仍会校验路径一致性。', 'meta'));
     const mode = data.find((entry) => entry.id === 'runtime.mode');
     if (!mode?.available && !runtimeDemo) { section.append(el('p', '当前配置尚未提供运行路径字段。', 'empty-state')); body.append(section); return; }
-    let selectedMode = runtimeDemo ? runtimeDemoMode : mode.value;
-    const options = runtimePathOptions(selectedMode, (value) => { selectedMode = value; if (runtimeDemo) runtimeDemoMode = value; sync(); }); section.append(options);
-    if (!runtimeDemo) section.append(el('p', `当前运行路径：${runtimePaths[mode.value]?.title || '未配置'}`, 'runtime-current'));
-    const pathIds = { local: ['runtime.projectRoot', 'local.input', 'local.output', 'local.feedback'], desktop: ['runtime.projectRoot', 'desktop.zoteroExe'], web: ['runtime.projectRoot', 'web.userId', 'web.apiBase'] };
+    let selectedMode = runtimeDemo ? runtimeDemoMode : mode.value || mode.effectiveValue;
+    const current = !runtimeDemo ? el('p', `当前运行路径：${runtimePaths[mode.value || mode.effectiveValue]?.title || '未配置'}${mode.ownerPresent === false ? '（当前启动路径；统一配置尚未保存）' : ''}`, 'runtime-current') : null;
+    const options = runtimePathOptions(selectedMode, (value) => { selectedMode = value; if (runtimeDemo) runtimeDemoMode = value; else { current.textContent = `正在配置：${runtimePaths[value].title}（尚未保存）`; current.className = 'runtime-current unsaved'; } sync(); }); section.append(options);
+    if (current) section.append(current);
     const panels = {}; const records = [];
-    for (const pathName of Object.keys(pathIds)) {
+    for (const pathName of Object.keys(runtimePathFields)) {
       const panel = el('div', undefined, 'runtime-path-panel'); panel.dataset.path = pathName;
-      panel.append(el('h4', `${runtimePaths[pathName].title}${runtimeDemo ? ' · 示例配置' : ' · 当前配置'}`));
-      for (const id of pathIds[pathName]) { const entry = data.find((item) => item.id === id); if (!entry?.available && !runtimeDemo) continue; if (runtimeDemo) { const row = el('div', undefined, 'runtime-example-row'); row.append(el('span', entry?.description || id), el('strong', runtimeExamples[pathName][id])); panel.append(row); continue; } const input = settingControl(entry); const row = el('div', undefined, 'setting'); row.append(el('p', `当前：${currentSettingText(entry)}`, 'setting-current'), label(`${entry.description}（留空不变）`, input)); panel.append(row); records.push({ pathName, entry, input }); }
-      if (pathName === 'web') runtimeDemo ? panel.append(el('p', 'Zotero Web API 密钥：未配置（示例，不读取真实凭据）', 'runtime-example-credential')) : appendCredentialEditor(panel, credentials.find((item) => item.id === 'ZOTERO_API_KEY'));
+      panel.append(el('h4', `${runtimePaths[pathName].title}${runtimeDemo ? ' · 示例配置' : ' · 当前路径配置'}`));
+      const specs = runtimePathFields[pathName];
+      const runtimeReadiness = () => { const missingRequired = specs.filter((spec) => spec.required && !String(data.find((item) => item.id === spec.id)?.value || '').trim()).map((spec) => data.find((item) => item.id === spec.id)?.description || spec.id); return pathName === 'local' ? (missingRequired.length ? `尚未完成配置：缺少${missingRequired.join('、')}。` : '基础配置完整；路径可读写性将在运行前检查。') : pathName === 'desktop' ? '无需额外必填配置；Zotero Desktop 与 CLI bridge 将在运行前检测。' : (credentials.find((item) => item.id === 'ZOTERO_API_KEY')?.configured ? '基础配置完整；Web 连接将在运行时验证。' : '尚未完成配置：缺少 Zotero Web API Key。'); };
+      const readiness = el('p', runtimeReadiness(), 'runtime-readiness'); panel.append(readiness);
+      for (const spec of specs) { const id = spec.id; const entry = data.find((item) => item.id === id); if (!entry?.available && !runtimeDemo) continue; if (runtimeDemo) { const row = el('div', undefined, 'runtime-example-row'); row.append(el('span', entry?.description || id), el('strong', runtimeExamples[pathName][id])); panel.append(row); continue; } const input = settingControl(entry); if (spec.required && !String(entry.value || '').trim()) input.required = true; const currentValue = el('p', `当前：${currentSettingText(entry)}`, 'setting-current'); const row = el('div', undefined, 'setting'); row.append(currentValue, label(`${entry.description}${spec.required ? '（必填；留空保持现值）' : '（选填；留空不变）'}`, input)); panel.append(row); records.push({ pathName, entry, input, currentValue, required: spec.required }); }
+      if (pathName === 'web') runtimeDemo ? panel.append(el('p', 'Zotero Web API 密钥：未配置（示例，不读取真实凭据）', 'runtime-example-credential')) : appendCredentialEditor(panel, credentials.find((item) => item.id === 'ZOTERO_API_KEY'), () => { readiness.textContent = runtimeReadiness(); });
       panels[pathName] = panel; section.append(panel);
     }
     function sync() { for (const [name, panel] of Object.entries(panels)) panel.hidden = name !== selectedMode; }
     sync();
     if (runtimeDemo) { body.append(section); return; }
-    const actions = el('div', undefined, 'actions group-save section-actions'); const save = button('保存运行路径', async () => { const selected = options.value; if (!selected) throw new Error('请先选择一种运行路径。'); const updates = [{ id: 'runtime.mode', value: selected }]; for (const record of records.filter((entry) => entry.pathName === selected)) { if (record.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); const value = settingValue(record.entry, record.input); if (value !== undefined) updates.push({ id: record.entry.id, value }); } if (demoMode.settings) { notice.textContent = '“运行路径”示例已暂存于当前页面，未写入真实配置。'; return; } await api('/api/settings', { updates }); notice.textContent = '“运行路径”已保存，下次运行生效。'; }); save.className = 'primary'; actions.append(save); section.append(actions); body.append(section); return;
+    const actions = el('div', undefined, 'actions group-save section-actions'); const save = button('保存运行路径', async () => { const selected = options.value; if (!selected) throw new Error('请先选择一种运行路径。'); const selectedRecords = records.filter((entry) => entry.pathName === selected); const updates = [{ id: 'runtime.mode', value: selected }]; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); if (record.required && value === undefined && !String(record.entry.value || '').trim()) throw new Error(`请先填写${record.entry.description}，原设置未改变。`); if (record.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); if (value !== undefined) updates.push({ id: record.entry.id, value }); } await api('/api/settings', { updates }); mode.value = selected; mode.ownerPresent = true; current.textContent = `当前运行路径：${runtimePaths[selected].title}`; current.className = 'runtime-current'; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); record.entry.ownerPresent = true; if (value !== undefined) { record.entry.value = value; record.input.value = ''; } record.currentValue.textContent = `当前：${currentSettingText(record.entry)}`; } panels[selected].querySelector('.runtime-readiness').textContent = (() => { const required = selectedRecords.filter((record) => record.required && !String(record.entry.value || '').trim()); return selected === 'local' ? (required.length ? '尚未完成配置。' : '基础配置完整；路径可读写性将在运行前检查。') : selected === 'desktop' ? '无需额外必填配置；Zotero Desktop 与 CLI bridge 将在运行前检测。' : (credentials.find((item) => item.id === 'ZOTERO_API_KEY')?.configured ? '基础配置完整；Web 连接将在运行时验证。' : '尚未完成配置：缺少 Zotero Web API Key。'); })(); notice.textContent = '“运行路径”已保存，下次运行生效；连接与路径可用性仍由运行前检查确认。'; }); save.className = 'primary'; actions.append(save); section.append(actions); body.append(section); return;
+  }
+  if (settingsGroup === 'connections' && settingsView === 'notifications') {
+    const emailEntries = data.filter((entry) => entry.category === 'Notifications' && (entry.id.startsWith('email.') || entry.id.startsWith('smtp.')));
+    const credential = credentials.find((entry) => entry.id === 'SMTP_PASS');
+    const emailStatus = () => { const missing = ['email.recipient', 'smtp.host', 'smtp.user'].filter((id) => !String(emailEntries.find((entry) => entry.id === id)?.value || '').trim()).map((id) => ({ 'email.recipient': '收件人', 'smtp.host': 'SMTP 主机', 'smtp.user': 'SMTP 用户名' })[id]); if (!credential?.configured) missing.push('SMTP 密码'); return missing.length ? `启用邮件后，还需要完成以下配置：${missing.join('、')}。` : '邮件参数已配置；真实投递能力仍由运行前检查确认。'; };
+    const emailSection = el('section', undefined, 'settings-section section'); emailSection.append(el('h3', '报告邮件', 'section-header'), el('p', '启用后使用下方 SMTP 配置发送报告；关闭不会清空已有参数。', 'meta'));
+    appendSettingsControls(emailSection, emailEntries, '报告邮件', '保存报告邮件', ['email.enabled'], { statusText: emailStatus, credentials: credential ? [credential] : [] }); body.append(emailSection);
+    const reminderEntries = data.filter((entry) => entry.category === 'Notifications' && entry.id.startsWith('notification.'));
+    if (reminderEntries.length) { const reminderSection = el('section', undefined, 'settings-section section'); reminderSection.append(el('h3', '运行提醒', 'section-header'), el('p', '失败与健康提醒沿用现有 Stage5 通知 owner，不在此处更改投递逻辑。', 'meta')); appendSettingsControls(reminderSection, reminderEntries, '运行提醒'); body.append(reminderSection); }
+    return;
   }
   for (const group of active[2]) {
     const groupTitle = group === 'Sources' && settingsView === 'rss' ? 'RSS 订阅状态' : settingGroupNames[group];
     const section = el('section', undefined, 'settings-section section'); section.append(el('h3', groupTitle, 'section-header'));
     let entries = data.filter((entry) => entry.category === group && visibleSetting(entry));
     appendSettingsControls(section, entries, groupTitle);
+    if (group === 'Radar') section.append(el('p', '运行时间由系统调度配置维护；此处只控制 Daily Radar 能力是否启用。', 'meta'));
     if (group === 'Credentials') {
       section.append(el('p', '凭据是敏感操作，仍需逐项明确替换或清除；原值永不回显。', 'meta'));
       for (const item of credentials.filter((entry) => entry.id !== 'ZOTERO_API_KEY')) appendCredentialEditor(section, item);

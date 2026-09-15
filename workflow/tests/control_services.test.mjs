@@ -118,6 +118,24 @@ test('config batch rolls every owner back when post-write verification fails', a
   await assert.rejects(service.updateMany([{ id: 'translation.model', value: 'new' }, { id: 'review.enabled', value: true }]), /post-write/);
   assert.equal(JSON.parse(await fs.readFile(translation)).model, 'old'); assert.equal(JSON.parse(await fs.readFile(review)).llm_review.grade_review_enabled, false);
 });
+test('runner settings remain available before first local config and initialize through the formal owner', async (t) => {
+  const root = await fixture(t);
+  const example = path.join(root, 'config', 'paperecho.config.example.json');
+  await fs.writeFile(example, JSON.stringify({ schemaVersion: 2, mode: null, profile: 'standard', common: {}, desktop: { enabled: false }, web: { enabled: false, apiBase: 'https://api.zotero.org' }, local: { enabled: false, input: null, outputRoot: null, feedback: null } }));
+  const service = new ConfigService({ root, runtimeMode: 'desktop' });
+  const mode = (await service.list()).find((entry) => entry.id === 'runtime.mode');
+  assert.equal(mode.available, true); assert.equal(mode.ownerPresent, false); assert.equal(mode.effectiveValue, 'desktop');
+  await service.updateMany([{ id: 'runtime.mode', value: 'local' }, { id: 'local.input', value: 'fixture.jsonl' }, { id: 'local.output', value: 'fixture-output' }]);
+  const saved = JSON.parse(await fs.readFile(path.join(root, 'config', 'paperecho.config.json'), 'utf8'));
+  assert.equal(saved.mode, 'local'); assert.equal(saved.local.input, 'fixture.jsonl'); assert.equal(saved.local.outputRoot, 'fixture-output');
+});
+test('failed first runner settings write removes the newly initialized owner', async (t) => {
+  const root = await fixture(t);
+  await fs.writeFile(path.join(root, 'config', 'paperecho.config.example.json'), JSON.stringify({ schemaVersion: 2, mode: null, profile: 'standard', common: {}, desktop: {}, web: {}, local: {} }));
+  let calls = 0; const service = new ConfigService({ root, verify: async () => { if (++calls === 2) throw new Error('post-write'); } });
+  await assert.rejects(service.update('runtime.mode', 'desktop'), /post-write/);
+  await assert.rejects(fs.access(path.join(root, 'config', 'paperecho.config.json')), { code: 'ENOENT' });
+});
 test('suggestion accept/reject/revise use formal owner; high-risk and no-apply fail closed', async (t) => {
   const root = await fixture(t);
   const suggestions = ['a', 'b', 'c', 'd', 'e'].map((id) => ({ id, suggestion_id: id, status: 'pending', target: 'screening_standards.md', change_type: 'add_rule', rule_text: `优先关注 ${id}` }));

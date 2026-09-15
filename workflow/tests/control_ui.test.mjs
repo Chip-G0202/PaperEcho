@@ -77,7 +77,7 @@ test('UI renders untrusted content through text nodes and keeps credentials writ
   assert.doesNotMatch(app, /\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML|document\.write\(/);
   assert.match(app, /node\.textContent = text/);
   assert.match(app, /input\.type = 'password'/);
-  assert.match(app, /const value = input\.value; input\.value = ''/);
+  assert.match(app, /const value = input\.value; await api\('\/api\/credentials'.*input\.value = ''/);
   assert.doesNotMatch(app, /input\.value\s*=\s*item\.(?:value|secret|password)/);
   assert.match(app, /连接测试尚未开放/);
 });

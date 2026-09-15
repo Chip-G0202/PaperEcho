@@ -100,21 +100,33 @@ export function validateSetting(definition, value) {
   }
 }
 export class ConfigService {
-  constructor({ root, env = process.env, atomicOptions, verify = async () => {}, configPath }) { Object.assign(this, { root, env, atomicOptions, verify, configPath }); }
+  constructor({ root, env = process.env, atomicOptions, verify = async () => {}, configPath, runtimeMode = '' }) { Object.assign(this, { root, env, atomicOptions, verify, configPath, runtimeMode }); }
   ownerPath(file) { return file === 'paperecho.config.json' && this.configPath ? this.configPath : path.join(this.root, 'config', file); }
   async readOwner(file) {
     // Fixed registry owns paths; callers cannot choose arbitrary files.
     return JSON.parse(await fs.readFile(this.ownerPath(file), 'utf8'));
+  }
+  async readOwnerOrTemplate(file) {
+    try { return { value: await this.readOwner(file), present: true }; }
+    catch (error) {
+      if (error.code !== 'ENOENT' || file !== 'paperecho.config.json') throw error;
+      return { value: JSON.parse(await fs.readFile(path.join(this.root, 'config', 'paperecho.config.example.json'), 'utf8')), present: false };
+    }
   }
   async list() {
     const result = [];
     for (const definition of CONFIG_REGISTRY) {
       let value = null;
       let available = true;
-      try { value = get(await this.readOwner(definition.file), definition.key) ?? (definition.id === 'translation.enabled' ? true : null); }
+      let ownerPresent = true;
+      try {
+        const owner = await this.readOwnerOrTemplate(definition.file);
+        value = get(owner.value, definition.key) ?? (definition.id === 'translation.enabled' ? true : null);
+        ownerPresent = owner.present;
+      }
       catch (error) { if (error.code !== 'ENOENT') throw error; available = false; }
       const { file, key, ...publicDefinition } = definition;
-      result.push({ ...publicDefinition, value, available });
+      result.push({ ...publicDefinition, value, available, ownerPresent, effectiveValue: definition.id === 'runtime.mode' ? this.runtimeMode || value : undefined });
     }
     result.push({ id: 'weekly.interval', category: 'Weekly', type: 'integer', value: Number(this.env.review_results_RUN_INTERVAL_DAYS || 7), default: 7, available: true, readOnly: true, description: '默认 7 天；环境覆盖与调度器仍由既有 owner 管理', validation: { min: 1 }, secret: false, advanced: true, reload: 'scheduler' });
     return result;
@@ -137,10 +149,11 @@ export class ConfigService {
       ? operation()
       : withAtomicJsonLock(this.ownerPath(ownerFiles[index]), () => withLocks(index + 1, operation));
     return withLocks(0, async () => {
-      const before = new Map(); const after = new Map();
+      const before = new Map(); const after = new Map(); const missingBefore = new Set();
       for (const file of ownerFiles) {
-        const value = await this.readOwner(file);
-        before.set(file, value); after.set(file, structuredClone(value));
+        const owner = await this.readOwnerOrTemplate(file);
+        if (!owner.present) missingBefore.add(file);
+        before.set(file, owner.value); after.set(file, structuredClone(owner.value));
       }
       for (const { id, value, definition } of resolved) {
         const owner = after.get(definition.file);
@@ -162,7 +175,10 @@ export class ConfigService {
           }
         }
       } catch (error) {
-        for (const file of ownerFiles) await writeAtomicJson(this.ownerPath(file), before.get(file));
+        for (const file of ownerFiles) {
+          if (missingBefore.has(file)) await fs.rm(this.ownerPath(file), { force: true });
+          else await writeAtomicJson(this.ownerPath(file), before.get(file));
+        }
         throw error;
       }
       return { saved: true, results: resolved.map(({ id, definition }) => ({ id, saved: true, reload: definition.reload })) };

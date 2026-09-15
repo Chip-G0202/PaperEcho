@@ -199,17 +199,38 @@ test('runtime path presents three exclusive modes and only the selected owner fi
     { category: 'Runtime', available: true, id: 'web.userId', description: 'Zotero Web 用户 ID', type: 'string', value: '123', validation: {} },
     { category: 'Runtime', available: true, id: 'web.apiBase', description: 'Zotero Web API 地址', type: 'url', value: 'https://api.zotero.org', validation: {} },
   ];
-  app.setApi(async (url, value) => { if (url === '/api/credentials') return [{ id: 'ZOTERO_API_KEY', configured: true, writable: true }]; if (!value) return settings; calls.push(value); return { saved: true }; });
+  app.setApi(async (url, value) => { if (url === '/api/credentials' && !value) return [{ id: 'ZOTERO_API_KEY', configured: true, writable: true }]; if (!value) return settings; calls.push([url, value]); return { saved: true }; });
   await app.settings('runtime', 'path'); const section = app.main.querySelector('.runtime-settings');
   assert.equal(section.querySelector('.runtime-path-options').querySelectorAll('input').length, 3);
   assert.match(section.textContent, /本地运行.*不使用 Zotero.*Zotero Desktop.*不需要 Zotero Web API Key.*Zotero Web.*需要 Zotero Web API 凭据/);
   assert.match(section.textContent, /当前运行路径：Zotero Desktop/);
-  assert.equal(section.querySelectorAll('.runtime-path-panel').find((entry) => entry.dataset.path === 'desktop').hidden, false);
-  await byText(section, '保存运行路径').click(); assert.equal(JSON.stringify(calls[0].updates), JSON.stringify([{ id: 'runtime.mode', value: 'desktop' }]));
+  const panels = Object.fromEntries(section.querySelectorAll('.runtime-path-panel').map((entry) => [entry.dataset.path, entry]));
+  assert.equal(panels.desktop.hidden, false); assert.match(panels.desktop.textContent, /无需额外必填配置.*项目根目录.*Zotero Desktop 程序路径/);
+  assert.doesNotMatch(panels.desktop.textContent, /API Key|用户 ID|本地输入目录/);
+  const choices = section.querySelector('.runtime-path-options').querySelectorAll('input');
+  choices.forEach((input) => { input.checked = input.value === 'web'; }); choices.find((input) => input.value === 'web').listeners.change();
+  const webDraft = panels.web.querySelectorAll('input').find((input) => /用户 ID/.test(input.getAttribute('aria-label'))); webDraft.value = '7654321';
+  choices.forEach((input) => { input.checked = input.value === 'desktop'; }); choices.find((input) => input.value === 'desktop').listeners.change();
+  choices.forEach((input) => { input.checked = input.value === 'web'; }); choices.find((input) => input.value === 'web').listeners.change();
+  assert.equal(webDraft.value, '7654321'); assert.match(section.textContent, /正在配置：Zotero Web（尚未保存）/);
+  assert.doesNotMatch(panels.web.textContent, /Zotero Desktop 程序路径|本地反馈目录/);
+  choices.forEach((input) => { input.checked = input.value === 'local'; }); choices.find((input) => input.value === 'local').listeners.change();
+  assert.match(panels.local.textContent, /本地输入目录.*本地输出目录.*本地反馈目录/); assert.doesNotMatch(panels.local.textContent, /项目根目录|Zotero/);
+  panels.local.querySelectorAll('input').find((input) => /本地输入目录/.test(input.getAttribute('aria-label'))).value = 'fixture.jsonl';
+  panels.local.querySelectorAll('input').find((input) => /本地输出目录/.test(input.getAttribute('aria-label'))).value = 'fixture-output';
+  await byText(section, '保存运行路径').click(); assert.equal(JSON.stringify(calls[0][1].updates), JSON.stringify([{ id: 'runtime.mode', value: 'local' }, { id: 'local.input', value: 'fixture.jsonl' }, { id: 'local.output', value: 'fixture-output' }]));
+  calls.length = 0;
+  choices.forEach((input) => { input.checked = input.value === 'desktop'; }); choices.find((input) => input.value === 'desktop').listeners.change();
+  await byText(section, '保存运行路径').click(); assert.equal(JSON.stringify(calls[0][1].updates), JSON.stringify([{ id: 'runtime.mode', value: 'desktop' }]));
+  assert.match(section.textContent, /当前运行路径：Zotero Desktop.*无需额外必填配置/);
+  calls.length = 0; choices.forEach((input) => { input.checked = input.value === 'web'; }); choices.find((input) => input.value === 'web').listeners.change();
+  await byText(section, '保存运行路径').click(); assert.equal(JSON.stringify(calls[0][1].updates), JSON.stringify([{ id: 'runtime.mode', value: 'web' }, { id: 'web.userId', value: '7654321' }]));
+  const secret = 'fixture-zotero-secret'; const secretInput = panels.web.querySelectorAll('input').find((input) => input.type === 'password'); secretInput.value = secret; await byText(panels.web, '替换').click();
+  assert.equal(calls.at(-1)[0], '/api/credentials'); assert.equal(app.main.textContent.includes(secret), false); assert.match(panels.web.textContent, /Zotero Web API 密钥：已配置/);
   calls.length = 0; app.demoMode.runtime = true; app.main.replaceChildren(); await app.settings('runtime', 'path');
   const demo = app.main.querySelector('.runtime-settings'); assert.match(app.main.textContent, /示例模式.*不会修改真实设置.*运行路径示例/);
-  assert.match(demo.textContent, /PaperEcho-Research.*本地输入目录.*PaperEcho-Output/); assert.equal(byText(demo, '保存运行路径'), undefined);
-  const choices = demo.querySelector('.runtime-path-options').querySelectorAll('input'); choices.forEach((input) => { input.checked = input.value === 'web'; }); choices.find((input) => input.value === 'web').listeners.change();
+  assert.match(demo.textContent, /本地输入目录.*PaperEcho-Output.*PaperEcho-Research/); assert.equal(byText(demo, '保存运行路径'), undefined);
+  const demoChoices = demo.querySelector('.runtime-path-options').querySelectorAll('input'); demoChoices.forEach((input) => { input.checked = input.value === 'web'; }); demoChoices.find((input) => input.value === 'web').listeners.change();
   assert.match(demo.querySelectorAll('.runtime-path-panel').find((entry) => entry.dataset.path === 'web').textContent, /1234567.*api\.zotero\.org.*未配置（示例，不读取真实凭据）/); assert.equal(calls.length, 0);
 });
 test('completion plans route to remaining queues and end only when all work is done', () => {
@@ -264,7 +285,7 @@ test('Settings separates databases and RSS, colocates review toggles and preserv
     { category: 'RSS', available: true, id: 'rss.sources', description: 'RSS 来源列表', type: 'rss', value: [{ name: 'Journal', url: 'https://example.test/feed.xml', enabled: true }], validation: {} },
     { category: 'Advanced', available: true, id: 'translation.timeout', description: '请求超时（毫秒）', type: 'integer', value: 30000, validation: { min: 1000, max: 600000 }, advanced: true },
   ];
-  app.setApi(async (url, value) => { if (url === '/api/credentials') return []; if (!value) return settings; calls.push(value); return { saved: true }; });
+  app.setApi(async (url, value) => { if (url === '/api/credentials') return [{ id: 'TITLE_TRANSLATION_API_KEY', configured: false, writable: true }, { id: 'PREFERENCE_LEARNING_API_KEY', configured: true, writable: true }]; if (!value) return settings; calls.push(value); return { saved: true }; });
   await app.settings(); assert.doesNotMatch(app.main.textContent, /研究领域|required 检索词|pubmed 检索式/);
   assert.ok(byText(app.main, '文献数据库')); assert.ok(byText(app.main, 'RSS 订阅')); assert.ok(byText(app.main, '检索周期'));
   const sourceSection = app.main.querySelectorAll('.settings-section').find((node) => /文献数据库/.test(node.textContent));
@@ -282,7 +303,7 @@ test('Settings separates databases and RSS, colocates review toggles and preserv
   app.main.replaceChildren(); await app.settings('review', 'translation');
   assert.ok(byText(app.main, '标题翻译')); assert.ok(byText(app.main, '偏好学习'));
   const modelSection = app.main.querySelector('.settings-section');
-  assert.match(modelSection.textContent, /关闭后 Stage 3 跳过标题翻译.*标题翻译 模型名称.*标题翻译 API 地址/);
+  assert.match(modelSection.textContent, /开启后使用配置的模型生成中文标题.*标题翻译 模型名称.*标题翻译 API 地址.*当前配置状态.*API 密钥/);
   assert.doesNotMatch(modelSection.textContent, /偏好学习 模型名称/);
   assert.equal(modelSection.querySelectorAll('.feature-toggle').length, 1); assert.equal(modelSection.querySelectorAll('input').find((input) => input.type !== 'checkbox').value, ''); assert.match(modelSection.textContent, /当前：demo-model/);
   const translationToggle = modelSection.querySelector('.feature-toggle').querySelector('input'); const translationRows = modelSection.querySelectorAll('.feature-dependent'); translationToggle.checked = false; translationToggle.listeners.change(); assert.equal(translationRows.every((row) => row.hidden), true); translationToggle.checked = true; translationToggle.listeners.change(); assert.equal(translationRows.every((row) => !row.hidden), true); assert.match(modelSection.textContent, /当前：demo-model/);
@@ -290,11 +311,42 @@ test('Settings separates databases and RSS, colocates review toggles and preserv
   assert.match(app.notice.textContent, /“标题翻译”已保存/);
   calls.length = 0; app.main.replaceChildren(); await app.settings('review', 'preference');
   const preferenceSection = app.main.querySelector('.settings-section'); const toggles = preferenceSection.querySelectorAll('.feature-toggle').map((row) => row.querySelector('input'));
-  const preferenceRows = preferenceSection.querySelectorAll('.feature-dependent'); const preferenceFields = preferenceRows.map((row) => row.querySelector('input'));
+  const preferenceRows = preferenceSection.querySelectorAll('.feature-dependent'); const preferenceFields = preferenceRows.map((row) => row.querySelector('input')).filter((input) => input && input.type !== 'password');
   assert.equal(toggles.length, 1); assert.match(preferenceSection.textContent, /启用智能评审与偏好学习/); assert.doesNotMatch(preferenceSection.textContent, /启用等级复审|启用偏好学习[^）]/);
   assert.equal(preferenceRows.every((row) => row.hidden), true); assert.equal(preferenceFields.every((input) => input.disabled), true); assert.equal(preferenceFields[0].value, '');
   toggles[0].checked = true; toggles[0].listeners.change(); assert.equal(preferenceRows.every((row) => !row.hidden), true); assert.equal(preferenceFields.every((input) => !input.disabled), true);
-  assert.doesNotMatch(app.main.textContent, /评级设置/);
+  assert.doesNotMatch(app.main.textContent, /评级设置|请求超时/);
+});
+test('model capability toggles remain in the real DOM when registry entries are incomplete', async () => {
+  const app = ui(); app.setApi(async (url) => url === '/api/credentials' ? [] : []);
+  await app.settings('review', 'translation');
+  assert.ok(app.main.querySelectorAll('input').find((input) => input.getAttribute('aria-label') === '启用标题翻译'));
+  assert.match(app.main.textContent, /当前配置 owner 尚不可用/);
+  app.main.replaceChildren(); await app.settings('review', 'preference');
+  assert.ok(app.main.querySelectorAll('input').find((input) => input.getAttribute('aria-label') === '启用智能评审与偏好学习'));
+  assert.match(app.main.textContent, /当前配置 owner 尚不可用/);
+});
+test('email toggle owns its configuration panel and preserves fields while off', async () => {
+  const app = ui(); const settings = [
+    { category: 'Notifications', available: true, id: 'email.enabled', description: '发送报告邮件', type: 'boolean', value: false, validation: {} },
+    { category: 'Notifications', available: true, id: 'email.recipient', description: '收件人', type: 'email', value: 'old@example.test', validation: {} },
+    { category: 'Notifications', available: true, id: 'smtp.host', description: 'SMTP 主机', type: 'string', value: 'smtp.example.test', validation: {} },
+    { category: 'Notifications', available: true, id: 'smtp.user', description: 'SMTP 用户名', type: 'string', value: 'old@example.test', validation: {} },
+    { category: 'Notifications', available: true, id: 'notification.failure', description: '运行失败时通知', type: 'boolean', value: true, validation: {} },
+  ];
+  app.setApi(async (url) => url === '/api/credentials' ? [{ id: 'SMTP_PASS', configured: true, writable: true }] : settings);
+  await app.settings('connections', 'notifications'); const sections = app.main.querySelectorAll('.settings-section'); const email = sections[0];
+  assert.match(email.textContent, /报告邮件.*发送报告邮件.*SMTP 主机.*邮件参数已配置/);
+  assert.equal(email.querySelectorAll('.feature-dependent').every((row) => row.hidden), true);
+  const toggle = email.querySelector('.feature-toggle').querySelector('input'); toggle.checked = true; toggle.listeners.change();
+  assert.equal(email.querySelectorAll('.feature-dependent').every((row) => !row.hidden), true); assert.match(sections[1].textContent, /运行提醒/);
+});
+test('automation switch saves through its owner and updates visible state', async () => {
+  const app = ui(); const calls = []; const settings = [{ category: 'Radar', available: true, id: 'radar.enabled', description: '启用 Daily Radar', type: 'boolean', value: false, validation: {} }];
+  app.setApi(async (url, value) => { if (url === '/api/credentials') return []; if (!value) return settings; calls.push(value); return { saved: true }; });
+  await app.settings('automation', 'radar'); assert.match(app.main.textContent, /当前已关闭.*由系统调度配置维护/);
+  const toggle = app.main.querySelectorAll('input').find((input) => input.type === 'checkbox'); toggle.checked = true; await byText(app.main, '保存本组').click();
+  assert.equal(calls[0].updates[0].id, 'radar.enabled'); assert.match(app.main.textContent, /当前已开启/);
 });
 test('Settings demo uses empty placeholders and the old Advanced demo is absent', async () => {
   const app = ui(); const calls = []; const settings = [
