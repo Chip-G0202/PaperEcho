@@ -17,13 +17,15 @@ test('UI shell keeps five real routes, skip target, live status and collapsible 
 });
 test('sidebar owns L1 and L2 navigation while workspace owns L3 tabs', () => {
   assert.match(html, /class="primary-nav"/); assert.match(html, /class="secondary-nav" aria-label="反馈导航"/); assert.match(html, /class="secondary-nav" aria-label="设置导航"/);
-  for (const route of ['feedback/rating/normal', 'feedback/research', 'feedback/rules', 'settings/general/sources', 'settings/models/translation', 'settings/automation/radar', 'settings/connections/zotero']) assert.match(html, new RegExp(`data-nav-route="${route}"`));
+  for (const route of ['feedback/rating/normal', 'feedback/research', 'feedback/rules', 'settings/general/databases', 'settings/models/translation', 'settings/automation/radar', 'settings/connections/zotero']) assert.match(html, new RegExp(`data-nav-route="${route}"`));
   assert.match(app, /function tertiaryNav/); assert.match(app, /feedback\/rating\/\$\{key\}/); assert.match(app, /function parseRoute/);
+  assert.match(app, /\['databases', '文献数据库'/); assert.match(app, /\['rss', 'RSS 订阅'/); assert.match(app, /\['period', '检索周期'/);
+  assert.match(app, /settingsView === 'rss' \? 'RSS 订阅状态'/);
   assert.doesNotMatch(app, /className = 'settings-nav'/);
 });
 test('brand asset is a referenced green SVG favicon with balanced echo geometry', () => {
-  assert.match(html, /rel="icon" href="\/paperecho-mark\.svg" type="image\/svg\+xml"/);
-  assert.match(html, /<img class="brand-mark" src="\/paperecho-mark\.svg"/);
+  assert.match(html, /rel="icon" href="\/paperecho-mark\.svg\?v=2\.4" type="image\/svg\+xml"/);
+  assert.match(html, /<img class="brand-mark" src="\/paperecho-mark\.svg\?v=2\.4"[^>]*width="44" height="44"/);
   assert.match(logo, /linearGradient/); assert.match(logo, /#bdebd7/); assert.match(logo, /#17684f/);
   assert.match(logo, /x="4" y="26" width="8" height="12"/); assert.match(logo, /x="52" y="26" width="8" height="12"/);
   assert.match(logo, /x="16" y="18" width="8" height="28"/); assert.match(logo, /x="40" y="18" width="8" height="28"/);
@@ -38,7 +40,7 @@ test('demo and simplified Settings copy stay explicit and remove the old footer 
 test('compact UI hierarchy removes D and redundant review details', () => {
   assert.match(app, /function pageIntro/); assert.match(app, /displayablePapers/);
   assert.match(app, /setting\.id === 'review\.batch'\) return false/); assert.doesNotMatch(app, /人工复核批量大小|进入等级复审或人工复核阶段的候选条目上限/);
-  assert.match(app, /keyboardHelp\('键盘快速审阅'/); assert.match(app, /el\('kbd', key\)/); assert.doesNotMatch(app, /补充原因（可选）|等级复审依据：/);
+  assert.match(app, /keyboardHelp\('数字键快速审阅'/); assert.match(app, /主键盘或小键盘数字键/); assert.match(app, /Numpad\[1-4\]/); assert.match(app, /el\('kbd', key\)/); assert.doesNotMatch(app, /补充原因（可选）|等级复审依据：/);
   assert.doesNotMatch(css, /\.badge\.grade-D/); assert.match(css, /\.source-options label\{min-height:48px/);
   assert.match(css, /\.settings-subgroup\+\.settings-subgroup\{border-top:1px/); assert.match(css, /\.group-save\{justify-content:flex-start/);
 });
@@ -50,9 +52,9 @@ test('normal and manual review expose distinct rating contracts', () => {
 });
 test('desktop workspace and shared content columns stay left aligned', () => {
   assert.match(css, /\.content-wrap\{max-width:none;margin:0;/);
-  assert.match(css, /main\{width:100%;max-width:1460px;[^}]*margin:0 auto 0 0/);
-  assert.match(css, /--sidebar-width:276px/); assert.match(css, /@media\(min-width:1400px\)\{\.workspace-grid:has\(\.context-rail\)/);
-  assert.match(css, /grid-template-columns:minmax\(0,1fr\) minmax\(288px,310px\)/);
+  assert.match(css, /main\{width:100%;max-width:1520px;[^}]*margin:0 auto 0 0/);
+  assert.match(css, /--sidebar-width:clamp\(280px,20vw,344px\)/); assert.doesNotMatch(css, /--sidebar-width:276px/); assert.match(css, /@media\(min-width:1400px\)\{\.workspace-grid:has\(\.context-rail\)/);
+  assert.match(css, /grid-template-columns:minmax\(0,1fr\) minmax\(300px,324px\)/);
   assert.match(css, /\.review-workspace\{width:100%;max-width:none/);
   assert.match(css, /\.research-form\{width:100%;max-width:none/);
   assert.match(app, /document-list page-content document-column/);
@@ -66,7 +68,9 @@ test('Settings exposes product controls while hiding internal LLM request batchi
   assert.match(app, /\[\.\.\.input\.querySelectorAll\('input'\)\]\.filter/);
   assert.match(css, /\.source-options label:has\(input:checked\)/);
   assert.match(css, /\.source-options label:has\(input:focus-visible\)/);
-  assert.match(app, /featureToggleId/); assert.match(app, /container\.dataset\.featureDisabled/); assert.match(app, /input\.placeholder = settingPlaceholder/);
+  assert.match(app, /featureToggleIds/); assert.match(app, /container\.dataset\.featureCollapsed/); assert.match(app, /row\.hidden = !expanded/); assert.match(app, /input\.placeholder = settingPlaceholder/);
+  assert.match(app, /\['preference\.enabled', 'review\.enabled', 'feedback\.enabled'\]/); assert.doesNotMatch(app, /\['rating', '评级设置'/);
+  assert.match(app, /查看完整设置示例/); assert.match(app, /renderAdvancedSettingsDemo/); assert.match(app, /未写入真实配置/);
 });
 test('UI renders untrusted content through text nodes and keeps credentials write-only', () => {
   assert.doesNotMatch(app, /\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML|document\.write\(/);

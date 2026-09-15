@@ -56,8 +56,10 @@ test('loopback default, Host/Origin/CSRF/session rejection, traversal, CSP and s
   const script = await app.get('/app.js');
   assert.equal(/innerHTML|insertAdjacentHTML|document\.write/.test(script.text), false);
   assert.match(script.text, /textContent/);
-  const logo = await app.get('/paperecho-mark.svg');
-  assert.equal(logo.status, 200); assert.match(logo.headers['content-type'], /image\/svg\+xml/); assert.match(logo.text, /linearGradient/);
+  for (const route of ['/paperecho-mark.svg', '/paperecho-mark.svg?v=2.4']) {
+    const logo = await app.get(route);
+    assert.equal(logo.status, 200); assert.match(logo.headers['content-type'], /image\/svg\+xml/); assert.match(logo.text, /linearGradient/);
+  }
 });
 test('latest Weekly: zero, 1000 items, long title, Chinese, missing DOI, pagination and feedback', async (t) => {
   const empty = await setup(t);
