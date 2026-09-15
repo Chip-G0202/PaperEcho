@@ -15,6 +15,12 @@ test('UI shell keeps five real routes, skip target, live status and collapsible 
   assert.match(html, /id="notice"[^>]*role="status"[^>]*aria-live="polite"/);
   assert.doesNotThrow(() => new vm.Script(app));
 });
+test('sidebar owns L1 and L2 navigation while workspace owns L3 tabs', () => {
+  assert.match(html, /class="primary-nav"/); assert.match(html, /class="secondary-nav" aria-label="反馈导航"/); assert.match(html, /class="secondary-nav" aria-label="设置导航"/);
+  for (const route of ['feedback/rating/normal', 'feedback/research', 'feedback/rules', 'settings/general/sources', 'settings/models/translation', 'settings/automation/radar', 'settings/connections/zotero']) assert.match(html, new RegExp(`data-nav-route="${route}"`));
+  assert.match(app, /function tertiaryNav/); assert.match(app, /feedback\/rating\/\$\{key\}/); assert.match(app, /function parseRoute/);
+  assert.doesNotMatch(app, /className = 'settings-nav'/);
+});
 test('brand asset is a referenced green SVG favicon with balanced echo geometry', () => {
   assert.match(html, /rel="icon" href="\/paperecho-mark\.svg" type="image\/svg\+xml"/);
   assert.match(html, /<img class="brand-mark" src="\/paperecho-mark\.svg"/);
@@ -32,7 +38,7 @@ test('demo and simplified Settings copy stay explicit and remove the old footer 
 test('compact UI hierarchy removes D and redundant review details', () => {
   assert.match(app, /function pageIntro/); assert.match(app, /displayablePapers/);
   assert.match(app, /setting\.id === 'review\.batch'\) return false/); assert.doesNotMatch(app, /人工复核批量大小|进入等级复审或人工复核阶段的候选条目上限/);
-  assert.match(app, /你也可以使用键盘快速审阅：1 升级/); assert.doesNotMatch(app, /补充原因（可选）|等级复审依据：/);
+  assert.match(app, /1 升级 · 2 不变 · 3 降级 · 4 排除/); assert.doesNotMatch(app, /补充原因（可选）|等级复审依据：/);
   assert.doesNotMatch(css, /\.badge\.grade-D/); assert.match(css, /\.source-options label\{min-height:48px/);
   assert.match(css, /\.settings-subgroup\+\.settings-subgroup\{border-top:1px/); assert.match(css, /\.group-save\{justify-content:flex-start/);
 });
@@ -44,7 +50,9 @@ test('normal and manual review expose distinct rating contracts', () => {
 });
 test('desktop workspace and shared content columns stay left aligned', () => {
   assert.match(css, /\.content-wrap\{max-width:none;margin:0;/);
-  assert.match(css, /main\{width:100%;max-width:1120px;[^}]*margin:0 auto 0 0/);
+  assert.match(css, /main\{width:100%;max-width:1460px;[^}]*margin:0 auto 0 0/);
+  assert.match(css, /@media\(min-width:1600px\)\{\.workspace-grid:has\(\.context-rail\)/);
+  assert.match(css, /grid-template-columns:minmax\(0,1fr\) minmax\(280px,300px\)/);
   assert.match(css, /\.review-workspace\{width:100%;max-width:none/);
   assert.match(css, /\.research-form\{width:100%;max-width:none/);
   assert.match(app, /document-list page-content document-column/);
@@ -68,7 +76,7 @@ test('UI renders untrusted content through text nodes and keeps credentials writ
   assert.match(app, /连接测试尚未开放/);
 });
 test('UI feedback and responsive contracts retain fail-closed messaging and accessible state', () => {
-  assert.match(app, /aria-label', '反馈类型'/);
+  assert.match(app, /aria-label', '文献评级任务'/);
   assert.match(app, /application_status === 'requires_manual_action'/);
   assert.match(app, /尚未正式应用/);
   assert.match(app, /humanApproval: true/);
@@ -77,4 +85,9 @@ test('UI feedback and responsive contracts retain fail-closed messaging and acce
   assert.match(css, /\[hidden\]\{display:none!important\}/);
   assert.match(css, /@media\(max-width:760px\)/); assert.match(css, /position:static/);
   assert.match(css, /overflow-wrap:anywhere/);
+});
+test('rule demos are isolated and typography supports the desktop hierarchy', () => {
+  assert.match(app, /const demoRuleSuggestions = \[/); assert.match(app, /data\.demo \? Promise\.resolve/); assert.match(app, /刷新后恢复，不写入规则、配置或反馈/);
+  assert.match(css, /font-size:16px; line-height:1\.65/); assert.match(css, /h2\{font-size:clamp\(28px,2vw,32px\)/); assert.match(css, /\.primary-nav>button[^}]*font-size:16px/);
+  assert.match(css, /\.tertiary-nav button[^}]*font-size:15px/); assert.match(css, /\.context-card/);
 });

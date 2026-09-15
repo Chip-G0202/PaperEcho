@@ -6,11 +6,26 @@
 <aside class="sidebar" id="sidebar">
   <div class="brand"><img class="brand-mark" src="/paperecho-mark.svg" alt=""><div><strong>PaperEcho</strong><span>Control Center</span></div></div>
   <p class="nav-label">工作空间</p>
-  <nav aria-label="主导航">
+  <nav class="primary-nav" aria-label="主导航">
     <button data-page="home"><span aria-hidden="true">01</span>概览 · Overview</button>
     <button data-page="weekly"><span aria-hidden="true">02</span>文献 · Literature</button>
-    <button data-page="feedback"><span aria-hidden="true">03</span>反馈 · Feedback</button>
-    <button data-page="settings"><span aria-hidden="true">04</span>设置 · Settings</button>
+    <div class="nav-group" data-nav-group="feedback">
+      <button data-page="feedback"><span aria-hidden="true">03</span>反馈 · Feedback</button>
+      <nav class="secondary-nav" aria-label="反馈导航">
+        <button data-nav-route="feedback/rating/normal">文献评级</button>
+        <button data-nav-route="feedback/research">研究方向反馈</button>
+        <button data-nav-route="feedback/rules">规则建议</button>
+      </nav>
+    </div>
+    <div class="nav-group" data-nav-group="settings">
+      <button data-page="settings"><span aria-hidden="true">04</span>设置 · Settings</button>
+      <nav class="secondary-nav" aria-label="设置导航">
+        <button data-nav-route="settings/general/sources">常用设置</button>
+        <button data-nav-route="settings/models/translation">模型与审阅</button>
+        <button data-nav-route="settings/automation/radar">自动化</button>
+        <button data-nav-route="settings/connections/zotero">连接与通知</button>
+      </nav>
+    </div>
     <button data-page="system"><span aria-hidden="true">05</span>系统 · System</button>
   </nav>
   <div class="sidebar-footer"><span class="local-indicator">仅本机访问</span><span>PaperEcho v2.4</span></div>
