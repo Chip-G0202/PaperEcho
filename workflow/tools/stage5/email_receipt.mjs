@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { renameWithTransientRetry } from "../lib/atomic_json.mjs";
 import { registerEphemeral } from "../lib/ephemeral_registry.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
 
@@ -82,7 +83,7 @@ export async function writeReceipt(receiptPath, receipt, { fsApi = fs } = {}) {
     if (typeof handle.sync === "function") await handle.sync();
     await handle.close();
     handle = null;
-    await fsApi.rename(temporary, receiptPath);
+    await renameWithTransientRetry(temporary, receiptPath, { renameImpl: (source, target) => fsApi.rename(source, target) });
     temporaryRegistration.forget();
   } finally {
     if (handle) await handle.close().catch(() => {});

@@ -72,6 +72,28 @@ test("explicit acceptance and rejection become accepted and failed", async (t) =
   assert.equal((await deliverReliableNotification({ ...base, receiptPath: failedPath, transport: async () => ({ accepted: false, rejectedCount: 1, responseCode: 550 }) })).status, "failed");
 });
 
+test("transient receipt rename after SMTP acceptance preserves the accepted outcome", async (t) => {
+  const receiptPath = await fixture(t);
+  const fsApi = Object.create(fs);
+  let renames = 0;
+  let sends = 0;
+  fsApi.rename = async (source, target) => {
+    renames += 1;
+    if (renames === 3) throw Object.assign(new Error("transient rename contention"), { code: "EACCES" });
+    return fs.rename(source, target);
+  };
+  const result = await deliverReliableNotification({
+    ...base,
+    receiptPath,
+    fsApi,
+    transport: async () => { sends += 1; return { accepted: true, acceptedCount: 1 }; },
+  });
+  assert.equal(result.status, "accepted");
+  assert.equal((await readNotificationReceipt(receiptPath)).status, "accepted");
+  assert.equal(sends, 1);
+  assert.equal(renames, 4);
+});
+
 test("timeout and accepted-before-receipt crash become unknown", async (t) => {
   const timeoutPath = await fixture(t);
   const crashPath = await fixture(t);
