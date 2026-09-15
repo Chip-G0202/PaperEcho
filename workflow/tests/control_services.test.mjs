@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
-import { FeedbackService, readCanonicalFeedback, canonicalFeedbackPath, canonicalFeedbackActionRows } from '../tools/lib/control_feedback_service.mjs';
+import { FeedbackService, readCanonicalFeedback, canonicalFeedbackPath, canonicalFeedbackActionRows, manualGradeFeedback } from '../tools/lib/control_feedback_service.mjs';
 import { importLegacyWorkbook } from '../tools/lib/control_legacy_feedback_adapter.mjs';
 import { ConfigService } from '../tools/lib/control_config_service.mjs';
 import { RuleSuggestionService } from '../tools/lib/control_rule_suggestion_service.mjs';
@@ -53,6 +53,22 @@ test('concurrent feedback submissions retain both revisions', async (t) => {
   const service = new FeedbackService({ reviewRoot: root });
   await Promise.all([service.submit(input('a')), service.submit(input('b', 'maybe'))]);
   assert.equal((await readCanonicalFeedback(root)).history.length, 2);
+});
+test('direct manual grade keeps system evidence and derives the legacy learning action', async (t) => {
+  const root = await fixture(t);
+  const service = new FeedbackService({ reviewRoot: root });
+  const reviewed = { ...paper, final_grade: 'C', rule_grade: 'B', llm_review_grade: 'D' };
+  await service.submit({ kind: 'manual_grade', paper: reviewed, manualGrade: 'A', requestId: 'manual-a' });
+  await service.submit({ kind: 'manual_grade', paper: reviewed, manualGrade: 'D', requestId: 'manual-d' });
+  const state = await readCanonicalFeedback(root);
+  assert.deepEqual(state.history.map((entry) => entry.manual_grade), ['A', 'D']);
+  assert.deepEqual(state.history.map((entry) => entry.original_final_grade), ['C', 'C']);
+  assert.deepEqual(state.history.map((entry) => entry.feedback), ['upgrade', 'drop']);
+  assert.deepEqual([reviewed.rule_grade, reviewed.llm_review_grade, reviewed.final_grade], ['B', 'D', 'C']);
+  assert.equal(canonicalFeedbackActionRows(state, root)[0].feedback, 'drop');
+  assert.equal(manualGradeFeedback('B', 'B'), 'keep');
+  assert.equal(manualGradeFeedback('B', 'C'), 'downgrade');
+  await assert.rejects(service.submit({ kind: 'manual_grade', paper: reviewed, manualGrade: 'E', requestId: 'manual-invalid' }), /MANUAL_GRADE_INVALID/);
 });
 test('legacy XLSX one-way import is idempotent and does not modify source', async (t) => {
   const root = await fixture(t);

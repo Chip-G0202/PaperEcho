@@ -18,6 +18,7 @@ const errorMessages = { SETTING_VALUE_INVALID: '请检查字段格式或允许�
 // Keep the existing API/canonical values; the stored learning action is unchanged.
 const feedbackLabels = { highly_relevant: '升级', relevant: '不变', maybe: '降级', irrelevant: '排除', do_not_recommend_similar: '排除（原强负反馈）' };
 const feedbackActions = ['highly_relevant', 'relevant', 'maybe', 'irrelevant'];
+const manualGrades = ['A', 'B', 'C', 'D'];
 const statusLabels = { pending: '待确认', candidate: '候选', accepted: '已接受', revised: '已修改接受', rejected: '已拒绝', superseded: '已被替代', expired: '已过期' };
 const riskLabels = { low: '低', medium: '中', high: '高' };
 const settingGroups = [
@@ -88,7 +89,7 @@ function shortcutAction(event, mode) {
   if (event.target?.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="dialog"],dialog,[data-editor]')) return null;
   if (event.key === 'ArrowUp') return 'previous';
   if (event.key === 'ArrowDown') return 'next';
-  return (mode === 'rules' ? { 1: 'accepted', 2: 'rejected', 3: 'edit' } : { 1: 'highly_relevant', 2: 'relevant', 3: 'maybe', 4: 'irrelevant' })[event.key] || null;
+  return (mode === 'rules' ? { 1: 'accepted', 2: 'rejected', 3: 'edit' } : mode === 'manual' ? { 1: 'A', 2: 'B', 3: 'C', 4: 'D' } : { 1: 'highly_relevant', 2: 'relevant', 3: 'maybe', 4: 'irrelevant' })[event.key] || null;
 }
 async function loadWeekly() {
   const data = await api('/api/weekly?offset=0&limit=200');
@@ -107,13 +108,20 @@ function gradeBadge(value) {
   const text = { A: 'A级 · 高优先', B: 'B级 · 中优先', C: 'C级 · 低优先' }[value] || '最终等级 · 未提供';
   return el('span', text, `badge grade-${['A', 'B', 'C'].includes(value) ? value : 'unknown'}`);
 }
-function paperHeading(card, item) {
+function paperHeading(card, item, { showGrade = true } = {}) {
   card.append(el('h3', item.title || '原始标题未提供', 'paper-title'));
   if (item.translatedTitle && item.translatedTitle !== item.title) card.append(el('p', item.translatedTitle, 'translated-title'));
   card.append(el('p', [item.journal, item.year, item.source].filter(Boolean).join(' · '), 'meta'));
-  const badges = el('div', undefined, 'badge-row'); badges.append(gradeBadge(displayGrade(item)));
-  card.append(badges);
+  if (showGrade) { const badges = el('div', undefined, 'badge-row'); badges.append(gradeBadge(displayGrade(item))); card.append(badges); }
   if (item.recommendationReason) card.append(el('p', `推荐理由：${item.recommendationReason}`, 'recommendation-reason'));
+}
+function gradeEvidence(item) {
+  const grades = el('dl', undefined, 'grade-evidence grade-chain');
+  for (const [name, grade, tone] of [['规则评级', item.ruleGrade, 'rule'], ['语义评级', item.semanticGrade, 'semantic'], ['最终评级', item.finalGrade ?? item.grade, 'final']]) {
+    const group = el('div', undefined, `grade-step grade-step-${tone}`);
+    group.append(el('dt', name), el('dd', grade || '未提供', `grade-value grade-value-${tone}`)); grades.append(group);
+  }
+  return grades;
 }
 async function home() {
   if (homeView === 'radar-demo') { radarDemo(); return; }
@@ -218,57 +226,58 @@ async function paperReview(showIntro = true, sectionNav = null) {
   // needsReview comes exclusively from the shared Weekly exporter owner.
   const visibleItems = displayablePapers(data.items);
   const groups = { normal: visibleItems.filter((item) => !item.needsReview), manual: visibleItems.filter((item) => item.needsReview) };
-  const queues = Object.fromEntries(Object.entries(groups).map(([key, items]) => [key, createReviewQueue(items, (item) => Boolean(item.feedback), (item) => item.feedbackAllowed)]));
+  const queues = Object.fromEntries(Object.entries(groups).map(([key, items]) => [key, createReviewQueue(items, (item) => Boolean(key === 'manual' ? item.manualGrade : item.feedback), (item) => item.feedbackAllowed)]));
   let queue = queues[reviewSection]; let message = ''; let messageKind = 'success';
   const draw = (focus = false) => {
     queue = queues[reviewSection]; tabs.replaceChildren(); workspace.replaceChildren();
     for (const [key, title] of [['normal', '常规文献'], ['manual', '需人工复核']]) { const tab = button(`${title} ${groups[key].length}`, () => { if (queue.busy) return; reviewSection = key; message = ''; draw(true); }); tab.disabled = queue.busy; tab.setAttribute('aria-current', reviewSection === key ? 'page' : 'false'); tabs.append(tab); }
     activeReview = { workspace, queue };
     if (!queue.items.length) { workspace.append(el('p', '此队列暂无文献。', 'empty-state')); return; }
-    const processed = queue.items.filter((item) => item.feedback).length;
+    const processed = queue.items.filter((item) => reviewSection === 'manual' ? item.manualGrade : item.feedback).length;
     workspace.append(el('p', `已处理 ${processed} / 共 ${queue.items.length} · 待处理 ${queue.items.length - processed}`, 'queue-progress'));
     if (message) { const receipt = el('p', message, `queue-receipt ${messageKind}`); receipt.setAttribute('role', 'status'); workspace.append(receipt); }
     if (processed === queue.items.length) workspace.append(el('p', '本队列已完成。可用上 / 下一篇回看并修改已记录反馈。', 'completion'));
-    const item = queue.items[queue.index]; const card = el('article', undefined, 'focused-card paper-card'); paperHeading(card, item);
-    card.append(el('span', item.feedback ? `已反馈：${feedbackLabels[item.feedback] || '已记录'}` : '待反馈', `feedback-state ${item.feedback ? 'selected' : ''}`));
-    if (reviewSection === 'manual') {
-      const grades = el('dl', undefined, 'grade-evidence');
-      for (const [name, grade] of [['规则等级', item.ruleGrade], ['语义等级', item.semanticGrade], ['最终等级', item.finalGrade ?? item.grade]]) grades.append(el('dt', name), el('dd', grade || '未提供'));
-      card.append(grades, el('p', '以上为只读系统证据；你的反馈仅评价最终等级。', 'meta'));
-    }
+    const item = queue.items[queue.index]; const card = el('article', undefined, 'focused-card paper-card'); paperHeading(card, item, { showGrade: false });
+    card.append(gradeEvidence(item));
+    const selectedValue = reviewSection === 'manual' ? item.manualGrade : item.feedback;
+    card.append(el('span', selectedValue ? reviewSection === 'manual' ? `已人工评级：${selectedValue}` : `已反馈：${feedbackLabels[selectedValue] || '已记录'}` : reviewSection === 'manual' ? '待人工评级' : '待反馈', `feedback-state ${selectedValue ? 'selected' : ''}`));
+    if (reviewSection === 'manual') card.append(el('p', '系统评级保持为只读证据；请选择你确认的正确等级。', 'meta'));
     const actions = el('div', undefined, 'actions feedback-actions');
-    for (const [i, value] of feedbackActions.entries()) {
-      const action = button(`${feedbackLabels[value]} ${i + 1}`, () => choose(value));
-      const boundaryDisabled = value === 'highly_relevant' && displayGrade(item) === 'A';
-      action.dataset.action = value; action.setAttribute('aria-label', feedbackLabels[value]); action.setAttribute('aria-pressed', String(item.feedback === value || value === 'irrelevant' && item.feedback === 'do_not_recommend_similar')); action.disabled = queue.busy || !item.feedbackAllowed || boundaryDisabled;
-      if (value === 'irrelevant') action.className = 'danger';
+    const availableActions = reviewSection === 'manual' ? manualGrades : feedbackActions;
+    for (const [i, value] of availableActions.entries()) {
+      const labelText = reviewSection === 'manual' ? value : feedbackLabels[value];
+      const action = button(`${labelText} ${i + 1}`, () => choose(value));
+      const boundaryDisabled = reviewSection === 'normal' && value === 'highly_relevant' && displayGrade(item) === 'A';
+      action.dataset.action = value; action.setAttribute('aria-label', reviewSection === 'manual' ? `人工评级 ${value}` : labelText); action.setAttribute('aria-pressed', String(reviewSection === 'manual' ? item.manualGrade === value : item.feedback === value || value === 'irrelevant' && item.feedback === 'do_not_recommend_similar')); action.disabled = queue.busy || !item.feedbackAllowed || boundaryDisabled;
+      if (reviewSection === 'normal' && value === 'irrelevant' || reviewSection === 'manual' && value === 'D') action.className = 'danger';
       if (boundaryDisabled) action.title = 'A级已是最高展示等级';
       actions.append(action);
     }
-    card.append(el('h4', '最终等级是否正确？'), actions);
-    if (displayGrade(item) === 'A') card.append(el('p', 'A级已是最高展示等级，“升级”不可用；仍可选择不变、降级或排除。', 'boundary-hint'));
-    if (displayGrade(item) === 'C') card.append(el('p', 'C级仍可选择降级或排除：降级表示当前等级偏高，排除表示不应进入有效推荐；两种反馈会分别记录。', 'boundary-hint'));
+    card.append(el('h4', reviewSection === 'manual' ? '人工评级' : '最终评级是否正确？'), actions);
+    if (reviewSection === 'normal' && displayGrade(item) === 'A') card.append(el('p', 'A级已是最高展示等级，“升级”不可用；仍可选择不变、降级或排除。', 'boundary-hint'));
+    if (reviewSection === 'normal' && displayGrade(item) === 'C') card.append(el('p', 'C级仍可选择降级或排除：降级表示当前等级偏高，排除表示不应进入有效推荐；两种反馈会分别记录。', 'boundary-hint'));
     if (!item.feedbackAllowed) card.append(el('p', '缺少可靠文献标识，无法安全记录反馈；可跳过此篇。', 'warning'));
-    workspace.append(card, el('p', '你也可以使用键盘快速审阅：1 升级 · 2 不变 · 3 降级 · 4 排除，↑ / ↓ 可切换上一篇和下一篇。正在输入文字时，快捷键会自动暂停。', 'shortcut-hint'));
+    const shortcut = reviewSection === 'manual' ? '你也可以使用键盘直接评级：1 A · 2 B · 3 C · 4 D，↑ / ↓ 可切换上一篇和下一篇。正在输入文字时，快捷键会自动暂停。' : '你也可以使用键盘快速审阅：1 升级 · 2 不变 · 3 降级 · 4 排除，↑ / ↓ 可切换上一篇和下一篇。正在输入文字时，快捷键会自动暂停。';
+    workspace.append(card, el('p', shortcut, 'shortcut-hint'));
     reviewNavigation(workspace, queue, draw);
     if (focus) workspace.focus();
   };
   const choose = async (value) => {
     if (queue.busy) return;
     const currentGrade = displayGrade(queue.items[queue.index]);
-    if (value === 'highly_relevant' && currentGrade === 'A') return;
+    if (reviewSection === 'normal' && value === 'highly_relevant' && currentGrade === 'A') return;
     const pending = queue.submit(value,
-      (item, requestId) => data.demo ? Promise.resolve({ revision: 1, demo: true, requestId }) : api('/api/feedback', { runId: data.runId, paperId: item.id, value, reason: '', requestId }),
-      (item) => { item.feedback = value; });
+      (item, requestId) => data.demo ? Promise.resolve({ revision: 1, demo: true, requestId }) : api('/api/feedback', { runId: data.runId, paperId: item.id, ...(reviewSection === 'manual' ? { manualGrade: value } : { value }), reason: '', requestId }),
+      (item) => { if (reviewSection === 'manual') item.manualGrade = value; else item.feedback = value; });
     draw();
-    try { const saved = await pending; if (saved) { message = data.demo ? `示例选择：${feedbackLabels[value]} · 未写入真实数据。` : `已记录：${feedbackLabels[value]} · ${saved.item.title.slice(0, 90)}。`; messageKind = 'success'; } }
+    try { const saved = await pending; if (saved) { const labelText = reviewSection === 'manual' ? `人工评级 ${value}` : feedbackLabels[value]; message = data.demo ? `示例选择：${labelText} · 未写入真实数据。` : `已记录：${labelText} · ${saved.item.title.slice(0, 90)}。`; messageKind = 'success'; } }
     catch (error) { message = error.message + ' 当前文献未前进，请重试。'; messageKind = 'error'; }
     draw(true);
   };
   // Read the active queue on every key press so switching queues cannot retain
   // an old queue's key handler or submit into a hidden queue.
   workspace.addEventListener('keydown', (event) => {
-    if (queue.busy) return; const action = shortcutAction(event, 'papers'); if (!action) return; event.preventDefault();
+    if (queue.busy) return; const action = shortcutAction(event, reviewSection === 'manual' ? 'manual' : 'papers'); if (!action) return; event.preventDefault();
     if (action === 'previous' || action === 'next') { queue.move(action === 'previous' ? -1 : 1); message = ''; draw(true); } else choose(action);
   }); draw();
 }

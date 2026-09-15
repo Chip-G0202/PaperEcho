@@ -110,7 +110,8 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       }
       if (decoded === '/api/feedback') {
         const paper = await services.review.resolvePaper(input.runId, input.paperId);
-        return send(200, await services.feedback.submit({ kind: 'paper_feedback', paper, requestId: input.requestId, value: input.value, reason: input.reason }));
+        const kind = input.manualGrade ? 'manual_grade' : 'paper_feedback';
+        return send(200, await services.feedback.submit({ kind, paper, requestId: input.requestId, value: input.value, manualGrade: input.manualGrade, reason: input.reason }));
       }
       if (decoded === '/api/research') return send(200, await services.feedback.submit({ kind: 'research_evaluation', text: input.text, requestId: input.requestId }));
       if (decoded === '/api/decision') return send(200, await services.feedback.submit({ kind: 'rule_decision', id: input.id, decision: input.decision, revisedRule: input.revisedRule, humanApproval: input.humanApproval }));

@@ -103,7 +103,8 @@ test('single paper card: immediate click saves existing values, advances, revisi
   const state = await readCanonicalFeedback(root); assert.deepEqual(state.history.map((entry) => entry.feedback), ['upgrade', 'downgrade']); assert.deepEqual(state.history.map((entry) => entry.revision), [1, 2]);
   assert.deepEqual(items.map((item) => [item.ruleGrade, item.semanticGrade, item.finalGrade]), before);
   assert.equal(PAPER_FEEDBACK.relevant, 'keep'); assert.equal(PAPER_FEEDBACK.irrelevant, 'drop');
-  await byText(app.main, '需人工复核 1').click(); assert.match(app.main.textContent, /规则等级.*语义等级.*最终等级/); assert.equal(currentTitle(app.main), items[99].title);
+  await byText(app.main, '需人工复核 1').click(); assert.match(app.main.textContent, /规则评级.*语义评级.*最终评级/); assert.equal(currentTitle(app.main), items[99].title);
+  assert.equal(byText(app.main, 'A 1').disabled, false); assert.equal(byText(app.main, 'D 4').disabled, false); assert.doesNotMatch(app.main.textContent, /最终评级是否正确？|升级 1/);
 });
 test('save failure keeps card and selection, bounded concurrent submissions, retry reuses request id', async () => {
   const app = ui(); const items = papers(3); const calls = []; let reject;
@@ -128,6 +129,38 @@ test('keyboard 1/2/3/4 and arrows operate only in workspace; input/editor/combin
   assert.deepEqual(calls.map((entry) => entry.value), ['highly_relevant', 'relevant', 'maybe', 'irrelevant']);
   await key(work(app.main), 'ArrowUp'); assert.equal(currentTitle(app.main), items[3].title);
   await key(work(app.main), 'ArrowDown'); assert.equal(currentTitle(app.main), items[4].title);
+});
+test('manual review saves direct A/B/C/D grades, advances on success and preserves history', async (t) => {
+  const base = new URL('./runs/control-review/', import.meta.url); await fs.mkdir(base, { recursive: true });
+  const root = await fs.mkdtemp(path.join(fileURLToPath(base), 'manual-grade-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const service = new FeedbackService({ reviewRoot: root }); const items = papers(3);
+  items.forEach((item, index) => { item.needsReview = true; item.finalGrade = ['B', 'C', 'A'][index]; });
+  const before = items.map((item) => [item.ruleGrade, item.semanticGrade, item.finalGrade]);
+  const calls = []; const app = ui();
+  app.setApi(async (url, payload) => {
+    if (!payload) return { runId: 'manual-run', total: items.length, items };
+    calls.push(payload); const paper = items.find((item) => item.id === payload.paperId);
+    return service.submit({ kind: 'manual_grade', paper, manualGrade: payload.manualGrade, requestId: payload.requestId });
+  });
+  await app.paperReview(); await byText(app.main, '需人工复核 3').click();
+  assert.match(app.main.querySelector('.grade-step-final').textContent, /最终评级.*B/);
+  assert.equal(app.shortcutAction({ key: '1' }, 'manual'), 'A'); assert.equal(app.shortcutAction({ key: '4' }, 'manual'), 'D');
+  await byText(app.main, 'A 1').click(); assert.equal(calls[0].manualGrade, 'A'); assert.equal(currentTitle(app.main), items[1].title);
+  await byText(app.main, 'D 4').click(); assert.equal(calls[1].manualGrade, 'D'); assert.equal(currentTitle(app.main), items[2].title);
+  await key(work(app.main), 'ArrowUp'); assert.equal(currentTitle(app.main), items[1].title); assert.equal(byText(app.main, 'D 4').getAttribute('aria-pressed'), 'true');
+  await byText(app.main, 'B 2').click();
+  const state = await readCanonicalFeedback(root);
+  assert.deepEqual(state.history.map((entry) => entry.manual_grade), ['A', 'D', 'B']);
+  assert.deepEqual(state.history.map((entry) => entry.feedback), ['upgrade', 'drop', 'upgrade']);
+  assert.deepEqual(items.map((item) => [item.ruleGrade, item.semanticGrade, item.finalGrade]), before);
+});
+test('manual review failure stays on the paper and editor focus suppresses direct-grade shortcuts', async () => {
+  const app = ui(); const items = papers(2); items.forEach((item) => { item.needsReview = true; }); const calls = [];
+  app.setApi(async (url, payload) => { if (!payload) return { runId: 'manual-fail', total: 2, items }; calls.push(payload); throw new Error('保存失败'); });
+  await app.paperReview(); await byText(app.main, '需人工复核 2').click(); const title = currentTitle(app.main);
+  const textarea = new Element('textarea'); const event = await key(work(app.main), '2', textarea); assert.equal(event.defaultPrevented, undefined); assert.equal(calls.length, 0);
+  await byText(app.main, 'C 3').click(); assert.equal(currentTitle(app.main), title); assert.equal(items[0].manualGrade, undefined); assert.match(app.main.textContent, /当前文献未前进/);
 });
 test('rule focused queue has no confirm; high risk receipt visible, edit mode suppresses shortcuts', async () => {
   const app = ui(); const rows = [{ id: 'high', status: 'pending', risk_level: 'high', target: 'pubmed_pmc_search.json', rule_text: '高风险检索建议' }, { id: 'low', status: 'pending', risk_level: 'low', rule_text: '机制研究' }]; const calls = [];
@@ -158,7 +191,8 @@ test('demo fixtures render Literature and both Feedback queues without calling m
   assert.equal(byText(app.main, '升级 1').disabled, true);
   await byText(app.main, '不变 2').click();
   await byText(app.main, '需人工复核 3').click();
-  assert.match(app.main.textContent, /规则等级.*语义等级.*最终等级/);
+  assert.match(app.main.textContent, /规则评级.*语义评级.*最终评级/);
+  assert.ok(byText(app.main, 'A 1')); assert.ok(byText(app.main, 'D 4')); assert.doesNotMatch(app.main.textContent, /升级 1/);
   assert.equal(calls.some(([url, value]) => url === '/api/feedback' && value), false);
   assert.match(app.main.textContent, /不会提交真实反馈|未写入真实数据/);
 });

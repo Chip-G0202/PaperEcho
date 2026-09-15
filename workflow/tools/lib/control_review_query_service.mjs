@@ -82,6 +82,7 @@ export class ReviewQueryService {
       try { keys = feedbackIdentity(item); } catch {}
       const id = createHash('sha256').update(`${data.run.runId}:${offset + index}:${keys[0] || ''}`).digest('hex');
       const evidence = getWeeklyReviewEvidence(item);
+      const currentEntry = current.find((entry) => entry.keys.some((key) => keys.includes(key)));
       return {
         id, feedbackAllowed: keys.length > 0, title: String(item.title || ''),
         translatedTitle: String(item.translatedTitle || item.translated_title || item.title_translation || item['标题翻译'] || item['中文标题'] || item.shortTitle || ''),
@@ -91,7 +92,8 @@ export class ReviewQueryService {
         grade: evidence.finalGrade, zotero: this.localRepository ? 'not_used_local' : 'admitted',
         abstract: typeof item.abstract === 'string' ? item.abstract : '',
         integrity: item.integrity_status || null,
-        feedback: current.find((entry) => entry.keys.some((key) => keys.includes(key)))?.value || null,
+        feedback: currentEntry?.value || null,
+        manualGrade: currentEntry?.manual_grade || null,
       };
     });
     return { runId: data.run.runId, total: data.items.length, items };

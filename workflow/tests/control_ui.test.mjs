@@ -36,6 +36,12 @@ test('compact UI hierarchy removes D and redundant review details', () => {
   assert.doesNotMatch(css, /\.badge\.grade-D/); assert.match(css, /\.source-options label\{min-height:48px/);
   assert.match(css, /\.settings-subgroup\+\.settings-subgroup\{border-top:1px/); assert.match(css, /\.group-save\{justify-content:flex-start/);
 });
+test('normal and manual review expose distinct rating contracts', () => {
+  assert.match(app, /grade-step-\$\{tone\}/); assert.match(css, /\.grade-step-final\{/);
+  assert.match(app, /manualGrades = \['A', 'B', 'C', 'D'\]/);
+  assert.match(app, /mode === 'manual'/); assert.match(app, /manualGrade: value/);
+  assert.match(app, /人工评级/); assert.match(app, /item\.manualGrade/);
+});
 test('desktop workspace and shared content columns stay left aligned', () => {
   assert.match(css, /\.content-wrap\{max-width:none;margin:0;/);
   assert.match(css, /main\{width:100%;max-width:1120px;[^}]*margin:0 auto 0 0/);

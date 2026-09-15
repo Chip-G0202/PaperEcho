@@ -9,6 +9,16 @@ export const PAPER_FEEDBACK = Object.freeze({
   irrelevant: 'drop', do_not_recommend_similar: 'drop',
 });
 export const FEEDBACK_REASONS = new Set(['topic_mismatch', 'exposure_mismatch', 'population_mismatch', 'model_mismatch', 'method_mismatch', 'publication_type_mismatch', 'too_broad', 'too_peripheral', 'other']);
+const GRADE_ORDER = ['A', 'B', 'C', 'D'];
+export function manualGradeFeedback(originalGrade, manualGrade) {
+  const original = String(originalGrade || '').trim().toUpperCase();
+  const manual = String(manualGrade || '').trim().toUpperCase();
+  if (!GRADE_ORDER.includes(original) || !GRADE_ORDER.includes(manual)) throw new Error('MANUAL_GRADE_INVALID');
+  if (manual === 'D') return 'drop';
+  if (manual === original) return 'keep';
+  return GRADE_ORDER.indexOf(manual) < GRADE_ORDER.indexOf(original) ? 'upgrade' : 'downgrade';
+}
+const feedbackValue = (feedback) => ({ upgrade: 'highly_relevant', keep: 'relevant', downgrade: 'maybe', drop: 'irrelevant' }[feedback]);
 export const canonicalFeedbackPath = (reviewRoot) => path.join(reviewRoot, 'paper_feedback.json');
 export function feedbackIdentity(item) {
   const keys = getLiteratureIdentityKeys(item).filter((key) => !key.startsWith('title:'));
@@ -67,12 +77,17 @@ export class FeedbackService {
       const state = await readCanonicalFeedback(this.reviewRoot);
       const receipts = [];
       for (const input of inputs) {
-    if (input.kind !== 'paper_feedback') throw new Error('FEEDBACK_KIND_INVALID');
+    if (!['paper_feedback', 'manual_grade'].includes(input.kind)) throw new Error('FEEDBACK_KIND_INVALID');
     const keys = feedbackIdentity(input.paper);
-    if (!Object.hasOwn(PAPER_FEEDBACK, input.value)) throw new Error('FEEDBACK_VALUE_INVALID');
+    const originalFinalGrade = String(input.paper?.final_grade || input.paper?.finalGrade || input.paper?.grade || '').trim().charAt(0).toUpperCase();
+    const manualGrade = input.kind === 'manual_grade' ? String(input.manualGrade || '').trim().toUpperCase() : '';
+    const derivedFeedback = input.kind === 'manual_grade' ? manualGradeFeedback(originalFinalGrade, manualGrade) : PAPER_FEEDBACK[input.value];
+    const value = input.kind === 'manual_grade' ? feedbackValue(derivedFeedback) : input.value;
+    if (!Object.hasOwn(PAPER_FEEDBACK, value)) throw new Error('FEEDBACK_VALUE_INVALID');
     if (input.reason && !FEEDBACK_REASONS.has(input.reason)) throw new Error('FEEDBACK_REASON_INVALID');
     if (typeof input.requestId !== 'string' || !/^[a-zA-Z0-9:_-]{1,160}$/.test(input.requestId)) throw new Error('FEEDBACK_REQUEST_ID_REQUIRED');
-    const payload = { keys, value: input.value, reason: input.reason || '', comment: String(input.comment || '').slice(0, 4000) };
+    const payload = { keys, value, reason: input.reason || '', comment: String(input.comment || '').slice(0, 4000) };
+    if (manualGrade) Object.assign(payload, { manual_grade: manualGrade, original_final_grade: originalFinalGrade });
     const digest = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
       const duplicate = state.history.find((entry) => entry.requestId === input.requestId);
       if (duplicate) {
@@ -85,7 +100,7 @@ export class FeedbackService {
       const entry = {
         ...payload, identity: [...matches][0] || keys[0], requestId: input.requestId, digest,
         revision: state.history.length + 1, created_at: new Date().toISOString(),
-        feedback: PAPER_FEEDBACK[input.value], title: String(input.paper.title || ''),
+        kind: input.kind, feedback: derivedFeedback, title: String(input.paper.title || ''),
         doi: String(input.paper.doi || input.paper.DOI || ''), pmid: String(input.paper.pmid || ''), pmcid: String(input.paper.pmcid || ''),
         source: input.source === 'legacy_xlsx' ? 'legacy_xlsx' : 'control_center',
         source_row: input.sourceRow || null,
