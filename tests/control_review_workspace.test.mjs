@@ -188,10 +188,13 @@ test('demo fixtures render Literature and both Feedback queues without calling m
   assert.equal(app.main.querySelectorAll('article').length, 6); assert.match(app.main.textContent, /A级 2 · B级 2 · C级 2/);
   app.main.replaceChildren(); app.demoMode.feedback = true; await app.paperReview();
   assert.match(app.main.textContent, /已处理 0 \/ 3/); assert.ok(byText(app.main, '常规文献')); assert.ok(byText(app.main, '人工复核'));
+  assert.equal(app.main.querySelectorAll('kbd').length, 6); assert.match(app.main.textContent, /1 升级当前文献.*4 排除当前文献.*输入框中输入文字时/);
+  assert.equal(app.main.querySelector('.review-navigation').querySelectorAll('button').length, 2);
   assert.equal(byText(app.main, '升级 1').disabled, true);
   await byText(app.main, '不变 2').click();
   app.main.replaceChildren(); await app.paperReview(true, 'manual');
   assert.match(app.main.textContent, /规则评级.*语义评级.*最终评级/);
+  assert.match(app.main.textContent, /1 评为 A 级.*4 评为 D 级/);
   assert.ok(byText(app.main, 'A 1')); assert.ok(byText(app.main, 'D 4')); assert.doesNotMatch(app.main.textContent, /升级 1/);
   assert.equal(calls.some(([url, value]) => url === '/api/feedback' && value), false);
   assert.match(app.main.textContent, /不会提交真实反馈|未写入真实数据/);
@@ -203,9 +206,11 @@ test('Settings hides research and query editors, uses source checkboxes and one 
     { category: 'Search', available: true, id: 'pubmed.required', description: 'required 检索词', type: 'keywords', value: ['immune'], validation: {} },
     { category: 'Search', available: true, id: 'pubmed.query', description: 'pubmed 检索式', type: 'string', value: 'immune', validation: {} },
     { category: 'Search', available: true, id: 'pubmed.days', description: '检索天数', type: 'integer', value: 10, validation: { min: 1, max: 366 } },
+    { category: 'Models', available: true, id: 'translation.enabled', description: '启用标题翻译', type: 'boolean', value: false, validation: {} },
     { category: 'Models', available: true, id: 'translation.model', description: 'translation 模型名称', type: 'string', value: 'demo-model', validation: { maxLength: 200 } },
     { category: 'Models', available: true, id: 'translation.endpoint', description: 'translation API 地址', type: 'url', value: 'https://example.test', validation: {} },
     { category: 'Models', available: true, id: 'translation.temperature', description: '采样温度', type: 'number', value: 0.2, validation: { min: 0, max: 2 } },
+    { category: 'Models', available: true, id: 'preference.enabled', description: '启用偏好学习', type: 'boolean', value: true, validation: {} },
     { category: 'Models', available: true, id: 'preference.model', description: 'preference 模型名称', type: 'string', value: 'preference-model', validation: { maxLength: 200 } },
     { category: 'Models', available: true, id: 'preference.endpoint', description: 'preference API 地址', type: 'url', value: 'https://example.test/preference', validation: {} },
     { category: 'Models', available: true, id: 'preference.temperature', description: 'preference 温度', type: 'number', value: 0.1, validation: { min: 0, max: 2 } },
@@ -225,12 +230,22 @@ test('Settings hides research and query editors, uses source checkboxes and one 
   assert.match(modelSection.textContent, /标题翻译 模型名称.*标题翻译 API 地址/);
   assert.doesNotMatch(modelSection.textContent, /偏好学习 模型名称/);
   assert.doesNotMatch(app.main.textContent, /复审批大小|人工复核批量大小/);
-  await byText(modelSection, '保存标题翻译').click(); assert.deepEqual(calls.map((entry) => entry.id), ['translation.model', 'translation.endpoint', 'translation.temperature']);
+  const translationToggle = modelSection.querySelector('.feature-toggle').querySelector('input');
+  const translationFields = modelSection.querySelectorAll('.feature-dependent').map((row) => row.querySelector('input'));
+  assert.equal(translationToggle.checked, false); assert.equal(translationFields.every((input) => input.disabled), true);
+  assert.equal(translationFields[0].value, 'demo-model'); assert.match(translationFields[0].placeholder, /gpt-4\.1-mini/);
+  translationToggle.checked = true; translationToggle.listeners.change(); assert.equal(translationFields.every((input) => !input.disabled), true); assert.equal(translationFields[0].value, 'demo-model');
+  await byText(modelSection, '保存标题翻译').click(); assert.deepEqual(calls.map((entry) => entry.id), ['translation.enabled', 'translation.model', 'translation.endpoint', 'translation.temperature']);
   assert.match(app.notice.textContent, /“标题翻译”已保存/);
+  calls.length = 0; app.main.replaceChildren(); await app.settings('review', 'preference');
+  const preferenceSection = app.main.querySelector('.settings-section'); const preferenceToggle = preferenceSection.querySelector('.feature-toggle').querySelector('input');
+  const preferenceFields = preferenceSection.querySelectorAll('.feature-dependent').map((row) => row.querySelector('input'));
+  assert.equal(preferenceToggle.checked, true); assert.equal(preferenceFields.every((input) => !input.disabled), true);
+  preferenceToggle.checked = false; preferenceToggle.listeners.change(); assert.equal(preferenceFields.every((input) => input.disabled), true); assert.equal(preferenceFields[0].value, 'preference-model');
 });
 test('rule suggestion demo keeps low, medium and high-risk decisions in page memory only', async () => {
   const app = ui(); const calls = []; app.setApi(async (...args) => { calls.push(args); return []; }); app.demoMode.rules = true;
-  await app.suggestions(); assert.match(app.main.textContent, /示例模式.*风险：低/);
+  await app.suggestions(); assert.match(app.main.textContent, /示例模式.*风险：低/); assert.equal(app.main.querySelectorAll('kbd').length, 5); assert.match(app.main.textContent, /1 接受当前建议.*3 修改当前建议/);
   await byText(app.main, '接受 1').click(); assert.match(app.main.textContent, /风险：中/);
   await byText(app.main, '拒绝 2').click(); assert.match(app.main.textContent, /风险：高/);
   await byText(app.main, '接受 1').click(); assert.match(app.main.textContent, /本次已接受.*尚未正式应用.*高风险检索变更不能.*正式配置入口/);

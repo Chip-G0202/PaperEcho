@@ -46,7 +46,7 @@ App Shell 由固定 Sidebar、页头和主内容组成；L1 是左侧主导航�
 
 Literature、Feedback、Rule Suggestions、Daily Radar 与 Weekly 提供明确标记的会话级示例内容，仅用于体验界面；示例选择不调用真实反馈、配置、报告、运行时或调度写入，刷新或退出示例后不保留。
 
-Settings 按分类显示字段，分类切换不丢弃当前页尚未保存的输入；凭据仍为空密码框，仅写入、不回显。研究评价草稿只在当前页面会话内保留，不写浏览器持久存储。System 只展示已有状态的安全摘要，不显示绝对路径、不把历史证据当作实时健康检查。没有结构化推荐依据时不生成“Why Recommended”。
+Settings 按分类显示字段，分类切换不丢弃当前页尚未保存的输入；标题翻译和偏好学习的开关与各自模型配置放在同一组，关闭时仅禁用组内字段并保留待再次启用的值。输入框示例只作格式提示，不是已保存配置。凭据仍为空密码框，仅写入、不回显。研究评价草稿只在当前页面会话内保留，不写浏览器持久存储。System 只展示已有状态的安全摘要，不显示绝对路径、不把历史证据当作实时健康检查。没有结构化推荐依据时不生成“Why Recommended”。
 
 可复用展示约定位于 `web/static/`：CSS custom properties 管理颜色、间距、圆角和 focus；`.subnav`、`.badge`、`.empty-state`、`.manual-action` 与字段错误提示承载一致状态。新增页面继续通过 service API 读取数据，动态文字使用 textContent；不得把 UI 状态改成业务决策或新增服务逻辑。
 
@@ -58,7 +58,7 @@ UI 定向验证：`node --test workflow/tests/control_ui.test.mjs workflow/tests
 
 一次仅突出一篇，卡片与文献页共享同一左对齐内容列，统一显示英文标题、中文标题、期刊/年份/来源、规则评级、语义评级、最终评级和已有推荐理由；三个系统评级始终是不可覆盖的证据。普通 Feedback 保持相对纠正：A 级仅禁用升级，B/C 级四个动作均可用，C 级降级与排除分别保留为 `downgrade` / `drop`，D 不进入普通队列。人工复核改为直接选择 A/B/C/D；canonical revision 额外保存 `manual_grade` 与 `original_final_grade`，并派生旧 feedback 动作用于现有学习/条目动作兼容。点击即保存，成功后前进，失败停留并允许重试；回看改评继续追加 revision，不改写原 rule / semantic / final grade。
 
-文献工作区：1 升级、2 不变、3 降级、4 排除；规则工作区：1 接受、2 拒绝、3 进入修订；↑ / ↓ 回看或继续。快捷键仅绑定当前审阅工作区，在 input、textarea、select、contenteditable、dialog 或编辑状态内禁用；不拦截系统组合键，保存期间拒绝重复动作。鼠标和触屏有等价按钮。
+文献工作区：1 升级、2 不变、3 降级、4 排除；人工复核：1 A、2 B、3 C、4 D；规则工作区：1 接受、2 拒绝、3 进入修订；↑ / ↓ 回看或继续。每种任务在页面内提供独立的键盘帮助，快捷键仅绑定当前审阅工作区，在 input、textarea、select、contenteditable、dialog 或编辑状态内禁用；不拦截系统组合键，保存期间拒绝重复动作。鼠标和触屏可使用卡片下方等宽的上一篇／下一篇按钮。
 
 | 按钮 / 兼容 API 值 | 原 workflow 值 | 意义 |
 |---|---|---|

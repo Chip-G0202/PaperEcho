@@ -8,6 +8,8 @@ const definitions = [];
 function setting(id, category, file, key, type, description, validation = {}) {
   definitions.push({ id, category, file, key, type, description, validation, secret: false, advanced: category === 'Advanced', reload: 'next_run' });
 }
+setting('translation.enabled', 'Models', 'paperecho.config.json', 'common.llm.enabled', 'boolean', '启用标题翻译');
+setting('preference.enabled', 'Models', 'review-workflow-rules.json', 'llm_review.preference_learning_enabled', 'boolean', '启用偏好学习');
 for (const [capability, file] of [['translation', 'title_translation.config.json'], ['preference', 'preference_learning.config.json']]) {
   setting(`${capability}.model`, 'Models', file, 'model', 'string', `${capability} 模型名称`, { maxLength: 200 });
   setting(`${capability}.endpoint`, 'Models', file, 'endpoint', 'url', `${capability} API 地址`);

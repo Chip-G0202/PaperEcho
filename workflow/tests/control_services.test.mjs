@@ -91,7 +91,13 @@ test('config valid round trip and invalid/verification failure preserve old valu
   const root = await fixture(t);
   const file = path.join(root, 'config', 'title_translation.config.json');
   await fs.writeFile(file, JSON.stringify({ model: 'old', temperature: 0 }));
+  const runnerConfig = JSON.parse(await fs.readFile(new URL('../../config/paperecho.config.example.json', import.meta.url), 'utf8'));
+  const runnerFile = path.join(root, 'config', 'paperecho.config.json'); const reviewFile = path.join(root, 'config', 'review-workflow-rules.json');
+  await fs.writeFile(runnerFile, JSON.stringify(runnerConfig)); await fs.writeFile(reviewFile, JSON.stringify({ llm_review: { preference_learning_enabled: true } }));
   const service = new ConfigService({ root });
+  await service.update('translation.enabled', false); await service.update('preference.enabled', false);
+  assert.equal(JSON.parse(await fs.readFile(runnerFile)).common.llm.enabled, false);
+  assert.equal(JSON.parse(await fs.readFile(reviewFile)).llm_review.preference_learning_enabled, false);
   await service.update('translation.model', 'new');
   assert.equal(JSON.parse(await fs.readFile(file)).model, 'new');
   await assert.rejects(service.update('translation.temperature', 9), /INVALID/);

@@ -38,7 +38,7 @@ test('demo and simplified Settings copy stay explicit and remove the old footer 
 test('compact UI hierarchy removes D and redundant review details', () => {
   assert.match(app, /function pageIntro/); assert.match(app, /displayablePapers/);
   assert.match(app, /setting\.id === 'review\.batch'\) return false/); assert.doesNotMatch(app, /人工复核批量大小|进入等级复审或人工复核阶段的候选条目上限/);
-  assert.match(app, /1 升级 · 2 不变 · 3 降级 · 4 排除/); assert.doesNotMatch(app, /补充原因（可选）|等级复审依据：/);
+  assert.match(app, /keyboardHelp\('键盘快速审阅'/); assert.match(app, /el\('kbd', key\)/); assert.doesNotMatch(app, /补充原因（可选）|等级复审依据：/);
   assert.doesNotMatch(css, /\.badge\.grade-D/); assert.match(css, /\.source-options label\{min-height:48px/);
   assert.match(css, /\.settings-subgroup\+\.settings-subgroup\{border-top:1px/); assert.match(css, /\.group-save\{justify-content:flex-start/);
 });
@@ -51,8 +51,8 @@ test('normal and manual review expose distinct rating contracts', () => {
 test('desktop workspace and shared content columns stay left aligned', () => {
   assert.match(css, /\.content-wrap\{max-width:none;margin:0;/);
   assert.match(css, /main\{width:100%;max-width:1460px;[^}]*margin:0 auto 0 0/);
-  assert.match(css, /@media\(min-width:1600px\)\{\.workspace-grid:has\(\.context-rail\)/);
-  assert.match(css, /grid-template-columns:minmax\(0,1fr\) minmax\(280px,300px\)/);
+  assert.match(css, /--sidebar-width:276px/); assert.match(css, /@media\(min-width:1400px\)\{\.workspace-grid:has\(\.context-rail\)/);
+  assert.match(css, /grid-template-columns:minmax\(0,1fr\) minmax\(288px,310px\)/);
   assert.match(css, /\.review-workspace\{width:100%;max-width:none/);
   assert.match(css, /\.research-form\{width:100%;max-width:none/);
   assert.match(app, /document-list page-content document-column/);
@@ -66,6 +66,7 @@ test('Settings exposes product controls while hiding internal LLM request batchi
   assert.match(app, /\[\.\.\.input\.querySelectorAll\('input'\)\]\.filter/);
   assert.match(css, /\.source-options label:has\(input:checked\)/);
   assert.match(css, /\.source-options label:has\(input:focus-visible\)/);
+  assert.match(app, /featureToggleId/); assert.match(app, /container\.dataset\.featureDisabled/); assert.match(app, /input\.placeholder = settingPlaceholder/);
 });
 test('UI renders untrusted content through text nodes and keeps credentials write-only', () => {
   assert.doesNotMatch(app, /\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML|document\.write\(/);
@@ -88,6 +89,7 @@ test('UI feedback and responsive contracts retain fail-closed messaging and acce
 });
 test('rule demos are isolated and typography supports the desktop hierarchy', () => {
   assert.match(app, /const demoRuleSuggestions = \[/); assert.match(app, /data\.demo \? Promise\.resolve/); assert.match(app, /刷新后恢复，不写入规则、配置或反馈/);
-  assert.match(css, /font-size:16px; line-height:1\.65/); assert.match(css, /h2\{font-size:clamp\(28px,2vw,32px\)/); assert.match(css, /\.primary-nav>button[^}]*font-size:16px/);
-  assert.match(css, /\.tertiary-nav button[^}]*font-size:15px/); assert.match(css, /\.context-card/);
+  assert.match(css, /font-size:16px; line-height:1\.65/); assert.match(css, /h2\{font-size:clamp\(29px,2vw,32px\)/); assert.match(css, /\.primary-nav>button[^}]*font-size:18px/);
+  assert.match(css, /\.secondary-nav button[^}]*font-size:16px/); assert.match(css, /\.tertiary-nav button[^}]*font-size:16px/); assert.match(css, /\.keyboard-help kbd/);
+  assert.match(css, /\.review-navigation\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/); assert.match(css, /\.review-navigation button[^}]*min-height:54px/);
 });
