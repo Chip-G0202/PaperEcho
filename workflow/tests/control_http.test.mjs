@@ -78,6 +78,7 @@ test('latest Weekly: zero, 1000 items, long title, Chinese, missing DOI, paginat
   assert.equal((await app.post('/api/feedback', submit)).status, 200);
   assert.equal((await app.post('/api/feedback', submit)).json.duplicate, true);
   assert.equal((await app.get('/api/weekly')).json.items[0].feedback, 'highly_relevant');
+  assert.deepEqual((await app.get('/api/pending-summary')).json, { normal: 999, manual: 1, rules: 0 });
   assert.equal((await app.post('/api/feedback', { ...submit, paperId: 'unknown' })).status, 400);
   const status = (await app.get('/api/status')).json;
   assert.equal(status.needsReview, 1);

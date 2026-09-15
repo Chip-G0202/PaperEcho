@@ -45,9 +45,9 @@ class Element {
 function ui() {
   const main = new Element('main'); const notice = new Element('p'); const body = new Element('body');
   const nodes = { '#content': main, '#notice': notice, '#page-title': new Element('h1'), '#menu-toggle': new Element('button') };
-  const context = vm.createContext({ document: { body, activeElement: null, querySelector: (key) => nodes[key], querySelectorAll: () => [], createElement: (tag) => new Element(tag) }, window: { addEventListener() {} }, fetch: () => new Promise(() => {}), crypto: { randomUUID }, URL, structuredClone, location: { hash: '' } });
-  vm.runInContext(script + '\nglobalThis.testing = { createReviewQueue, shortcutAction, gradeCounts, pendingPaperCounts, completionPlan, loadWeekly, home, weekly, paperReview, research, suggestions, settings, settingGroups, settingViews, demoMode, demoPapers, demoRuleSuggestions, parseRoute, setApi: (value) => { api = value; } };', context);
-  return { ...context.testing, main, notice };
+  const context = vm.createContext({ document: { body, activeElement: null, querySelector: (key) => nodes[key] || body.querySelector(key), querySelectorAll: (key) => body.querySelectorAll(key), createElement: (tag) => new Element(tag) }, window: { addEventListener() {} }, fetch: () => new Promise(() => {}), crypto: { randomUUID }, URL, structuredClone, location: { hash: '' } });
+  vm.runInContext(script + '\nglobalThis.testing = { createReviewQueue, shortcutAction, gradeCounts, pendingPaperCounts, demoPendingSummary, completionPlan, showCompletionModal, loadWeekly, loadPendingSummary, home, weekly, paperReview, research, suggestions, settings, settingGroups, settingViews, demoMode, demoPapers, demoRuleSuggestions, parseRoute, setApi: (value) => { api = value; } };', context);
+  return { ...context.testing, main, notice, body, location: context.location };
 }
 const papers = (count = 100) => Array.from({ length: count }, (_, i) => ({ id: String(i), title: `English ${i} — ${'long title '.repeat(i === 0 ? 80 : 1)}`, translatedTitle: `中文副标题 ${i}`, authors: ['测试作者'], finalGrade: ['A', 'B', 'C'][i % 3], ruleGrade: 'B', semanticGrade: 'A', needsReview: i === count - 1, reviewReason: i === count - 1 ? '既有等级复审依据' : '', source: 'PubMed', journal: 'Journal', year: '2026', doi: i ? '' : '10.1234/test', pmid: String(1000 + i), zotero: 'not_used_local', feedbackAllowed: true, feedback: null }));
 const byText = (root, text) => root.querySelectorAll('button').find((node) => node.textContent === text);
@@ -68,6 +68,8 @@ test('Weekly view model reuses exporter grade precedence and every legacy manual
   assert.equal(data.items.filter((item) => item.needsReview).length, 8);
   assert.equal(data.items[0].ruleGrade, 'B'); assert.equal(data.items[0].semanticGrade, 'A'); assert.equal(data.items[0].finalGrade, 'C'); assert.equal(data.items[0].grade, 'C');
   assert.equal(data.items[0].reviewReason, '原有依据'); assert.equal(JSON.stringify(source), before);
+  query.rules = { list: async () => [{ status: 'pending' }, { status: 'candidate' }, { status: 'accepted' }] };
+  assert.deepEqual({ ...(await query.pendingSummary()) }, { normal: 2, manual: 8, rules: 2 });
 });
 test('Literature shows only compact A/B/C cards and filters without feedback actions', async () => {
   const app = ui(); const items = papers(101); items[100].finalGrade = 'D';
@@ -199,19 +201,29 @@ test('runtime path presents three exclusive modes and only the selected owner fi
   ];
   app.setApi(async (url, value) => { if (url === '/api/credentials') return [{ id: 'ZOTERO_API_KEY', configured: true, writable: true }]; if (!value) return settings; calls.push(value); return { saved: true }; });
   await app.settings('runtime', 'path'); const section = app.main.querySelector('.runtime-settings');
-  assert.equal(section.querySelectorAll('.runtime-path-options input').length, 0);
-  assert.equal(section.querySelectorAll('input').filter((entry) => entry.type === 'radio').length, 3);
-  assert.match(section.textContent, /本地.*桌面.*网页.*Zotero Desktop 程序路径/);
+  assert.equal(section.querySelector('.runtime-path-options').querySelectorAll('input').length, 3);
+  assert.match(section.textContent, /本地运行.*不使用 Zotero.*Zotero Desktop.*不需要 Zotero Web API Key.*Zotero Web.*需要 Zotero Web API 凭据/);
+  assert.match(section.textContent, /当前运行路径：Zotero Desktop/);
   assert.equal(section.querySelectorAll('.runtime-path-panel').find((entry) => entry.dataset.path === 'desktop').hidden, false);
   await byText(section, '保存运行路径').click(); assert.equal(JSON.stringify(calls[0].updates), JSON.stringify([{ id: 'runtime.mode', value: 'desktop' }]));
+  calls.length = 0; app.demoMode.runtime = true; app.main.replaceChildren(); await app.settings('runtime', 'path');
+  const demo = app.main.querySelector('.runtime-settings'); assert.match(app.main.textContent, /示例模式.*不会修改真实设置.*运行路径示例/);
+  assert.match(demo.textContent, /PaperEcho-Research.*本地输入目录.*PaperEcho-Output/); assert.equal(byText(demo, '保存运行路径'), undefined);
+  const choices = demo.querySelector('.runtime-path-options').querySelectorAll('input'); choices.forEach((input) => { input.checked = input.value === 'web'; }); choices.find((input) => input.value === 'web').listeners.change();
+  assert.match(demo.querySelectorAll('.runtime-path-panel').find((entry) => entry.dataset.path === 'web').textContent, /1234567.*api\.zotero\.org.*未配置（示例，不读取真实凭据）/); assert.equal(calls.length, 0);
 });
 test('completion plans route to remaining queues and end only when all work is done', () => {
   const app = ui();
-  assert.equal(app.completionPlan('normal', { normal: 0, manual: 2 }).actions[0].route, 'feedback/rating/manual');
-  assert.equal(app.completionPlan('manual', { normal: 3, manual: 0 }).actions[0].route, 'feedback/rating/normal');
-  assert.equal(app.completionPlan('normal', { normal: 0, manual: 0 }).title, '全部评级已完成');
-  assert.equal(app.completionPlan('rules', { normal: 1, manual: 2 }).actions.length, 2);
-  assert.equal(app.completionPlan('rules', { normal: 0, manual: 0 }).title, '全部审阅已完成');
+  assert.equal(app.completionPlan('normal', { normal: 0, manual: 2, rules: 0 }).actions[0].route, 'feedback/rating/manual');
+  assert.equal(app.completionPlan('normal', { normal: 0, manual: 0, rules: 3 }).title, '文献评级已完成');
+  assert.equal(JSON.stringify(app.completionPlan('normal', { normal: 0, manual: 2, rules: 3 }).actions.map((item) => item.route)), JSON.stringify(['feedback/rating/manual', 'feedback/rules']));
+  assert.equal(app.completionPlan('manual', { normal: 3, manual: 0, rules: 0 }).actions[0].route, 'feedback/rating/normal');
+  assert.equal(app.completionPlan('manual', { normal: 0, manual: 0, rules: 2 }).actions[0].route, 'feedback/rules');
+  assert.equal(app.completionPlan('rules', { normal: 1, manual: 0, rules: 0 }).actions[0].route, 'feedback/rating/normal');
+  assert.equal(app.completionPlan('rules', { normal: 0, manual: 2, rules: 0 }).actions[0].route, 'feedback/rating/manual');
+  for (const kind of ['normal', 'manual', 'rules']) assert.equal(app.completionPlan(kind, { normal: 0, manual: 0, rules: 0 }).title, '全部人工处理已完成');
+  app.showCompletionModal(app.completionPlan('normal', { normal: 0, manual: 1, rules: 1 })); app.showCompletionModal(app.completionPlan('normal', { normal: 0, manual: 1, rules: 1 }));
+  assert.equal(app.body.querySelectorAll('.completion-backdrop').length, 1); assert.match(app.body.textContent, /1 篇文献需要人工复核.*1 条规则建议等待处理.*前往人工复核.*前往规则建议.*稍后处理/);
 });
 test('demo fixtures render Literature and both Feedback queues without calling mutation APIs', async () => {
   const app = ui(); const calls = []; app.setApi(async (url, value) => { calls.push([url, value]); return { runId: 'real-empty', total: 0, items: [] }; });
@@ -268,17 +280,18 @@ test('Settings separates databases and RSS, colocates review toggles and preserv
   assert.equal(rssSections[0].querySelectorAll('input').filter((node) => node.type === 'checkbox').length, 1); assert.match(rssSections[0].textContent, /启用 RSS 期刊订阅/);
   assert.equal(rssSections[1].querySelectorAll('.rss-row').length, 1);
   app.main.replaceChildren(); await app.settings('review', 'translation');
-  assert.ok(byText(app.main, '标题翻译')); assert.ok(byText(app.main, '智能评审与学习'));
+  assert.ok(byText(app.main, '标题翻译')); assert.ok(byText(app.main, '偏好学习'));
   const modelSection = app.main.querySelector('.settings-section');
   assert.match(modelSection.textContent, /关闭后 Stage 3 跳过标题翻译.*标题翻译 模型名称.*标题翻译 API 地址/);
   assert.doesNotMatch(modelSection.textContent, /偏好学习 模型名称/);
   assert.equal(modelSection.querySelectorAll('.feature-toggle').length, 1); assert.equal(modelSection.querySelectorAll('input').find((input) => input.type !== 'checkbox').value, ''); assert.match(modelSection.textContent, /当前：demo-model/);
+  const translationToggle = modelSection.querySelector('.feature-toggle').querySelector('input'); const translationRows = modelSection.querySelectorAll('.feature-dependent'); translationToggle.checked = false; translationToggle.listeners.change(); assert.equal(translationRows.every((row) => row.hidden), true); translationToggle.checked = true; translationToggle.listeners.change(); assert.equal(translationRows.every((row) => !row.hidden), true); assert.match(modelSection.textContent, /当前：demo-model/);
   await byText(modelSection, '保存标题翻译').click(); assert.equal(JSON.stringify(calls[0].updates), JSON.stringify([{ id: 'translation.enabled', value: true }]));
   assert.match(app.notice.textContent, /“标题翻译”已保存/);
   calls.length = 0; app.main.replaceChildren(); await app.settings('review', 'preference');
   const preferenceSection = app.main.querySelector('.settings-section'); const toggles = preferenceSection.querySelectorAll('.feature-toggle').map((row) => row.querySelector('input'));
   const preferenceRows = preferenceSection.querySelectorAll('.feature-dependent'); const preferenceFields = preferenceRows.map((row) => row.querySelector('input'));
-  assert.equal(toggles.length, 1); assert.match(preferenceSection.textContent, /启用智能评审与学习/); assert.doesNotMatch(preferenceSection.textContent, /启用反馈学习/);
+  assert.equal(toggles.length, 1); assert.match(preferenceSection.textContent, /启用智能评审与偏好学习/); assert.doesNotMatch(preferenceSection.textContent, /启用等级复审|启用偏好学习[^）]/);
   assert.equal(preferenceRows.every((row) => row.hidden), true); assert.equal(preferenceFields.every((input) => input.disabled), true); assert.equal(preferenceFields[0].value, '');
   toggles[0].checked = true; toggles[0].listeners.change(); assert.equal(preferenceRows.every((row) => !row.hidden), true); assert.equal(preferenceFields.every((input) => !input.disabled), true);
   assert.doesNotMatch(app.main.textContent, /评级设置/);

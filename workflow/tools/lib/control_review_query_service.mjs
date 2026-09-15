@@ -109,6 +109,20 @@ export class ReviewQueryService {
     feedbackIdentity(matches[0]);
     return matches[0];
   }
+  async pendingSummary() {
+    let offset = 0; let total = 0; const items = [];
+    do {
+      const page = await this.weekly({ offset, limit: 200 });
+      total = page.total; items.push(...page.items); offset += page.items.length;
+      if (!page.items.length) break;
+    } while (offset < total);
+    const visible = items.filter((item) => ['A', 'B', 'C'].includes(item.finalGrade ?? item.grade));
+    return {
+      normal: visible.filter((item) => !item.needsReview && item.feedbackAllowed && !item.feedback).length,
+      manual: visible.filter((item) => item.needsReview && item.feedbackAllowed && !item.manualGrade).length,
+      rules: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
+    };
+  }
   async status() {
     const runs = await this.runs();
     const weekly = await this.latestWeeklyData();

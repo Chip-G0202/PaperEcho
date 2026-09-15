@@ -85,6 +85,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       if (req.method === 'GET') {
         if (decoded === '/api/status') return send(200, await services.review.status());
         if (decoded === '/api/weekly') return send(200, await services.review.weekly({ offset: Number(url.searchParams.get('offset') || 0), limit: Number(url.searchParams.get('limit') || 50) }));
+        if (decoded === '/api/pending-summary') return send(200, await services.review.pendingSummary());
         if (decoded === '/api/settings') return send(200, await services.config.list());
         if (decoded === '/api/credentials') return send(200, await services.secrets.list());
         if (decoded === '/api/suggestions') {

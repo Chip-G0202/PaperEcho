@@ -44,7 +44,7 @@ Windows 的 `PaperEcho.exe` 是基于系统 .NET Framework 4.x 的小型 C# GUI 
 
 App Shell 由固定 Sidebar、页头和主内容组成；L1 是左侧主导航，L2 是对应主项下的嵌套导航，L3 是工作区顶部的平级任务 tabs，筛选器不充当导航。hash 保存当前导航状态并兼容旧反馈链接。窄窗口通过“导航菜单”展开，正文随导航向下排列；宽屏可为真正有用的摘要、进度和快捷键提供 context rail，不为填充空间制造内容。当前入口为概览、文献、反馈、设置、系统，不放置尚未实现的未来模块。header 内联 canonical SVG 几何以避免外部资源加载故障，favicon 继续引用同一独立 SVG 源资产。
 
-Literature、Feedback、Rule Suggestions、Daily Radar 与 Weekly 提供明确标记的会话级示例内容，仅用于体验界面；示例选择不调用真实反馈、配置、报告、运行时或调度写入，刷新或退出示例后不保留。
+Literature、Feedback、Rule Suggestions、Daily Radar 与 Weekly 提供明确标记的会话级示例内容，仅用于体验界面；示例选择不调用真实反馈、配置、报告、运行时或调度写入，刷新或退出示例后不保留。运行路径示例同样只存在于浏览器会话，不写入真实模式、路径或凭据。“全部人工处理已完成”仅在常规评级、人工复核与规则建议三类待办均清零后显示。
 
 Settings 按分类显示字段；模型与 API 字段分开呈现当前状态和空替换输入，空值不会清除配置。功能关闭时隐藏详细模型字段，重新开启后原值仍由配置 owner 保留。旧 Advanced demo 已移除。Sidebar 宽度随桌面视口调整，正文与 context rail 共同使用剩余空间。凭据仍为空密码框，仅写入、不回显。研究评价草稿只在当前页面会话内保留，不写浏览器持久存储。System 只展示已有状态的安全摘要，不显示绝对路径、不把历史证据当作实时健康检查。没有结构化推荐依据时不生成“Why Recommended”。
 
