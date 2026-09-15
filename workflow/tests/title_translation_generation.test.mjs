@@ -5,7 +5,17 @@ import path from "node:path";
 import test from "node:test";
 
 import { generateLiteratureTitleTranslations } from "../tools/lib/title_translation_generation.mjs";
-import { translateTitlesBatch } from "../tools/lib/title_translation_support.mjs";
+import { getTranslationConfig, translateTitlesBatch } from "../tools/lib/title_translation_support.mjs";
+import { runStage3TranslationExecution } from "../tools/stage3/translation_execution_step.mjs";
+
+test("title translation enablement defaults on and Stage 3 skips cleanly when disabled", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperflow-title-toggle-")); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "translation.json"); const previous = process.env.TITLE_TRANSLATION_CONFIG_PATH; process.env.TITLE_TRANSLATION_CONFIG_PATH = file;
+  t.after(() => { if (previous === undefined) delete process.env.TITLE_TRANSLATION_CONFIG_PATH; else process.env.TITLE_TRANSLATION_CONFIG_PATH = previous; });
+  await fs.writeFile(file, JSON.stringify({ model: "mock" })); assert.equal(getTranslationConfig().enabled, true);
+  await fs.writeFile(file, JSON.stringify({ enabled: false, model: "mock" })); const skipped = await runStage3TranslationExecution({ summaryForRun: [{ title: "Must not translate" }] });
+  assert.equal(skipped.translationConfig.enabled, false); assert.equal(skipped.report.skipped_reason, "disabled_by_config"); assert.equal(skipped.translationSummary.enabled, false);
+});
 
 test("Desktop, Web, and Local share title cache without Zotero identifiers", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperflow-title-generation-"));

@@ -18,6 +18,7 @@ const DEFAULT_PROMPT_TEMPLATE = [
 ].join("\n");
 
 const DEFAULT_CONFIG = {
+  enabled: true,
   model: "",
   temperature: 0.3,
   top_p: 0.85,
@@ -203,6 +204,7 @@ function resolveTranslationConfig({ env = process.env } = {}) {
     : DEFAULT_PROMPT_TEMPLATE;
 
   return {
+    enabled: coerceBoolean(env.TITLE_TRANSLATION_ENABLED ?? fileConfig.enabled, DEFAULT_CONFIG.enabled),
     apiKeyConfigured: Boolean(normalizeSecretValue(env.TITLE_TRANSLATION_API_KEY)),
     endpoint: normalizeEndpointValue(env.TITLE_TRANSLATION_ENDPOINT)
       || normalizeEndpointValue(fileConfig.endpoint)
@@ -318,6 +320,7 @@ export async function waitForRateWindow({
 export function getTranslationConfig({ env = process.env } = {}) {
   const runtime = resolveTranslationConfig({ env });
   return {
+    enabled: runtime.enabled,
     apiKeyConfigured: runtime.apiKeyConfigured,
     endpoint: runtime.endpoint,
     model: runtime.model,

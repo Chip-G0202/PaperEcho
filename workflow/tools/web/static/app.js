@@ -26,14 +26,16 @@ const riskLabels = { low: '低', medium: '中', high: '高' };
 const settingGroups = [
   ['common', '常用设置', ['General', 'Sources', 'Search', 'RSS']],
   ['review', '模型与审阅', ['Models', 'Ranking / Review']],
+  ['runtime', '运行路径', ['Runtime']],
   ['automation', '自动化', ['Radar', 'Weekly', 'Integrity']],
   ['connections', '连接与通知', ['Zotero', 'Notifications', 'Credentials']],
 ];
 const settingViews = {
   common: [['databases', '文献数据库', ['Sources']], ['rss', 'RSS 订阅', ['Sources', 'RSS']], ['period', '检索周期', ['General', 'Search']]],
-  review: [['translation', '标题翻译', ['Models']], ['preference', '偏好学习', ['Models', 'Ranking / Review']]],
+  review: [['translation', '标题翻译', ['Models']], ['preference', '智能评审与学习', ['Models', 'Ranking / Review']]],
+  runtime: [['path', '运行路径', ['Runtime']]],
   automation: [['radar', 'Daily Radar', ['Radar']], ['weekly', 'Weekly', ['Weekly', 'Integrity']]],
-  connections: [['zotero', 'Zotero', ['Zotero']], ['notifications', '通知', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
+  connections: [['notifications', '通知', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
 };
 const demoPapers = [
   { id: 'demo-1', title: 'Longitudinal immune signatures associated with early vascular remodeling', translatedTitle: '与早期血管重塑相关的纵向免疫特征', authors: ['演示作者甲', '演示作者乙'], finalGrade: 'A', ruleGrade: 'A', semanticGrade: 'A', source: 'PubMed / PMC', journal: 'Demo Translational Medicine', year: '2026', recommendationReason: '纵向设计与机制指标同时匹配当前研究方向。', abstract: '示例摘要：连续随访免疫信号与早期血管变化，用于演示长标题、摘要和推荐依据的排版。', zotero: 'unknown', feedbackAllowed: true, feedback: null, needsReview: false },
@@ -125,6 +127,43 @@ function shortcutAction(event, mode) {
   if (key === 'ArrowUp') return 'previous';
   if (key === 'ArrowDown') return 'next';
   return (mode === 'rules' ? { 1: 'accepted', 2: 'rejected', 3: 'edit' } : mode === 'manual' ? { 1: 'A', 2: 'B', 3: 'C', 4: 'D' } : { 1: 'highly_relevant', 2: 'relevant', 3: 'maybe', 4: 'irrelevant' })[key] || null;
+}
+function pendingPaperCounts(items = []) {
+  const visible = displayablePapers(items);
+  return {
+    normal: visible.filter((item) => !item.needsReview && item.feedbackAllowed && !item.feedback).length,
+    manual: visible.filter((item) => item.needsReview && item.feedbackAllowed && !item.manualGrade).length,
+  };
+}
+function completionPlan(kind, counts = { normal: 0, manual: 0 }) {
+  const actions = [];
+  if (counts.normal > 0) actions.push({ label: `继续常规评级（${counts.normal}）`, route: 'feedback/rating/normal' });
+  if (counts.manual > 0) actions.push({ label: `继续人工复核（${counts.manual}）`, route: 'feedback/rating/manual' });
+  if (kind === 'rules') return actions.length
+    ? { title: '规则建议已处理', body: '规则建议队列已完成，可继续处理文献评级。', actions }
+    : { title: '全部审阅已完成', body: '规则建议与文献评级均已处理完成。', actions: [] };
+  if (!actions.length) return { title: '全部评级已完成', body: '常规评级与人工复核队列均已处理完成。', actions: [] };
+  return { title: kind === 'manual' ? '人工复核已完成' : '常规评级已完成', body: '当前队列已处理完成，可继续下一项待办。', actions: actions.filter((entry) => !entry.route.endsWith(`/${kind}`)) };
+}
+function showCompletionModal(plan) {
+  document.querySelector('.completion-backdrop')?.remove();
+  const previous = document.activeElement;
+  const backdrop = el('div', undefined, 'completion-backdrop');
+  const dialog = el('section', undefined, 'completion-dialog'); dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-labelledby', 'completion-title');
+  const title = el('h2', plan.title); title.id = 'completion-title'; dialog.append(title, el('p', plan.body));
+  const actions = el('div', undefined, 'completion-actions');
+  const close = () => { backdrop.remove(); previous?.focus?.(); };
+  for (const action of plan.actions) { const control = button(action.label, () => { close(); navigate(action.route); }); control.className = 'primary'; actions.append(control); }
+  actions.append(button(plan.actions.length ? '稍后处理' : '确定', close)); dialog.append(actions); backdrop.append(dialog); document.body.append(backdrop);
+  const focusable = () => [...dialog.querySelectorAll('button:not([disabled])')];
+  backdrop.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); close(); return; }
+    if (event.key !== 'Tab') return;
+    const nodes = focusable(); if (!nodes.length) return; const first = nodes[0]; const last = nodes.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+  focusable()[0]?.focus?.();
 }
 async function loadWeekly() {
   const data = await api('/api/weekly?offset=0&limit=200');
@@ -308,6 +347,7 @@ async function paperReview(showIntro = true, section = reviewSection) {
   };
   const choose = async (value) => {
     if (queue.busy) return;
+    const pendingBefore = queue.items.filter((item) => item.feedbackAllowed && !(reviewSection === 'manual' ? item.manualGrade : item.feedback)).length;
     const currentGrade = displayGrade(queue.items[queue.index]);
     if (reviewSection === 'normal' && value === 'highly_relevant' && currentGrade === 'A') return;
     const pending = queue.submit(value,
@@ -317,6 +357,8 @@ async function paperReview(showIntro = true, section = reviewSection) {
     try { const saved = await pending; if (saved) { const labelText = reviewSection === 'manual' ? `人工评级 ${value}` : feedbackLabels[value]; message = data.demo ? `示例选择：${labelText} · 未写入真实数据。` : `已记录：${labelText} · ${saved.item.title.slice(0, 90)}。`; messageKind = 'success'; } }
     catch (error) { message = error.message + ' 当前文献未前进，请重试。'; messageKind = 'error'; }
     draw(true);
+    const pendingAfter = queue.items.filter((item) => item.feedbackAllowed && !(reviewSection === 'manual' ? item.manualGrade : item.feedback)).length;
+    if (pendingBefore > 0 && pendingAfter === 0) showCompletionModal(completionPlan(reviewSection, pendingPaperCounts(data.items)));
   };
   // Read the active queue on every key press so switching queues cannot retain
   // an old queue's key handler or submit into a hidden queue.
@@ -393,6 +435,7 @@ async function suggestions(showIntro = true) {
     const item = rows[queue.index]; if (queue.busy || !pending(item)) return;
     if (action === 'edit') { editing = true; draft = item.rule_text || item.suggested_rule || ''; draw(true); return; }
     if (action === 'revised' && !draft.trim()) { message = '请填写修改后的建议内容。'; messageKind = 'error'; draw(true); return; }
+    const pendingBefore = rows.filter((entry) => pending(entry) && !decisionReceipts.has(idOf(entry))).length;
     const work = queue.submit(action + (action === 'revised' ? ':' + draft : ''),
       (entry) => data.demo ? Promise.resolve(entry.risk_level === 'high' && ['accepted', 'revised'].includes(action) ? { status: 'pending', target: entry.target, risk: 'high', application_status: 'requires_manual_action', formal_rules_modified: false, explanation: '高风险检索变更不能由示例或网页审阅直接应用。', next_action: '请在正式配置入口人工核对并应用。' } : { status: action, target: entry.target, risk: entry.risk_level, formal_rules_modified: false }) : api('/api/decision', { id: idOf(entry), decision: action, revisedRule: action === 'revised' ? draft : '', humanApproval: true }),
       (entry, result) => { entry.status = result.status; if (action === 'revised') entry.rule_text = draft; decisionReceipts.set(idOf(entry), { ...result, requested_decision: action }); });
@@ -408,6 +451,11 @@ async function suggestions(showIntro = true) {
       }
     } catch (error) { message = error.message + ' 当前建议未前进，请重试。'; messageKind = 'error'; }
     draw(true);
+    const pendingAfter = rows.filter((entry) => pending(entry) && !decisionReceipts.has(idOf(entry))).length;
+    if (pendingBefore > 0 && pendingAfter === 0) {
+      const papers = data.demo ? (demoFeedbackItems || demoPapers) : (await loadWeekly()).items;
+      showCompletionModal(completionPlan('rules', pendingPaperCounts(papers)));
+    }
   };
   bindReview(workspace, 'rules', queue, draw, choose, () => editing); draw();
 }
@@ -425,12 +473,17 @@ function rssEditor(setting, container) {
   draw(); container.append(list, button('添加 RSS', () => { entries.push({ name: '', url: '', enabled: false }); draw(); }));
   return () => structuredClone(entries);
 }
-const settingGroupNames = { General: '运行方式', Models: '模型与 AI', Sources: '文献数据库', Search: '检索周期', RSS: 'RSS 期刊订阅', 'Ranking / Review': '评审体验', Radar: 'Daily Radar', Weekly: 'Weekly 周报', Integrity: '文献完整性', Zotero: 'Zotero', Notifications: '邮件通知', Credentials: '凭据' };
+const settingGroupNames = { General: '运行方式', Models: '模型与 AI', Sources: '文献数据库', Search: '检索周期', RSS: 'RSS 期刊订阅', 'Ranking / Review': '评审体验', Radar: 'Daily Radar', Weekly: 'Weekly 周报', Integrity: '撤稿与更正监测', Runtime: '运行路径', Notifications: '邮件与提醒', Credentials: '凭据' };
 function visibleSetting(setting) {
-  if (setting.id === 'sources.domain') return false;
-  if (setting.id === 'review.batch') return false;
+  if (['sources.domain', 'review.batch', 'general.profile', 'weekly.email', 'feedback.enabled', 'zotero.user', 'zotero.batch'].includes(setting.id)) return false;
   if (setting.category === 'Search') return ['pubmed.days', 'openalex.days'].includes(setting.id);
   return setting.category !== 'Advanced';
+}
+function currentSettingText(setting) {
+  if (setting.value === null || setting.value === undefined || setting.value === '') return '未配置';
+  if (setting.type === 'url') { try { return `已配置 · ${new URL(setting.value).hostname}`; } catch { return '已配置'; } }
+  if (['runtime.projectRoot', 'local.input', 'local.output', 'local.feedback', 'desktop.zoteroExe', 'translation.model', 'preference.model', 'web.userId'].includes(setting.id)) return String(setting.value);
+  return ['number', 'integer'].includes(setting.type) ? String(setting.value) : '已配置';
 }
 function settingControl(setting) {
   let input;
@@ -447,7 +500,7 @@ function settingControl(setting) {
     Object.defineProperty(input, 'value', { get: () => input.querySelector('input:checked')?.value });
   } else if (setting.type === 'enum') input = select(setting.validation.values.map((value) => [value, value]), setting.demo ? '' : setting.value);
   else if (setting.type === 'boolean') { input = el('input'); input.type = 'checkbox'; input.setAttribute('role', 'switch'); input.checked = !setting.demo && setting.value === true; }
-  else { input = el('input'); input.type = ['integer', 'number'].includes(setting.type) ? 'number' : setting.type === 'email' ? 'email' : setting.type === 'url' ? 'url' : 'text'; input.value = setting.demo ? '' : Array.isArray(setting.value) ? setting.value.join(', ') : setting.value ?? ''; input.placeholder = settingPlaceholder(setting); if (setting.validation.min !== undefined) input.min = setting.validation.min; if (setting.validation.max !== undefined) input.max = setting.validation.max; if (setting.type === 'number') input.step = 'any'; }
+  else { input = el('input'); input.type = ['integer', 'number'].includes(setting.type) ? 'number' : setting.type === 'email' ? 'email' : setting.type === 'url' ? 'url' : 'text'; input.value = ''; input.dataset.replacement = 'true'; input.placeholder = settingPlaceholder(setting); if (setting.validation.min !== undefined) input.min = setting.validation.min; if (setting.validation.max !== undefined) input.max = setting.validation.max; if (setting.type === 'number') input.step = 'any'; }
   return input;
 }
 function settingPlaceholder(setting) {
@@ -455,7 +508,8 @@ function settingPlaceholder(setting) {
     'translation.model': '例如：deepseek-flash', 'preference.model': '例如：deepseek-flash',
     'translation.endpoint': '例如：https://api.example.com/v1/chat/completions', 'preference.endpoint': '例如：https://api.example.com/v1/chat/completions',
     'email.recipient': '例如：name@example.com', 'smtp.host': '例如：smtp.example.com', 'smtp.port': '例如：465', 'smtp.user': '例如：name@example.com',
-    'zotero.user': '例如：1234567', 'zotero.batch': '例如：25', 'pubmed.days': '例如：10', 'openalex.days': '例如：10',
+    'web.userId': '例如：1234567', 'zotero.batch': '例如：25', 'pubmed.days': '例如：10', 'openalex.days': '例如：10',
+    'runtime.projectRoot': '例如：C:\\Research\\PaperEcho', 'local.input': '例如：input', 'local.output': '例如：output', 'local.feedback': '例如：feedback', 'desktop.zoteroExe': '例如：C:\\Program Files\\Zotero\\zotero.exe', 'web.apiBase': '例如：https://api.zotero.org',
     'translation.temperature': '例如：0.1', 'preference.temperature': '例如：0.1', 'translation.timeout': '例如：30000', 'preference.timeout': '例如：30000',
     'review.batch': '例如：20', 'pubmed.limit': '例如：500', 'openalex.page_size': '例如：100', 'weekly.interval': '例如：7',
   };
@@ -464,47 +518,29 @@ function settingPlaceholder(setting) {
 function settingValue(setting, input) {
   if (setting.id === 'sources.override') return input.value;
   if (setting.type === 'boolean') return input.checked;
+  if (input.dataset.replacement === 'true' && !input.value.trim()) return undefined;
   if (['integer', 'number'].includes(setting.type)) return Number(input.value);
   return input.value;
 }
-function advancedSettingsCallout() {
-  const box = el('section', undefined, 'advanced-settings-callout');
-  box.append(el('p', '日常工作台仅显示常用设置。高级参数仍由原配置维护，可查看示例了解完整配置范围。'), button('查看完整设置示例', () => navigate('settings/general/advanced-demo')));
-  return box;
-}
-function renderAdvancedSettingsDemo(data) {
-  main.append(demoBanner('以下字段来自现有配置注册表，仅用于了解完整配置范围；不会读取或修改真实配置。', () => navigate('settings/general/databases')));
-  const body = el('div', undefined, 'settings-body page-content'); main.append(body);
-  const groups = [
-    ['模型请求与内部批次', ['translation.timeout', 'preference.timeout', 'review.batch']],
-    ['高级检索参数', ['pubmed.limit', 'openalex.enabled', 'openalex.page_size']],
-    ['调度边界', ['weekly.interval']],
-  ];
-  const labels = { 'translation.timeout': '标题翻译请求超时', 'preference.timeout': '偏好模型请求超时', 'review.batch': '等级复审批大小', 'pubmed.limit': 'PubMed 最大记录数', 'openalex.enabled': '启用 OpenAlex 通道', 'openalex.page_size': 'OpenAlex 每页记录数', 'weekly.interval': 'Weekly 默认间隔' };
-  for (const [title, ids] of groups) {
-    const entries = ids.map((id) => data.find((entry) => entry.id === id)).filter(Boolean);
-    if (!entries.length) continue;
-    const section = el('section', undefined, 'settings-section'); section.append(el('h3', title, 'section-header'));
-    const grid = el('div', undefined, 'advanced-demo-grid');
-    for (const entry of entries) {
-      const card = el('div', undefined, 'setting advanced-demo-field'); const input = settingControl({ ...entry, available: true, demo: true });
-      if (input.tagName === 'INPUT' && input.type !== 'checkbox') { input.readOnly = true; input.setAttribute('aria-readonly', 'true'); }
-      else input.disabled = true;
-      card.append(el('span', '高级设置', 'advanced-tag'), label(labels[entry.id] || entry.description, input), el('p', `${entry.description}。该参数保留在原配置 owner 中。`, 'meta')); grid.append(card);
-    }
-    section.append(grid); body.append(section);
-  }
+function appendCredentialEditor(section, item) {
+  if (!item) return;
+  const names = { TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API 密钥' };
+  const row = el('div', undefined, 'setting'); row.append(el('p', `${names[item.id] || '凭据'}：${item.configured ? '已配置' : '未配置'}`));
+  if (item.writable) {
+    const input = el('input'); input.type = 'password'; input.autocomplete = 'new-password'; input.maxLength = 4096; input.placeholder = '输入新值；原值不会回显';
+    row.append(label('替换凭据', input), button('替换', async () => { const value = input.value; input.value = ''; await api('/api/credentials', { id: item.id, action: 'replace', value }); notice.textContent = `凭据已替换。${item.reload}`; await render(); }), button('清除', async () => { if (!confirm(`清除 ${item.id}？依赖该凭据的功能可能暂不可用。`)) return; input.value = ''; await api('/api/credentials', { id: item.id, action: 'clear' }); notice.textContent = `凭据已清除。${item.reload}`; await render(); }));
+  } else row.append(el('p', item.reason, 'muted'));
+  section.append(row);
 }
 async function settings(group = settingsGroup, view = settingsView) {
   settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common'; settingsView = view;
   main.append(pageIntro('工作空间设置', '这里只保留日常最常用的选项；检索词、检索式和底层参数继续由原配置维护。'));
   const realData = await api('/api/settings');
-  if (settingsGroup === 'common' && settingsView === 'advanced-demo') { renderAdvancedSettingsDemo(realData); return; }
   const data = demoMode.settings ? realData.map((entry) => ({ ...entry, available: true, value: null, demo: true })) : realData;
   const credentials = demoMode.settings ? [] : await api('/api/credentials');
   if (demoMode.settings) main.append(demoBanner('所有输入都使用空值和示例提示；操作只保留在当前浏览器页面，不写入真实配置。', () => { demoMode.settings = false; render(); }));
   else { const actions = el('div', undefined, 'actions page-toolbar'); actions.append(button('体验设置示例', () => { demoMode.settings = true; render(); })); main.append(actions); }
-  const groupPath = { common: 'general', review: 'models', automation: 'automation', connections: 'connections' }[settingsGroup];
+  const groupPath = { common: 'general', review: 'models', runtime: 'runtime', automation: 'automation', connections: 'connections' }[settingsGroup];
   const hasContent = ([key, , categories]) => key === 'credentials' ? credentials.length > 0 : categories.some((category) => data.some((entry) => entry.category === category && visibleSetting(entry) && (category !== 'Models' || entry.id.startsWith(`${key}.`))));
   const views = settingViews[settingsGroup].filter(hasContent);
   if (!views.some(([key]) => key === settingsView)) settingsView = views[0]?.[0] || settingViews[settingsGroup][0][0];
@@ -523,8 +559,9 @@ async function settings(group = settingsGroup, view = settingsView) {
       if (setting.readOnly) { row.append(el('p', `${setting.description}：${setting.value}（只读）`)); container.append(row); continue; }
       if (setting.type === 'rss') { const read = rssEditor(setting, row); saves.push({ setting, read, input: row }); container.append(row); continue; }
       const input = settingControl(setting);
-      if (toggle) { featureToggles.push(input); row.append(label(setting.description, input)); }
-      else { if (toggleIds.size) dependentRows.push({ row, input }); if (input.className.includes('setting-options')) row.append(input); else row.append(label(setting.description, input)); }
+      if (setting.synthetic) { input.addEventListener('change', () => { setting.changed = true; }); }
+      if (toggle) { featureToggles.push(input); row.append(label(setting.description, input)); if (setting.mixed) row.append(el('p', '现有两个开关状态不一致；切换并保存后会同步。', 'meta')); }
+      else { if (toggleIds.size) dependentRows.push({ row, input }); if (input.className.includes('setting-options')) row.append(input); else { row.append(el('p', `当前：${currentSettingText(setting)}`, 'setting-current'), label(`${setting.description}（留空不变）`, input)); } }
       if (setting.validation.min !== undefined || setting.validation.max !== undefined) row.append(el('small', `允许范围：${setting.validation.min ?? '不限'}–${setting.validation.max ?? '不限'}`));
       saves.push({ setting, input, read: () => settingValue(setting, input) }); container.append(row);
     }
@@ -540,24 +577,40 @@ async function settings(group = settingsGroup, view = settingsView) {
     if (unavailable) container.append(el('p', '当前配置未提供此组的部分常用字段；已有值仍由原配置维护。', 'meta'));
     if (!saves.length) return;
     const actions = el('div', undefined, 'actions group-save section-actions'); const save = button(saveLabel, async () => {
-      const values = saves.map((entry) => { if (entry.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); return [entry.setting.id, entry.read()]; });
+      const values = saves.flatMap((entry) => { if (entry.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); const value = entry.read(); if (value === undefined || entry.setting.synthetic && !entry.setting.changed) return []; return (entry.setting.writeIds || [entry.setting.id]).map((id) => [id, value]); });
       if (demoMode.settings) { notice.textContent = `“${saveName}”示例已暂存于当前页面，未写入真实配置。`; return; }
-      let saved = 0;
-      try { for (const [id, value] of values) { await api('/api/settings', { id, value }); saved += 1; } }
-      catch (error) { if (saved) throw new Error(`已保存 ${saved} / ${values.length} 项；其余项目未完成。${error.message}`); throw error; }
+      if (!values.length) { notice.textContent = '没有需要修改的设置。留空字段保持原值。'; return; }
+      await api('/api/settings', { updates: values.map(([id, value]) => ({ id, value })) });
       notice.textContent = `“${saveName}”已保存，下次运行生效。`;
     }); save.className = 'primary'; actions.append(save); container.append(actions);
   };
   const active = (views.find(([key]) => key === settingsView) || settingViews[settingsGroup][0]);
   if (settingsGroup === 'review') {
-    const title = settingsView === 'translation' ? '标题翻译' : '偏好学习与等级复审';
+    const title = settingsView === 'translation' ? '标题翻译' : '智能评审与学习';
     const entries = settingsView === 'translation'
       ? data.filter((entry) => entry.category === 'Models' && entry.id.startsWith('translation.'))
-      : data.filter((entry) => entry.id.startsWith('preference.') || ['review.enabled', 'feedback.enabled'].includes(entry.id));
+      : (() => { const preference = data.find((entry) => entry.id === 'preference.enabled'); const review = data.find((entry) => entry.id === 'review.enabled'); const combined = preference && review ? { ...preference, id: 'review-learning.combined', description: '启用智能评审与学习', value: preference.value === true && review.value === true, mixed: preference.value !== review.value, synthetic: true, changed: false, writeIds: ['review.enabled', 'preference.enabled'] } : null; return [combined, ...data.filter((entry) => entry.id.startsWith('preference.') && entry.id !== 'preference.enabled')].filter(Boolean); })();
     const section = el('section', undefined, 'settings-section section');
-    section.append(el('h3', title, 'section-header'), el('p', settingsView === 'translation' ? '标题翻译没有独立开关；是否运行由现有工作流与全局 LLM 模式共同决定。' : '这三个功能共享偏好模型配置；任一功能启用时显示模型参数。', 'meta'));
-    appendSettingsControls(section, entries, title, `保存${settingsView === 'translation' ? '标题翻译' : '偏好学习与复审'}`, settingsView === 'preference' ? ['preference.enabled', 'review.enabled', 'feedback.enabled'] : []);
-    body.append(section, advancedSettingsCallout()); return;
+    section.append(el('h3', title, 'section-header'), el('p', settingsView === 'translation' ? '关闭后 Stage 3 跳过标题翻译；既有模型参数会保留。' : '一个开关同时控制等级复审与 LLM 偏好学习；底层两个兼容字段仍分别保留。', 'meta'));
+    appendSettingsControls(section, entries, title, `保存${title}`, settingsView === 'translation' ? ['translation.enabled'] : ['review-learning.combined']);
+    body.append(section); return;
+  }
+  if (settingsGroup === 'runtime') {
+    const section = el('section', undefined, 'settings-section runtime-settings'); section.append(el('h3', '选择运行路径', 'section-header'), el('p', '三种路径互斥；只显示当前路径需要的设置。固定启动入口仍会校验路径一致性。', 'meta'));
+    const mode = data.find((entry) => entry.id === 'runtime.mode');
+    if (!mode?.available) { section.append(el('p', '当前配置尚未提供运行路径字段。', 'empty-state')); body.append(section); return; }
+    const options = settingControl(mode); options.className += ' runtime-path-options'; section.append(options);
+    const pathIds = { local: ['runtime.projectRoot', 'local.input', 'local.output', 'local.feedback'], desktop: ['runtime.projectRoot', 'desktop.zoteroExe', 'zotero.batch'], web: ['runtime.projectRoot', 'web.userId', 'web.apiBase'] };
+    const panels = {}; const records = [];
+    for (const pathName of Object.keys(pathIds)) {
+      const panel = el('div', undefined, 'runtime-path-panel'); panel.dataset.path = pathName;
+      for (const id of pathIds[pathName]) { const entry = data.find((item) => item.id === id); if (!entry?.available) continue; const input = settingControl(entry); const row = el('div', undefined, 'setting'); row.append(el('p', `当前：${currentSettingText(entry)}`, 'setting-current'), label(`${entry.description}（留空不变）`, input)); panel.append(row); records.push({ pathName, entry, input }); }
+      if (pathName === 'web') appendCredentialEditor(panel, credentials.find((item) => item.id === 'ZOTERO_API_KEY'));
+      panels[pathName] = panel; section.append(panel);
+    }
+    const sync = () => { const selected = options.value; for (const [name, panel] of Object.entries(panels)) panel.hidden = name !== selected; };
+    options.querySelectorAll('input').forEach((input) => input.addEventListener('change', sync)); sync();
+    const actions = el('div', undefined, 'actions group-save section-actions'); const save = button('保存运行路径', async () => { const selected = options.value; if (!selected) throw new Error('请先选择一种运行路径。'); const updates = [{ id: 'runtime.mode', value: selected }]; for (const record of records.filter((entry) => entry.pathName === selected)) { if (record.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); const value = settingValue(record.entry, record.input); if (value !== undefined) updates.push({ id: record.entry.id, value }); } if (demoMode.settings) { notice.textContent = '“运行路径”示例已暂存于当前页面，未写入真实配置。'; return; } await api('/api/settings', { updates }); notice.textContent = '“运行路径”已保存，下次运行生效。'; }); save.className = 'primary'; actions.append(save); section.append(actions); body.append(section); return;
   }
   for (const group of active[2]) {
     const groupTitle = group === 'Sources' && settingsView === 'rss' ? 'RSS 订阅状态' : settingGroupNames[group];
@@ -566,28 +619,11 @@ async function settings(group = settingsGroup, view = settingsView) {
     appendSettingsControls(section, entries, groupTitle);
     if (group === 'Credentials') {
       section.append(el('p', '凭据是敏感操作，仍需逐项明确替换或清除；原值永不回显。', 'meta'));
-      for (const item of credentials) {
-        const row = el('div', undefined, 'setting');
-        row.append(el('p', `${({ TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '偏好学习 API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero API 密钥' })[item.id] || '凭据'}：${item.configured ? '已配置' : '未配置'}`));
-        if (item.writable) {
-          const input = el('input'); input.type = 'password'; input.autocomplete = 'new-password'; input.maxLength = 4096; input.placeholder = '请输入新的 API Key 或密码';
-          row.append(label('新凭据（不会回显原值）', input), button('替换', async () => {
-            const value = input.value; input.value = '';
-            await api('/api/credentials', { id: item.id, action: 'replace', value });
-            notice.textContent = `凭据已替换。${item.reload}`; await render();
-          }), button('清除', async () => {
-            if (!confirm(`清除 ${item.id}？依赖该凭据的功能可能暂不可用。`)) return;
-            input.value = ''; await api('/api/credentials', { id: item.id, action: 'clear' });
-            notice.textContent = `凭据已清除。${item.reload}`; await render();
-          }));
-        } else row.append(el('p', item.reason, 'muted'));
-        section.append(row);
-      }
+      for (const item of credentials.filter((entry) => entry.id !== 'ZOTERO_API_KEY')) appendCredentialEditor(section, item);
       section.append(el('p', '已配置不代表连接成功。暂无可复用的安全连接测试入口；连接测试尚未开放。', 'muted'));
     }
     if (entries.length || group === 'Credentials') body.append(section);
   }
-  body.append(advancedSettingsCallout());
 }
 async function render() {
   activeReview = null; main.setAttribute('aria-busy', 'true'); main.replaceChildren(el('p', '正在读取当前工作空间…', 'loading'));
@@ -596,7 +632,7 @@ async function render() {
   document.querySelectorAll('[data-nav-group]').forEach((group) => { group.querySelector('.secondary-nav').hidden = group.dataset.navGroup !== page; });
   document.querySelectorAll('[data-nav-route]').forEach((node) => {
     const [, section] = node.dataset.navRoute.split('/');
-    const active = page === 'feedback' ? section === feedbackView : page === 'settings' ? section === ({ common: 'general', review: 'models', automation: 'automation', connections: 'connections' }[settingsGroup]) : false;
+    const active = page === 'feedback' ? section === feedbackView : page === 'settings' ? section === ({ common: 'general', review: 'models', runtime: 'runtime', automation: 'automation', connections: 'connections' }[settingsGroup]) : false;
     node.setAttribute('aria-current', active ? 'page' : 'false');
   });
   try { await ({ home, weekly, feedback, settings, system })[page](); }
@@ -614,10 +650,10 @@ function parseRoute(hash) {
     else { state.feedbackView = 'rating'; state.reviewSection = section === 'rating' && task === 'manual' ? 'manual' : 'normal'; }
   }
   if (state.page === 'settings') {
-    const groups = { general: 'common', common: 'common', models: 'review', review: 'review', automation: 'automation', connections: 'connections' };
+    const groups = { general: 'common', common: 'common', models: 'review', review: 'review', runtime: 'runtime', automation: 'automation', connections: 'connections' };
     state.settingsGroup = groups[section] || 'common';
-    const fallback = { common: 'databases', review: 'translation', automation: 'radar', connections: 'zotero' }[state.settingsGroup];
-    state.settingsView = state.settingsGroup === 'common' && task === 'advanced-demo' ? task : settingViews[state.settingsGroup].some(([key]) => key === task) ? task : fallback;
+    const fallback = { common: 'databases', review: 'translation', runtime: 'path', automation: 'radar', connections: 'notifications' }[state.settingsGroup];
+    state.settingsView = settingViews[state.settingsGroup].some(([key]) => key === task) ? task : fallback;
   }
   return state;
 }

@@ -4,7 +4,7 @@
 <body>
 <a class="skip-link" href="#content">跳到主要内容</a>
 <aside class="sidebar" id="sidebar">
-  <div class="brand"><img class="brand-mark" src="/paperecho-mark.svg?v=2.4" alt="" width="44" height="44"><div><strong>PaperEcho</strong><span>Control Center</span></div></div>
+  <div class="brand"><svg class="brand-mark" viewBox="0 0 64 64" width="44" height="44" aria-hidden="true" focusable="false"><defs><linearGradient id="header-mark-gradient" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse"><stop stop-color="#bdebd7"/><stop offset=".5" stop-color="#58bd90"/><stop offset="1" stop-color="#17684f"/></linearGradient></defs><g fill="url(#header-mark-gradient)"><rect x="4" y="26" width="8" height="12" rx="4"/><rect x="16" y="18" width="8" height="28" rx="4"/><rect x="28" y="6" width="8" height="52" rx="4"/><rect x="40" y="18" width="8" height="28" rx="4"/><rect x="52" y="26" width="8" height="12" rx="4"/></g></svg><div><strong>PaperEcho</strong><span>Control Center</span></div></div>
   <p class="nav-label">工作空间</p>
   <nav class="primary-nav" aria-label="主导航">
     <button data-page="home"><span aria-hidden="true">01</span>概览 · Overview</button>
@@ -22,8 +22,9 @@
       <nav class="secondary-nav" aria-label="设置导航">
         <button data-nav-route="settings/general/databases">常用设置</button>
         <button data-nav-route="settings/models/translation">模型与审阅</button>
+        <button data-nav-route="settings/runtime/path">运行路径</button>
         <button data-nav-route="settings/automation/radar">自动化</button>
-        <button data-nav-route="settings/connections/zotero">连接与通知</button>
+        <button data-nav-route="settings/connections/notifications">连接与通知</button>
       </nav>
     </div>
     <button data-page="system"><span aria-hidden="true">05</span>系统 · System</button>
@@ -31,7 +32,7 @@
   <div class="sidebar-footer"><span class="local-indicator">仅本机访问</span><span>PaperEcho v2.4</span></div>
 </aside>
 <div class="workspace">
-  <header class="topbar"><div><p class="eyebrow">研究工作空间</p><h1 id="page-title">概览 · Overview</h1></div><button id="menu-toggle" aria-controls="sidebar" aria-expanded="false">导航菜单</button><span class="topbar-note">让反馈回到研究本身</span></header>
+  <header class="topbar"><div><p class="eyebrow">研究工作空间</p><h1 id="page-title">概览 · Overview</h1></div><button id="menu-toggle" aria-controls="sidebar" aria-expanded="false">导航菜单</button><span class="topbar-note">听见文献回声</span></header>
   <div class="content-wrap"><p id="notice" role="status" aria-live="polite" aria-atomic="true"></p><main id="content" tabindex="-1" aria-busy="true"><p class="loading" role="status">正在连接本地工作空间…</p></main></div>
 </div>
 </body></html>

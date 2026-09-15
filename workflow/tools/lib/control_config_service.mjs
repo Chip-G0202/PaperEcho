@@ -9,6 +9,7 @@ function setting(id, category, file, key, type, description, validation = {}) {
   definitions.push({ id, category, file, key, type, description, validation, secret: false, advanced: category === 'Advanced', reload: 'next_run' });
 }
 setting('preference.enabled', 'Models', 'review-workflow-rules.json', 'llm_review.preference_learning_enabled', 'boolean', '启用偏好学习');
+setting('translation.enabled', 'Models', 'title_translation.config.json', 'enabled', 'boolean', '启用标题翻译');
 for (const [capability, file] of [['translation', 'title_translation.config.json'], ['preference', 'preference_learning.config.json']]) {
   setting(`${capability}.model`, 'Models', file, 'model', 'string', `${capability} 模型名称`, { maxLength: 200 });
   setting(`${capability}.endpoint`, 'Models', file, 'endpoint', 'url', `${capability} API 地址`);
@@ -36,13 +37,23 @@ for (const [id, category, key, type, description, validation] of [
   ['general.profile', 'General', 'profile', 'enum', '运行配置', { values: ['standard', 'complete', 'radar'] }],
   ['weekly.email', 'Weekly', 'common.email.enabled', 'boolean', 'Weekly 完成后发送邮件'],
   ['radar.enabled', 'Radar', 'common.radar.enabled', 'boolean', '启用 Daily Radar'],
-  ['integrity.enabled', 'Integrity', 'common.integrity.enabled', 'boolean', '启用文献完整性检查'],
+  ['integrity.enabled', 'Integrity', 'common.integrity.enabled', 'boolean', '监测撤稿与更正状态'],
   ['email.enabled', 'Notifications', 'common.email.enabled', 'boolean', '发送报告邮件'],
   ['email.recipient', 'Notifications', 'common.email.recipient', 'email', '收件人'],
   ['smtp.host', 'Notifications', 'common.email.smtp.host', 'string', 'SMTP 主机', { maxLength: 253 }],
   ['smtp.port', 'Notifications', 'common.email.smtp.port', 'integer', 'SMTP 端口', { min: 1, max: 65535 }],
   ['smtp.secure', 'Notifications', 'common.email.smtp.secure', 'boolean', 'SMTP TLS'],
   ['smtp.user', 'Notifications', 'common.email.smtp.user', 'string', 'SMTP 用户名', { maxLength: 254 }],
+  ['notification.failure', 'Notifications', 'common.notifications.failure.enabled', 'boolean', '运行失败时通知'],
+  ['notification.health', 'Notifications', 'common.notifications.health.enabled', 'boolean', '运行健康状态提醒'],
+  ['runtime.mode', 'Runtime', 'mode', 'enum', '运行路径', { values: ['local', 'desktop', 'web'] }],
+  ['runtime.projectRoot', 'Runtime', 'common.projectRoot', 'string', '项目根目录', { maxLength: 2000 }],
+  ['local.input', 'Runtime', 'local.input', 'string', '本地输入目录', { maxLength: 2000 }],
+  ['local.output', 'Runtime', 'local.outputRoot', 'string', '本地输出目录', { maxLength: 2000 }],
+  ['local.feedback', 'Runtime', 'local.feedback', 'string', '本地反馈目录', { maxLength: 2000 }],
+  ['desktop.zoteroExe', 'Runtime', 'desktop.zoteroExe', 'string', 'Zotero Desktop 程序路径', { maxLength: 2000 }],
+  ['web.userId', 'Runtime', 'web.userId', 'string', 'Zotero Web 用户 ID', { pattern: '^\\d+$' }],
+  ['web.apiBase', 'Runtime', 'web.apiBase', 'url', 'Zotero Web API 地址'],
   ['zotero.user', 'Zotero', 'web.userId', 'string', 'Zotero Web 用户 ID', { pattern: '^\\d+$' }],
   ['zotero.batch', 'Zotero', 'desktop.writebackBatchSize', 'integer', 'Zotero 写入批大小', { min: 1, max: 50 }],
 ]) setting(id, category, 'paperecho.config.json', key, type, description, validation);
@@ -100,7 +111,7 @@ export class ConfigService {
     for (const definition of CONFIG_REGISTRY) {
       let value = null;
       let available = true;
-      try { value = get(await this.readOwner(definition.file), definition.key) ?? null; }
+      try { value = get(await this.readOwner(definition.file), definition.key) ?? (definition.id === 'translation.enabled' ? true : null); }
       catch (error) { if (error.code !== 'ENOENT') throw error; available = false; }
       const { file, key, ...publicDefinition } = definition;
       result.push({ ...publicDefinition, value, available });
@@ -109,26 +120,52 @@ export class ConfigService {
     return result;
   }
   async update(id, value) {
-    const definition = CONFIG_REGISTRY.find((entry) => entry.id === id);
-    if (!definition) throw new Error('SETTING_UNKNOWN');
-    validateSetting(definition, value);
-    const file = this.ownerPath(definition.file);
-    return withAtomicJsonLock(file, async () => {
-      const before = await this.readOwner(definition.file);
-      const after = structuredClone(before);
-      put(after, definition.key, value);
-      // A query owned by keyword_groups must be changed through that owner.
-      if (id === 'pubmed.query' && after.keyword_groups) throw new Error('SEARCH_KEYWORD_OWNER_REQUIRED');
-      if (definition.key.startsWith('keyword_groups.')) after.query = buildPubMedQueryFromKeywordGroups(after.keyword_groups);
-      if (definition.file === 'paperecho.config.json') validateRunnerConfigObject(after);
-      await this.verify(after, definition);
-      await writeAtomicJson(file, after, this.atomicOptions);
+    const result = await this.updateMany([{ id, value }]);
+    return result.results[0];
+  }
+  async updateMany(updates) {
+    if (!Array.isArray(updates) || updates.length < 1 || updates.length > 50) throw new Error('SETTING_BATCH_INVALID');
+    if (new Set(updates.map((entry) => entry?.id)).size !== updates.length) throw new Error('SETTING_BATCH_INVALID');
+    const resolved = updates.map(({ id, value }) => {
+      const definition = CONFIG_REGISTRY.find((entry) => entry.id === id);
+      if (!definition) throw new Error('SETTING_UNKNOWN');
+      validateSetting(definition, value);
+      return { id, value, definition };
+    });
+    const ownerFiles = [...new Set(resolved.map((entry) => entry.definition.file))].sort();
+    const withLocks = (index, operation) => index >= ownerFiles.length
+      ? operation()
+      : withAtomicJsonLock(this.ownerPath(ownerFiles[index]), () => withLocks(index + 1, operation));
+    return withLocks(0, async () => {
+      const before = new Map(); const after = new Map();
+      for (const file of ownerFiles) {
+        const value = await this.readOwner(file);
+        before.set(file, value); after.set(file, structuredClone(value));
+      }
+      for (const { id, value, definition } of resolved) {
+        const owner = after.get(definition.file);
+        put(owner, definition.key, value);
+        if (id === 'pubmed.query' && owner.keyword_groups) throw new Error('SEARCH_KEYWORD_OWNER_REQUIRED');
+        if (definition.key.startsWith('keyword_groups.')) owner.query = buildPubMedQueryFromKeywordGroups(owner.keyword_groups);
+      }
+      for (const file of ownerFiles) {
+        if (file === 'paperecho.config.json') validateRunnerConfigObject(after.get(file));
+        for (const { definition } of resolved.filter((entry) => entry.definition.file === file)) await this.verify(after.get(file), definition);
+      }
       try {
-        const reloaded = await this.readOwner(definition.file);
-        if (JSON.stringify(get(reloaded, definition.key)) !== JSON.stringify(value)) throw new Error('SETTING_VERIFY_FAILED');
-        await this.verify(reloaded, definition);
-      } catch (error) { await writeAtomicJson(file, before); throw error; }
-      return { id, saved: true, reload: definition.reload };
+        for (const file of ownerFiles) await writeAtomicJson(this.ownerPath(file), after.get(file), this.atomicOptions);
+        for (const file of ownerFiles) {
+          const reloaded = await this.readOwner(file);
+          for (const { value, definition } of resolved.filter((entry) => entry.definition.file === file)) {
+            if (JSON.stringify(get(reloaded, definition.key)) !== JSON.stringify(value)) throw new Error('SETTING_VERIFY_FAILED');
+            await this.verify(reloaded, definition);
+          }
+        }
+      } catch (error) {
+        for (const file of ownerFiles) await writeAtomicJson(this.ownerPath(file), before.get(file));
+        throw error;
+      }
+      return { saved: true, results: resolved.map(({ id, definition }) => ({ id, saved: true, reload: definition.reload })) };
     });
   }
 }

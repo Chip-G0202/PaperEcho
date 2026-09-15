@@ -16,6 +16,16 @@ export async function runStage3TranslationExecution({
   writeMetadataBatch,
 } = {}) {
   const translationConfig = getTranslationConfig();
+  if (!translationConfig.enabled) {
+    const report = { total: 0, success_count: 0, failure_count: 0, skipped: true, skipped_reason: 'disabled_by_config' };
+    return {
+      report,
+      translationConfig,
+      translationSummary: { ...buildStage3TranslationSummary({ report, translationConfig, poolScan, dryRunBlocked: false }), enabled: false, skipped: true, skipped_reason: 'disabled_by_config' },
+      concurrency: { configuredConcurrency: 0, currentConcurrency: 0, concurrencyWarning: null, concurrencyClamped: false, source: 'disabled' },
+      downgradeAudit: null,
+    };
+  }
   const concurrencyRaw = process.env.ZOTERO_TRANSLATION_BACKFILL_CONCURRENCY;
   const configuredConcurrency = Number(concurrencyRaw || 10);
   const metadataConcurrencyMax = 256;

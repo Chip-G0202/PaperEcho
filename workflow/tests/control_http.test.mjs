@@ -94,6 +94,8 @@ test('research submit, generated suggestion, accept and replay; settings valid/i
   assert.equal((await app.post('/api/decision', decision)).json.status, 'accepted');
   assert.equal((await app.post('/api/decision', decision)).json.duplicate, true);
   assert.equal((await app.post('/api/settings', { id: 'translation.model', value: 'new-model' })).status, 200);
+  assert.equal((await app.post('/api/settings', { updates: [{ id: 'translation.model', value: 'batch-model' }, { id: 'translation.temperature', value: 0.4 }] })).status, 200);
+  assert.equal(JSON.parse(await fs.readFile(path.join(app.root, 'config', 'title_translation.config.json'))).model, 'batch-model');
   assert.equal((await app.post('/api/settings', { id: 'translation.temperature', value: 20 })).status, 400);
   assert.equal((await app.post('/api/settings', { id: 'rss.sources', value: [{ name: '中文 RSS', url: 'https://example.com/rss', enabled: false }] })).status, 200);
   assert.equal((await app.post('/api/settings', { id: 'rss.sources', value: [{ name: 'x', url: 'file:///sensitive', enabled: true }] })).status, 400);

@@ -115,7 +115,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       }
       if (decoded === '/api/research') return send(200, await services.feedback.submit({ kind: 'research_evaluation', text: input.text, requestId: input.requestId }));
       if (decoded === '/api/decision') return send(200, await services.feedback.submit({ kind: 'rule_decision', id: input.id, decision: input.decision, revisedRule: input.revisedRule, humanApproval: input.humanApproval }));
-      if (decoded === '/api/settings') return send(200, await services.config.update(input.id, input.value));
+      if (decoded === '/api/settings') return send(200, Array.isArray(input.updates) ? await services.config.updateMany(input.updates) : await services.config.update(input.id, input.value));
       return send(404, { error: 'NOT_FOUND' });
     } catch (error) {
       if (res.headersSent) { res.end(); return; }

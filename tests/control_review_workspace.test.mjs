@@ -43,10 +43,10 @@ class Element {
   async click() { if (!this.disabled) await this.listeners.click?.({ target: this }); }
 }
 function ui() {
-  const main = new Element('main'); const notice = new Element('p');
+  const main = new Element('main'); const notice = new Element('p'); const body = new Element('body');
   const nodes = { '#content': main, '#notice': notice, '#page-title': new Element('h1'), '#menu-toggle': new Element('button') };
-  const context = vm.createContext({ document: { querySelector: (key) => nodes[key], querySelectorAll: () => [], createElement: (tag) => new Element(tag) }, window: { addEventListener() {} }, fetch: () => new Promise(() => {}), crypto: { randomUUID }, URL, structuredClone, location: { hash: '' } });
-  vm.runInContext(script + '\nglobalThis.testing = { createReviewQueue, shortcutAction, gradeCounts, loadWeekly, home, weekly, paperReview, research, suggestions, settings, settingGroups, settingViews, demoMode, demoPapers, demoRuleSuggestions, parseRoute, setApi: (value) => { api = value; } };', context);
+  const context = vm.createContext({ document: { body, activeElement: null, querySelector: (key) => nodes[key], querySelectorAll: () => [], createElement: (tag) => new Element(tag) }, window: { addEventListener() {} }, fetch: () => new Promise(() => {}), crypto: { randomUUID }, URL, structuredClone, location: { hash: '' } });
+  vm.runInContext(script + '\nglobalThis.testing = { createReviewQueue, shortcutAction, gradeCounts, pendingPaperCounts, completionPlan, loadWeekly, home, weekly, paperReview, research, suggestions, settings, settingGroups, settingViews, demoMode, demoPapers, demoRuleSuggestions, parseRoute, setApi: (value) => { api = value; } };', context);
   return { ...context.testing, main, notice };
 }
 const papers = (count = 100) => Array.from({ length: count }, (_, i) => ({ id: String(i), title: `English ${i} — ${'long title '.repeat(i === 0 ? 80 : 1)}`, translatedTitle: `中文副标题 ${i}`, authors: ['测试作者'], finalGrade: ['A', 'B', 'C'][i % 3], ruleGrade: 'B', semanticGrade: 'A', needsReview: i === count - 1, reviewReason: i === count - 1 ? '既有等级复审依据' : '', source: 'PubMed', journal: 'Journal', year: '2026', doi: i ? '' : '10.1234/test', pmid: String(1000 + i), zotero: 'not_used_local', feedbackAllowed: true, feedback: null }));
@@ -182,9 +182,36 @@ test('route parser restores L1/L2/L3 state and Settings keeps credentials write-
   const app = ui(); app.setApi(async (url) => url === '/api/credentials' ? [{ id: 'SMTP_PASS', configured: true, writable: true }] : [{ category: 'General', available: true, id: 'mode', description: '运行模式', type: 'enum', value: 'local', validation: { values: ['local', 'desktop'] } }, { category: 'Sources', available: true, id: 'source', description: '启用来源', type: 'boolean', value: true, validation: {} }]);
   assert.deepEqual({ ...app.parseRoute('#feedback/rating/manual') }, { page: 'feedback', feedbackView: 'rating', reviewSection: 'manual', settingsGroup: 'common', settingsView: 'databases', homeView: 'overview' });
   assert.equal(app.parseRoute('#feedback/suggestions').feedbackView, 'rules'); assert.equal(app.parseRoute('#settings/models/preference').settingsView, 'preference');
-  assert.equal(app.parseRoute('#settings/general/advanced-demo').settingsView, 'advanced-demo');
+  assert.equal(app.parseRoute('#settings/runtime/path').settingsGroup, 'runtime');
   await app.settings('connections', 'credentials');
   assert.equal(app.main.querySelectorAll('input').find((node) => node.type === 'password').value, ''); assert.match(app.main.textContent, /连接测试尚未开放/);
+});
+test('runtime path presents three exclusive modes and only the selected owner fields', async () => {
+  const app = ui(); const calls = []; const settings = [
+    { category: 'Runtime', available: true, id: 'runtime.mode', description: '运行路径', type: 'enum', value: 'desktop', validation: { values: ['local', 'desktop', 'web'] } },
+    { category: 'Runtime', available: true, id: 'runtime.projectRoot', description: '项目根目录', type: 'string', value: 'C:\\Research', validation: {} },
+    { category: 'Runtime', available: true, id: 'local.input', description: '本地输入目录', type: 'string', value: 'input', validation: {} },
+    { category: 'Runtime', available: true, id: 'local.output', description: '本地输出目录', type: 'string', value: 'output', validation: {} },
+    { category: 'Runtime', available: true, id: 'local.feedback', description: '本地反馈目录', type: 'string', value: 'feedback', validation: {} },
+    { category: 'Runtime', available: true, id: 'desktop.zoteroExe', description: 'Zotero Desktop 程序路径', type: 'string', value: 'zotero.exe', validation: {} },
+    { category: 'Runtime', available: true, id: 'web.userId', description: 'Zotero Web 用户 ID', type: 'string', value: '123', validation: {} },
+    { category: 'Runtime', available: true, id: 'web.apiBase', description: 'Zotero Web API 地址', type: 'url', value: 'https://api.zotero.org', validation: {} },
+  ];
+  app.setApi(async (url, value) => { if (url === '/api/credentials') return [{ id: 'ZOTERO_API_KEY', configured: true, writable: true }]; if (!value) return settings; calls.push(value); return { saved: true }; });
+  await app.settings('runtime', 'path'); const section = app.main.querySelector('.runtime-settings');
+  assert.equal(section.querySelectorAll('.runtime-path-options input').length, 0);
+  assert.equal(section.querySelectorAll('input').filter((entry) => entry.type === 'radio').length, 3);
+  assert.match(section.textContent, /本地.*桌面.*网页.*Zotero Desktop 程序路径/);
+  assert.equal(section.querySelectorAll('.runtime-path-panel').find((entry) => entry.dataset.path === 'desktop').hidden, false);
+  await byText(section, '保存运行路径').click(); assert.equal(JSON.stringify(calls[0].updates), JSON.stringify([{ id: 'runtime.mode', value: 'desktop' }]));
+});
+test('completion plans route to remaining queues and end only when all work is done', () => {
+  const app = ui();
+  assert.equal(app.completionPlan('normal', { normal: 0, manual: 2 }).actions[0].route, 'feedback/rating/manual');
+  assert.equal(app.completionPlan('manual', { normal: 3, manual: 0 }).actions[0].route, 'feedback/rating/normal');
+  assert.equal(app.completionPlan('normal', { normal: 0, manual: 0 }).title, '全部评级已完成');
+  assert.equal(app.completionPlan('rules', { normal: 1, manual: 2 }).actions.length, 2);
+  assert.equal(app.completionPlan('rules', { normal: 0, manual: 0 }).title, '全部审阅已完成');
 });
 test('demo fixtures render Literature and both Feedback queues without calling mutation APIs', async () => {
   const app = ui(); const calls = []; app.setApi(async (url, value) => { calls.push([url, value]); return { runId: 'real-empty', total: 0, items: [] }; });
@@ -211,6 +238,7 @@ test('Settings separates databases and RSS, colocates review toggles and preserv
     { category: 'Search', available: true, id: 'pubmed.required', description: 'required 检索词', type: 'keywords', value: ['immune'], validation: {} },
     { category: 'Search', available: true, id: 'pubmed.query', description: 'pubmed 检索式', type: 'string', value: 'immune', validation: {} },
     { category: 'Search', available: true, id: 'pubmed.days', description: '检索天数', type: 'integer', value: 10, validation: { min: 1, max: 366 } },
+    { category: 'Models', available: true, id: 'translation.enabled', description: '启用标题翻译', type: 'boolean', value: true, validation: {} },
     { category: 'Models', available: true, id: 'translation.model', description: 'translation 模型名称', type: 'string', value: 'demo-model', validation: { maxLength: 200 } },
     { category: 'Models', available: true, id: 'translation.endpoint', description: 'translation API 地址', type: 'url', value: 'https://example.test', validation: {} },
     { category: 'Models', available: true, id: 'translation.temperature', description: '采样温度', type: 'number', value: 0.2, validation: { min: 0, max: 2 } },
@@ -234,29 +262,30 @@ test('Settings separates databases and RSS, colocates review toggles and preserv
   const sourceOptions = sourceSection.querySelector('.source-options');
   assert.equal(sourceOptions.querySelectorAll('label').every((node) => node.htmlFor === node.querySelector('input').id), true);
   assert.match(sourceSection.querySelector('.group-save').className, /section-actions/);
-  await byText(sourceSection, '保存本组').click(); assert.deepEqual([...calls[0].value], ['rss', 'pubmed_pmc']);
+  await byText(sourceSection, '保存本组').click(); assert.equal(JSON.stringify(calls[0].updates), JSON.stringify([{ id: 'sources.override', value: ['rss', 'pubmed_pmc'] }]));
   calls.length = 0; app.main.replaceChildren(); await app.settings('common', 'rss');
   const rssSections = app.main.querySelectorAll('.settings-section'); assert.match(app.main.textContent, /RSS 订阅状态.*RSS 期刊订阅/);
   assert.equal(rssSections[0].querySelectorAll('input').filter((node) => node.type === 'checkbox').length, 1); assert.match(rssSections[0].textContent, /启用 RSS 期刊订阅/);
   assert.equal(rssSections[1].querySelectorAll('.rss-row').length, 1);
   app.main.replaceChildren(); await app.settings('review', 'translation');
-  assert.ok(byText(app.main, '标题翻译')); assert.ok(byText(app.main, '偏好学习'));
+  assert.ok(byText(app.main, '标题翻译')); assert.ok(byText(app.main, '智能评审与学习'));
   const modelSection = app.main.querySelector('.settings-section');
-  assert.match(modelSection.textContent, /标题翻译没有独立开关.*标题翻译 模型名称.*标题翻译 API 地址/);
+  assert.match(modelSection.textContent, /关闭后 Stage 3 跳过标题翻译.*标题翻译 模型名称.*标题翻译 API 地址/);
   assert.doesNotMatch(modelSection.textContent, /偏好学习 模型名称/);
-  assert.equal(modelSection.querySelectorAll('.feature-toggle').length, 0); assert.equal(modelSection.querySelectorAll('input')[0].value, 'demo-model');
-  await byText(modelSection, '保存标题翻译').click(); assert.deepEqual(calls.map((entry) => entry.id), ['translation.model', 'translation.endpoint', 'translation.temperature']);
+  assert.equal(modelSection.querySelectorAll('.feature-toggle').length, 1); assert.equal(modelSection.querySelectorAll('input').find((input) => input.type !== 'checkbox').value, ''); assert.match(modelSection.textContent, /当前：demo-model/);
+  await byText(modelSection, '保存标题翻译').click(); assert.equal(JSON.stringify(calls[0].updates), JSON.stringify([{ id: 'translation.enabled', value: true }]));
   assert.match(app.notice.textContent, /“标题翻译”已保存/);
   calls.length = 0; app.main.replaceChildren(); await app.settings('review', 'preference');
   const preferenceSection = app.main.querySelector('.settings-section'); const toggles = preferenceSection.querySelectorAll('.feature-toggle').map((row) => row.querySelector('input'));
   const preferenceRows = preferenceSection.querySelectorAll('.feature-dependent'); const preferenceFields = preferenceRows.map((row) => row.querySelector('input'));
-  assert.equal(toggles.length, 3); assert.match(preferenceSection.textContent, /启用偏好学习.*启用等级复审.*启用反馈学习/);
-  assert.equal(preferenceRows.every((row) => row.hidden), true); assert.equal(preferenceFields.every((input) => input.disabled), true); assert.equal(preferenceFields[0].value, 'preference-model');
-  toggles[1].checked = true; toggles[1].listeners.change(); assert.equal(preferenceRows.every((row) => !row.hidden), true); assert.equal(preferenceFields.every((input) => !input.disabled), true); assert.equal(preferenceFields[0].value, 'preference-model');
+  assert.equal(toggles.length, 1); assert.match(preferenceSection.textContent, /启用智能评审与学习/); assert.doesNotMatch(preferenceSection.textContent, /启用反馈学习/);
+  assert.equal(preferenceRows.every((row) => row.hidden), true); assert.equal(preferenceFields.every((input) => input.disabled), true); assert.equal(preferenceFields[0].value, '');
+  toggles[0].checked = true; toggles[0].listeners.change(); assert.equal(preferenceRows.every((row) => !row.hidden), true); assert.equal(preferenceFields.every((input) => !input.disabled), true);
   assert.doesNotMatch(app.main.textContent, /评级设置/);
 });
-test('Settings demo uses empty placeholders and Advanced demo has no write path', async () => {
+test('Settings demo uses empty placeholders and the old Advanced demo is absent', async () => {
   const app = ui(); const calls = []; const settings = [
+    { category: 'Models', available: true, id: 'translation.enabled', description: '启用标题翻译', type: 'boolean', value: true, validation: {} },
     { category: 'Models', available: true, id: 'translation.model', description: 'translation 模型名称', type: 'string', value: 'real-model', validation: {} },
     { category: 'Models', available: true, id: 'translation.endpoint', description: 'translation API 地址', type: 'url', value: 'https://real.example.test/v1', validation: {} },
     { category: 'Models', available: true, id: 'translation.temperature', description: '采样温度', type: 'number', value: 0.2, validation: { min: 0, max: 2 } },
@@ -264,12 +293,10 @@ test('Settings demo uses empty placeholders and Advanced demo has no write path'
   ];
   app.setApi(async (url, value) => { if (value) calls.push([url, value]); return url === '/api/credentials' ? [] : settings; });
   app.demoMode.settings = true; await app.settings('review', 'translation');
-  const inputs = app.main.querySelector('.settings-section').querySelectorAll('input'); assert.deepEqual(inputs.map((input) => input.value), ['', '', '']);
-  assert.match(inputs[0].placeholder, /deepseek-flash/); assert.match(inputs[1].placeholder, /api\.example\.com/); assert.match(inputs[2].placeholder, /0\.1/);
+  const inputs = app.main.querySelector('.settings-section').querySelectorAll('input'); const replacements = inputs.filter((input) => input.type !== 'checkbox'); assert.deepEqual(replacements.map((input) => input.value), ['', '', '']);
+  assert.match(replacements[0].placeholder, /deepseek-flash/); assert.match(replacements[1].placeholder, /api\.example\.com/); assert.match(replacements[2].placeholder, /0\.1/);
   await byText(app.main, '保存标题翻译').click(); assert.equal(calls.length, 0); assert.match(app.notice.textContent, /未写入真实配置/);
-  app.demoMode.settings = false; app.main.replaceChildren(); await app.settings('common', 'advanced-demo');
-  assert.match(app.main.textContent, /示例模式.*模型请求与内部批次.*高级设置/); assert.equal(app.main.querySelectorAll('.group-save').length, 0); assert.equal(calls.length, 0);
-  const advancedInput = app.main.querySelector('.advanced-demo-field').querySelector('input'); assert.equal(advancedInput.value, ''); assert.equal(advancedInput.readOnly, true);
+  assert.doesNotMatch(script, /查看完整设置示例|renderAdvancedSettingsDemo|advanced-demo/); assert.equal(calls.length, 0);
 });
 test('rule suggestion demo keeps low, medium and high-risk decisions in page memory only', async () => {
   const app = ui(); const calls = []; app.setApi(async (...args) => { calls.push(args); return []; }); app.demoMode.rules = true;

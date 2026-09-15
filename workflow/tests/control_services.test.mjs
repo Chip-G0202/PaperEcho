@@ -94,10 +94,14 @@ test('config valid round trip and invalid/verification failure preserve old valu
   const reviewFile = path.join(root, 'config', 'review-workflow-rules.json');
   await fs.writeFile(reviewFile, JSON.stringify({ llm_review: { preference_learning_enabled: true } }));
   const service = new ConfigService({ root });
+  assert.equal((await service.list()).find((entry) => entry.id === 'translation.enabled').value, true);
   await service.update('preference.enabled', false);
   assert.equal(JSON.parse(await fs.readFile(reviewFile)).llm_review.preference_learning_enabled, false);
   await service.update('translation.model', 'new');
   assert.equal(JSON.parse(await fs.readFile(file)).model, 'new');
+  await service.updateMany([{ id: 'translation.enabled', value: false }, { id: 'review.enabled', value: true }]);
+  assert.equal(JSON.parse(await fs.readFile(file)).enabled, false);
+  assert.equal(JSON.parse(await fs.readFile(reviewFile)).llm_review.grade_review_enabled, true);
   await assert.rejects(service.update('translation.temperature', 9), /INVALID/);
   let calls = 0;
   const failing = new ConfigService({ root, verify: async () => { if (++calls === 2) throw new Error('verify'); } });
@@ -105,6 +109,14 @@ test('config valid round trip and invalid/verification failure preserve old valu
   assert.equal(JSON.parse(await fs.readFile(file)).model, 'new');
   await assert.rejects(service.update('../outside', true), /UNKNOWN/);
   await assert.rejects(service.update('rss.sources', [{ name: 'bad', url: 'javascript:alert(1)', enabled: true }]), /INVALID/);
+  await assert.rejects(service.updateMany([{ id: 'translation.model', value: 'one' }, { id: 'translation.model', value: 'two' }]), /BATCH_INVALID/);
+});
+test('config batch rolls every owner back when post-write verification fails', async (t) => {
+  const root = await fixture(t); const translation = path.join(root, 'config', 'title_translation.config.json'); const review = path.join(root, 'config', 'review-workflow-rules.json');
+  await fs.writeFile(translation, JSON.stringify({ model: 'old' })); await fs.writeFile(review, JSON.stringify({ llm_review: { grade_review_enabled: false } }));
+  let calls = 0; const service = new ConfigService({ root, verify: async () => { calls += 1; if (calls === 3) throw new Error('post-write'); } });
+  await assert.rejects(service.updateMany([{ id: 'translation.model', value: 'new' }, { id: 'review.enabled', value: true }]), /post-write/);
+  assert.equal(JSON.parse(await fs.readFile(translation)).model, 'old'); assert.equal(JSON.parse(await fs.readFile(review)).llm_review.grade_review_enabled, false);
 });
 test('suggestion accept/reject/revise use formal owner; high-risk and no-apply fail closed', async (t) => {
   const root = await fixture(t);
