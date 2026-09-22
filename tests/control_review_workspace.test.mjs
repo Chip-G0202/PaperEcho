@@ -21,7 +21,10 @@ class Element {
   setAttribute(name, value) { this.attrs[name] = String(value); }
   getAttribute(name) { return this.attrs[name] ?? null; }
   removeAttribute(name) { delete this.attrs[name]; }
-  addEventListener(name, fn) { this.listeners[name] = fn; }
+  addEventListener(name, fn) {
+    const previous = this.listeners[name];
+    this.listeners[name] = previous ? async (...args) => { await previous(...args); return fn(...args); } : fn;
+  }
   matches(selector) {
     return selector.split(',').some((part) => {
       part = part.trim();
@@ -40,12 +43,17 @@ class Element {
   focus() { this.focused = true; }
   checkValidity() { return true; }
   get isConnected() { return Boolean(this.parentElement); }
-  async click() { if (!this.disabled) await this.listeners.click?.({ target: this }); }
+  async click() {
+    if (this.disabled) return;
+    if (this.tagName === 'INPUT' && this.type === 'checkbox') { this.checked = !this.checked; await this.listeners.change?.({ target: this }); }
+    await this.listeners.click?.({ target: this });
+  }
+  async press(key) { if (key === ' ' || key === 'Space') await this.click(); }
 }
 function ui() {
   const main = new Element('main'); const notice = new Element('p'); const body = new Element('body');
   const nodes = { '#content': main, '#notice': notice, '#page-title': new Element('h1'), '#menu-toggle': new Element('button') };
-  const context = vm.createContext({ document: { body, activeElement: null, querySelector: (key) => nodes[key] || body.querySelector(key), querySelectorAll: (key) => body.querySelectorAll(key), createElement: (tag) => new Element(tag) }, window: { addEventListener() {} }, fetch: () => new Promise(() => {}), crypto: { randomUUID }, URL, structuredClone, location: { hash: '' } });
+  const context = vm.createContext({ document: { body, activeElement: null, querySelector: (key) => nodes[key] || body.querySelector(key), querySelectorAll: (key) => body.querySelectorAll(key), createElement: (tag) => new Element(tag) }, window: { addEventListener() {} }, fetch: () => new Promise(() => {}), crypto: { randomUUID }, URL, structuredClone, location: { hash: '' }, confirm: () => true });
   vm.runInContext(script + '\nglobalThis.testing = { createReviewQueue, shortcutAction, gradeCounts, pendingPaperCounts, demoPendingSummary, completionPlan, showCompletionModal, loadWeekly, loadPendingSummary, home, weekly, paperReview, research, suggestions, settings, settingGroups, settingViews, demoMode, demoPapers, demoRuleSuggestions, parseRoute, setApi: (value) => { api = value; } };', context);
   return { ...context.testing, main, notice, body, location: context.location };
 }
@@ -213,7 +221,7 @@ test('runtime path presents three exclusive modes and only the selected owner fi
   choices.forEach((input) => { input.checked = input.value === 'desktop'; }); choices.find((input) => input.value === 'desktop').listeners.change();
   choices.forEach((input) => { input.checked = input.value === 'web'; }); choices.find((input) => input.value === 'web').listeners.change();
   assert.equal(webDraft.value, '7654321'); assert.match(section.textContent, /正在配置：Zotero Web（尚未保存）/);
-  assert.doesNotMatch(panels.web.textContent, /Zotero Desktop 程序路径|本地反馈目录/);
+  assert.match(panels.web.textContent, /Zotero Web 配置.*基础配置：完整.*运行前检测尚未执行.*用户 ID 选填.*API 地址.*API Key/); assert.doesNotMatch(panels.web.textContent, /Zotero Desktop 程序路径|本地反馈目录|已连接/);
   choices.forEach((input) => { input.checked = input.value === 'local'; }); choices.find((input) => input.value === 'local').listeners.change();
   assert.match(panels.local.textContent, /本地输入目录.*本地输出目录.*本地反馈目录/); assert.doesNotMatch(panels.local.textContent, /项目根目录|Zotero/);
   panels.local.querySelectorAll('input').find((input) => /本地输入目录/.test(input.getAttribute('aria-label'))).value = 'fixture.jsonl';
@@ -224,9 +232,10 @@ test('runtime path presents three exclusive modes and only the selected owner fi
   await byText(section, '保存运行路径').click(); assert.equal(JSON.stringify(calls[0][1].updates), JSON.stringify([{ id: 'runtime.mode', value: 'desktop' }]));
   assert.match(section.textContent, /当前运行路径：Zotero Desktop.*无需额外必填配置/);
   calls.length = 0; choices.forEach((input) => { input.checked = input.value === 'web'; }); choices.find((input) => input.value === 'web').listeners.change();
-  await byText(section, '保存运行路径').click(); assert.equal(JSON.stringify(calls[0][1].updates), JSON.stringify([{ id: 'runtime.mode', value: 'web' }, { id: 'web.userId', value: '7654321' }]));
-  const secret = 'fixture-zotero-secret'; const secretInput = panels.web.querySelectorAll('input').find((input) => input.type === 'password'); secretInput.value = secret; await byText(panels.web, '替换').click();
-  assert.equal(calls.at(-1)[0], '/api/credentials'); assert.equal(app.main.textContent.includes(secret), false); assert.match(panels.web.textContent, /Zotero Web API 密钥：已配置/);
+  await byText(section, '保存运行路径').click(); assert.equal(JSON.stringify(calls[0][1].updates), JSON.stringify([{ id: 'runtime.mode', value: 'web' }, { id: 'web.userId', value: '7654321' }])); assert.match(app.notice.textContent, /Zotero Web 配置已保存/);
+  const secret = 'fixture-zotero-secret'; await byText(panels.web, '替换 API Key').click(); const secretInput = panels.web.querySelectorAll('input').find((input) => input.type === 'password'); secretInput.value = secret; await byText(panels.web, '保存 API Key').click();
+  assert.equal(calls.at(-1)[0], '/api/credentials'); assert.equal(app.main.textContent.includes(secret), false); assert.match(panels.web.textContent, /Zotero Web API Key：已配置/);
+  await byText(panels.web, '清除').click(); assert.equal(calls.at(-1)[1].action, 'clear'); assert.match(panels.web.textContent, /Zotero Web API Key：未配置/); assert.ok(byText(panels.web, '配置 API Key'));
   calls.length = 0; app.demoMode.runtime = true; app.main.replaceChildren(); await app.settings('runtime', 'path');
   const demo = app.main.querySelector('.runtime-settings'); assert.match(app.main.textContent, /示例模式.*不会修改真实设置.*运行路径示例/);
   assert.match(demo.textContent, /本地输入目录.*PaperEcho-Output.*PaperEcho-Research/); assert.equal(byText(demo, '保存运行路径'), undefined);
@@ -235,14 +244,27 @@ test('runtime path presents three exclusive modes and only the selected owner fi
 });
 test('completion plans route to remaining queues and end only when all work is done', () => {
   const app = ui();
-  assert.equal(app.completionPlan('normal', { normal: 0, manual: 2, rules: 0 }).actions[0].route, 'feedback/rating/manual');
+  const cases = [
+    ['normal', { normal: 0, manual: 0, rules: 0 }, []],
+    ['normal', { normal: 0, manual: 2, rules: 0 }, ['feedback/rating/manual']],
+    ['normal', { normal: 0, manual: 0, rules: 3 }, ['feedback/rules']],
+    ['normal', { normal: 0, manual: 2, rules: 3 }, ['feedback/rating/manual', 'feedback/rules']],
+    ['manual', { normal: 0, manual: 0, rules: 0 }, []],
+    ['manual', { normal: 3, manual: 0, rules: 0 }, ['feedback/rating/normal']],
+    ['manual', { normal: 0, manual: 0, rules: 2 }, ['feedback/rules']],
+    ['manual', { normal: 3, manual: 0, rules: 2 }, ['feedback/rating/normal', 'feedback/rules']],
+    ['rules', { normal: 0, manual: 0, rules: 0 }, []],
+    ['rules', { normal: 1, manual: 0, rules: 0 }, ['feedback/rating/normal']],
+    ['rules', { normal: 0, manual: 2, rules: 0 }, ['feedback/rating/manual']],
+    ['rules', { normal: 1, manual: 2, rules: 0 }, ['feedback/rating/normal', 'feedback/rating/manual']],
+  ];
+  for (const [kind, counts, routes] of cases) {
+    const plan = app.completionPlan(kind, counts); assert.equal(JSON.stringify(plan.actions.map((item) => item.route)), JSON.stringify(routes));
+    const text = [plan.title, plan.body, ...plan.remaining, ...plan.actions.map((item) => item.label)].join(' '); assert.doesNotMatch(text, /(?:常规文献|人工复核|规则建议)[^。]*\b0\b/);
+    app.showCompletionModal(plan); const modal = app.body.querySelector('.completion-backdrop'); const buttons = modal.querySelectorAll('button').map((item) => item.textContent);
+    assert.equal(JSON.stringify(buttons), JSON.stringify([...plan.actions.map((item) => item.label), routes.length ? '稍后处理' : '完成']));
+  }
   assert.equal(app.completionPlan('normal', { normal: 0, manual: 0, rules: 3 }).title, '文献评级已完成');
-  assert.equal(JSON.stringify(app.completionPlan('normal', { normal: 0, manual: 2, rules: 3 }).actions.map((item) => item.route)), JSON.stringify(['feedback/rating/manual', 'feedback/rules']));
-  assert.equal(app.completionPlan('manual', { normal: 3, manual: 0, rules: 0 }).actions[0].route, 'feedback/rating/normal');
-  assert.equal(app.completionPlan('manual', { normal: 0, manual: 0, rules: 2 }).actions[0].route, 'feedback/rules');
-  assert.equal(app.completionPlan('rules', { normal: 1, manual: 0, rules: 0 }).actions[0].route, 'feedback/rating/normal');
-  assert.equal(app.completionPlan('rules', { normal: 0, manual: 2, rules: 0 }).actions[0].route, 'feedback/rating/manual');
-  for (const kind of ['normal', 'manual', 'rules']) assert.equal(app.completionPlan(kind, { normal: 0, manual: 0, rules: 0 }).title, '全部人工处理已完成');
   app.showCompletionModal(app.completionPlan('normal', { normal: 0, manual: 1, rules: 1 })); app.showCompletionModal(app.completionPlan('normal', { normal: 0, manual: 1, rules: 1 }));
   assert.equal(app.body.querySelectorAll('.completion-backdrop').length, 1); assert.match(app.body.textContent, /1 篇文献需要人工复核.*1 条规则建议等待处理.*前往人工复核.*前往规则建议.*稍后处理/);
 });
@@ -306,7 +328,7 @@ test('Settings separates databases and RSS, colocates review toggles and preserv
   assert.match(modelSection.textContent, /开启后使用配置的模型生成中文标题.*标题翻译 模型名称.*标题翻译 API 地址.*当前配置状态.*API 密钥/);
   assert.doesNotMatch(modelSection.textContent, /偏好学习 模型名称/);
   assert.equal(modelSection.querySelectorAll('.feature-toggle').length, 1); assert.equal(modelSection.querySelectorAll('input').find((input) => input.type !== 'checkbox').value, ''); assert.match(modelSection.textContent, /当前：demo-model/);
-  const translationToggle = modelSection.querySelector('.feature-toggle').querySelector('input'); const translationRows = modelSection.querySelectorAll('.feature-dependent'); translationToggle.checked = false; translationToggle.listeners.change(); assert.equal(translationRows.every((row) => row.hidden), true); translationToggle.checked = true; translationToggle.listeners.change(); assert.equal(translationRows.every((row) => !row.hidden), true); assert.match(modelSection.textContent, /当前：demo-model/);
+  const translationToggle = modelSection.querySelector('.feature-toggle').querySelector('input'); const translationRows = modelSection.querySelectorAll('.feature-dependent'); assert.equal(translationToggle.disabled, undefined); await translationToggle.click(); assert.equal(translationRows.every((row) => row.hidden), true); await translationToggle.click(); assert.equal(translationRows.every((row) => !row.hidden), true); await translationToggle.press('Space'); assert.equal(translationRows.every((row) => row.hidden), true); await translationToggle.press('Space'); assert.equal(translationRows.every((row) => !row.hidden), true); assert.match(modelSection.textContent, /当前：demo-model/);
   await byText(modelSection, '保存标题翻译').click(); assert.equal(JSON.stringify(calls[0].updates), JSON.stringify([{ id: 'translation.enabled', value: true }]));
   assert.match(app.notice.textContent, /“标题翻译”已保存/);
   calls.length = 0; app.main.replaceChildren(); await app.settings('review', 'preference');
@@ -314,17 +336,18 @@ test('Settings separates databases and RSS, colocates review toggles and preserv
   const preferenceRows = preferenceSection.querySelectorAll('.feature-dependent'); const preferenceFields = preferenceRows.map((row) => row.querySelector('input')).filter((input) => input && input.type !== 'password');
   assert.equal(toggles.length, 1); assert.match(preferenceSection.textContent, /启用智能评审与偏好学习/); assert.doesNotMatch(preferenceSection.textContent, /启用等级复审|启用偏好学习[^）]/);
   assert.equal(preferenceRows.every((row) => row.hidden), true); assert.equal(preferenceFields.every((input) => input.disabled), true); assert.equal(preferenceFields[0].value, '');
-  toggles[0].checked = true; toggles[0].listeners.change(); assert.equal(preferenceRows.every((row) => !row.hidden), true); assert.equal(preferenceFields.every((input) => !input.disabled), true);
+  assert.equal(toggles[0].disabled, undefined); await toggles[0].click(); assert.equal(preferenceRows.every((row) => !row.hidden), true); assert.equal(preferenceFields.every((input) => !input.disabled), true); await toggles[0].press('Space'); assert.equal(preferenceRows.every((row) => row.hidden), true); await toggles[0].press('Space'); assert.equal(preferenceRows.every((row) => !row.hidden), true);
+  await byText(preferenceSection, '保存偏好学习').click(); assert.equal(JSON.stringify(calls[0].updates), JSON.stringify([{ id: 'review.enabled', value: true }, { id: 'preference.enabled', value: true }]));
   assert.doesNotMatch(app.main.textContent, /评级设置|请求超时/);
 });
 test('model capability toggles remain in the real DOM when registry entries are incomplete', async () => {
   const app = ui(); app.setApi(async (url) => url === '/api/credentials' ? [] : []);
   await app.settings('review', 'translation');
-  assert.ok(app.main.querySelectorAll('input').find((input) => input.getAttribute('aria-label') === '启用标题翻译'));
-  assert.match(app.main.textContent, /当前配置 owner 尚不可用/);
+  const translation = app.main.querySelectorAll('input').find((input) => input.getAttribute('aria-label') === '启用标题翻译');
+  assert.ok(translation); assert.notEqual(translation.disabled, true); await translation.click(); assert.equal(translation.checked, false);
   app.main.replaceChildren(); await app.settings('review', 'preference');
-  assert.ok(app.main.querySelectorAll('input').find((input) => input.getAttribute('aria-label') === '启用智能评审与偏好学习'));
-  assert.match(app.main.textContent, /当前配置 owner 尚不可用/);
+  const preference = app.main.querySelectorAll('input').find((input) => input.getAttribute('aria-label') === '启用智能评审与偏好学习');
+  assert.ok(preference); assert.notEqual(preference.disabled, true); await preference.press('Space'); assert.equal(preference.checked, true);
 });
 test('email toggle owns its configuration panel and preserves fields while off', async () => {
   const app = ui(); const settings = [
@@ -338,7 +361,7 @@ test('email toggle owns its configuration panel and preserves fields while off',
   await app.settings('connections', 'notifications'); const sections = app.main.querySelectorAll('.settings-section'); const email = sections[0];
   assert.match(email.textContent, /报告邮件.*发送报告邮件.*SMTP 主机.*邮件参数已配置/);
   assert.equal(email.querySelectorAll('.feature-dependent').every((row) => row.hidden), true);
-  const toggle = email.querySelector('.feature-toggle').querySelector('input'); toggle.checked = true; toggle.listeners.change();
+  const toggle = email.querySelector('.feature-toggle').querySelector('input'); await toggle.click();
   assert.equal(email.querySelectorAll('.feature-dependent').every((row) => !row.hidden), true); assert.match(sections[1].textContent, /运行提醒/);
 });
 test('automation switch saves through its owner and updates visible state', async () => {

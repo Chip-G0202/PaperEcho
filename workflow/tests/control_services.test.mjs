@@ -111,6 +111,15 @@ test('config valid round trip and invalid/verification failure preserve old valu
   await assert.rejects(service.update('rss.sources', [{ name: 'bad', url: 'javascript:alert(1)', enabled: true }]), /INVALID/);
   await assert.rejects(service.updateMany([{ id: 'translation.model', value: 'one' }, { id: 'translation.model', value: 'two' }]), /BATCH_INVALID/);
 });
+test('missing model owners remain configurable and initialize atomically on first save', async (t) => {
+  const root = await fixture(t); const service = new ConfigService({ root });
+  const listed = await service.list();
+  for (const id of ['translation.enabled', 'translation.model', 'review.enabled', 'preference.enabled', 'preference.model']) assert.equal(listed.find((entry) => entry.id === id).available, true);
+  await service.update('translation.enabled', false);
+  assert.equal(JSON.parse(await fs.readFile(path.join(root, 'config', 'title_translation.config.json'), 'utf8')).enabled, false);
+  await service.updateMany([{ id: 'review.enabled', value: true }, { id: 'preference.enabled', value: true }]);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(root, 'config', 'review-workflow-rules.json'), 'utf8')).llm_review, { grade_review_enabled: true, preference_learning_enabled: true });
+});
 test('config batch rolls every owner back when post-write verification fails', async (t) => {
   const root = await fixture(t); const translation = path.join(root, 'config', 'title_translation.config.json'); const review = path.join(root, 'config', 'review-workflow-rules.json');
   await fs.writeFile(translation, JSON.stringify({ model: 'old' })); await fs.writeFile(review, JSON.stringify({ llm_review: { grade_review_enabled: false } }));

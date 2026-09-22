@@ -4,6 +4,12 @@ import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { buildPubMedQueryFromKeywordGroups } from './literature_config.mjs';
 
+const INITIAL_OWNER_VALUES = Object.freeze({
+  'title_translation.config.json': { enabled: true },
+  'preference_learning.config.json': {},
+  'review-workflow-rules.json': { llm_review: { grade_review_enabled: false, preference_learning_enabled: false } },
+});
+
 const definitions = [];
 function setting(id, category, file, key, type, description, validation = {}) {
   definitions.push({ id, category, file, key, type, description, validation, secret: false, advanced: category === 'Advanced', reload: 'next_run' });
@@ -109,8 +115,10 @@ export class ConfigService {
   async readOwnerOrTemplate(file) {
     try { return { value: await this.readOwner(file), present: true }; }
     catch (error) {
-      if (error.code !== 'ENOENT' || file !== 'paperecho.config.json') throw error;
-      return { value: JSON.parse(await fs.readFile(path.join(this.root, 'config', 'paperecho.config.example.json'), 'utf8')), present: false };
+      if (error.code !== 'ENOENT') throw error;
+      if (file === 'paperecho.config.json') return { value: JSON.parse(await fs.readFile(path.join(this.root, 'config', 'paperecho.config.example.json'), 'utf8')), present: false };
+      if (Object.hasOwn(INITIAL_OWNER_VALUES, file)) return { value: structuredClone(INITIAL_OWNER_VALUES[file]), present: false };
+      throw error;
     }
   }
   async list() {

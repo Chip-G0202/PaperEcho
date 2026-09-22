@@ -6,6 +6,7 @@
   <key>CFBundleIdentifier</key><string>org.paperecho.control-center</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>PaperEcho</string>
+  <key>CFBundleIconFile</key><string>PaperEcho.icns</string>
   <key>CFBundleVersion</key><string>2.4</string>
   <key>LSUIElement</key><true/>
 </dict></plist>

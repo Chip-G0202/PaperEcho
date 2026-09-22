@@ -86,6 +86,7 @@ test('default-browser commands are fixed argv, never a browser-controlled shell 
 test('Windows and macOS wrappers use their own path, fixed arguments and shared owner; no bundled runtime', async () => {
   const read = (file) => fs.readFile(path.join(repo, file), 'utf8');
   const source = await read('workflow/tools/web/launcher-windows/PaperEchoLauncher.cs'); const cmd = await read('PaperEcho.cmd'); const mac = await read('PaperEcho.app/Contents/MacOS/PaperEcho'); const plist = await read('PaperEcho.app/Contents/Info.plist');
+  const ico = await fs.readFile(path.join(repo, 'workflow/tools/branding/PaperEcho.ico')); const icns = await fs.readFile(path.join(repo, 'workflow/tools/branding/PaperEcho.icns')); const bundledIcns = await fs.readFile(path.join(repo, 'PaperEcho.app/Contents/Resources/PaperEcho.icns'));
   // Historical EXE migration invariant: the retired VBS entry must not return.
   await assert.rejects(fs.access(path.join(repo, 'PaperEcho.vbs')), { code: 'ENOENT' });
   assert.ok((await fs.stat(path.join(repo, 'PaperEcho.exe'))).size > 0);
@@ -98,11 +99,15 @@ test('Windows and macOS wrappers use their own path, fixed arguments and shared 
   assert.doesNotMatch(source, /powershell\.exe|cmd\.exe|wscript|cscript|mshta|8765|HttpClient|Process.Start\("/i);
   const build = await read('workflow/tools/web/launcher-windows/build.ps1');
   assert.match(build, /\/target:winexe/); assert.match(build, /csc\.exe/);
+  assert.match(build, /\/win32icon:\$icon/); assert.match(build, /workflow\/tools\/branding\/PaperEcho\.ico/);
   assert.match(build, /LASTEXITCODE -ne 0/); assert.match(build, /finally/);
   assert.doesNotMatch(build, /Invoke-WebRequest|ExecutionPolicy|Start-BitsTransfer|winget/i);
   assert.match(cmd, /%~dp0/); assert.doesNotMatch(cmd, /%\*/); assert.match(cmd, /--stop/);
   assert.ok(mac.startsWith('#!/bin/sh\n')); assert.doesNotMatch(mac, /\r|C:\\|GaoChen/); assert.match(mac, /launcher\.mjs/); assert.match(mac, /command -v node/); assert.match(mac, /osascript/);
-  assert.match(plist, /CFBundleExecutable<\/key><string>PaperEcho<\/string>/); assert.match(plist, /LSUIElement<\/key><true\/>/);
+  assert.match(plist, /CFBundleExecutable<\/key><string>PaperEcho<\/string>/); assert.match(plist, /CFBundleIconFile<\/key><string>PaperEcho\.icns<\/string>/); assert.match(plist, /LSUIElement<\/key><true\/>/);
+  assert.equal(ico.readUInt16LE(0), 0); assert.equal(ico.readUInt16LE(2), 1); assert.equal(ico.readUInt16LE(4), 7); assert.deepEqual([...Array(7)].map((_, index) => ico[6 + index * 16] || 256), [16, 24, 32, 48, 64, 128, 256]);
+  assert.equal(icns.subarray(0, 4).toString('ascii'), 'icns'); assert.equal(icns.readUInt32BE(4), icns.length); assert.deepEqual(icns, bundledIcns); for (const type of ['icp4', 'icp5', 'icp6', 'ic07', 'ic08', 'ic09', 'ic10']) assert.ok(icns.includes(Buffer.from(type)));
+  const iconBuilder = await read('workflow/tools/branding/build-desktop-icons.mjs'); assert.match(iconBuilder, /paperecho-mark\.svg/); assert.match(iconBuilder, /\[16, 24, 32, 48, 64, 128, 256, 512, 1024\]/);
   assert.match(await read('PaperEcho.command'), /exec "\$repo_root\/PaperEcho\.app\/Contents\/MacOS\/PaperEcho"/);
   assert.match(LAUNCH_ERRORS.RUNTIME_REQUIRED[1], /Node\.js 18/);
 });

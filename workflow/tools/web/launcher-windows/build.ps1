@@ -8,8 +8,10 @@ $compiler = @(
 ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (!$compiler) { throw 'Existing .NET Framework C# compiler required. Nothing was installed.' }
 $temporary = Join-Path $PSScriptRoot ('PaperEcho-' + [Guid]::NewGuid().ToString('N') + '.exe')
+$icon = Join-Path $repoRoot 'workflow/tools/branding/PaperEcho.ico'
+if (!(Test-Path -LiteralPath $icon)) { throw 'PaperEcho.ico is missing. Run node workflow/tools/branding/build-desktop-icons.mjs first.' }
 try {
-    & $compiler /nologo /target:winexe /platform:anycpu /optimize+ /debug- /reference:System.Windows.Forms.dll "/out:$temporary" (Join-Path $PSScriptRoot 'PaperEchoLauncher.cs')
+    & $compiler /nologo /target:winexe /platform:anycpu /optimize+ /debug- /reference:System.Windows.Forms.dll "/win32icon:$icon" "/out:$temporary" (Join-Path $PSScriptRoot 'PaperEchoLauncher.cs')
     if ($LASTEXITCODE -ne 0) { throw 'PaperEcho launcher compilation failed.' }
     Move-Item -LiteralPath $temporary -Destination (Join-Path $repoRoot 'PaperEcho.exe') -Force
 } finally {

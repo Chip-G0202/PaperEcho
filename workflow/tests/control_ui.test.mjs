@@ -23,10 +23,10 @@ test('sidebar owns L1 and L2 navigation while workspace owns L3 tabs', () => {
   assert.match(app, /settingsView === 'rss' \? 'RSS 订阅状态'/);
   assert.doesNotMatch(app, /className = 'settings-nav'/);
 });
-test('brand uses an inline canonical mark while favicon stays a referenced SVG', () => {
+test('header and favicon reference the same canonical SVG mark', () => {
   assert.match(html, /rel="icon" href="\/paperecho-mark\.svg\?v=2\.4" type="image\/svg\+xml"/);
-  assert.match(html, /<svg class="brand-mark" viewBox="0 0 64 64" width="44" height="44"/);
-  assert.match(html, /id="header-mark-gradient"/); assert.doesNotMatch(html, /<img class="brand-mark"/);
+  assert.match(html, /<img class="brand-mark" src="\/paperecho-mark\.svg\?v=2\.4" width="44" height="44" alt="">/);
+  assert.doesNotMatch(html, /id="header-mark-gradient"|<svg class="brand-mark"/);
   assert.match(logo, /linearGradient/); assert.match(logo, /#bdebd7/); assert.match(logo, /#17684f/);
   assert.match(logo, /x="4" y="26" width="8" height="12"/); assert.match(logo, /x="52" y="26" width="8" height="12"/);
   assert.match(logo, /x="16" y="18" width="8" height="28"/); assert.match(logo, /x="40" y="18" width="8" height="28"/);
@@ -72,6 +72,9 @@ test('Settings exposes product controls while hiding internal LLM request batchi
   assert.match(app, /featureToggleIds/); assert.match(app, /container\.dataset\.featureCollapsed/); assert.match(app, /row\.hidden = !expanded/); assert.match(app, /input\.placeholder = settingPlaceholder/);
   assert.match(app, /writeIds: \['review\.enabled', 'preference\.enabled'\]/); assert.doesNotMatch(app, /\['rating', '评级设置'/);
   assert.match(app, /translation\.enabled/); assert.match(app, /updates: values\.map/); assert.doesNotMatch(app, /查看完整设置示例|renderAdvancedSettingsDemo|advanced-demo/); assert.match(app, /未写入真实配置/);
+  assert.doesNotMatch(app, /input\.disabled = true; row\.append\(label\(setting\.description, input\)/);
+  assert.match(app, /Zotero Web 配置/); assert.match(app, /用户 ID 选填/); assert.match(app, /配置 API Key/); assert.match(app, /替换 API Key/); assert.match(app, /清除/);
+  assert.match(app, /基础配置：不完整/); assert.match(app, /连接状态：运行前检测尚未执行/); assert.doesNotMatch(app, /Web 连接将在运行时验证/);
 });
 test('UI renders untrusted content through text nodes and keeps credentials write-only', () => {
   assert.doesNotMatch(app, /\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML|document\.write\(/);
