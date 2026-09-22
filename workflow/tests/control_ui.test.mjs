@@ -32,9 +32,9 @@ test('header and favicon reference the same canonical SVG mark', () => {
   assert.match(logo, /x="16" y="18" width="8" height="28"/); assert.match(logo, /x="40" y="18" width="8" height="28"/);
   assert.doesNotMatch(html, /Replaceable vector placeholder/);
 });
-test('demo and simplified Settings copy stay explicit and remove the old footer claim', () => {
-  assert.match(app, /const demoPapers = \[/); assert.match(app, /示例数据不会生成 XLSX、DOCX、Zotero 写入或调度记录/);
-  assert.match(app, /按钮和快捷键均可体验/); assert.match(app, /data\.demo \? Promise\.resolve/);
+test('delivery UI excludes demo data and keeps simplified Settings copy', () => {
+  assert.doesNotMatch(app, /demoMode|demoPapers|demoRuleSuggestions|radar-demo|weekly-demo|体验示例|示例模式|演示内容/);
+  assert.doesNotMatch(css, /demo-banner|experience-grid|runtime-example|weekly-flow|radar-signal/);
   assert.match(app, /'sources\.domain'/); assert.match(app, /\['pubmed\.days', 'openalex\.days'\]/);
   assert.match(app, /保存本组/); assert.doesNotMatch(html, /本地研究工作空间 · XLSX \/ DOCX 继续兼容 · 反馈不会直接生成永久排除规则/);
 });
@@ -71,7 +71,7 @@ test('Settings exposes product controls while hiding internal LLM request batchi
   assert.match(css, /\.source-options label:has\(input:focus-visible\)/);
   assert.match(app, /featureToggleIds/); assert.match(app, /container\.dataset\.featureCollapsed/); assert.match(app, /row\.hidden = !expanded/); assert.match(app, /input\.placeholder = settingPlaceholder/);
   assert.match(app, /writeIds: \['review\.enabled', 'preference\.enabled'\]/); assert.doesNotMatch(app, /\['rating', '评级设置'/);
-  assert.match(app, /translation\.enabled/); assert.match(app, /updates: values\.map/); assert.doesNotMatch(app, /查看完整设置示例|renderAdvancedSettingsDemo|advanced-demo/); assert.match(app, /未写入真实配置/);
+  assert.match(app, /translation\.enabled/); assert.match(app, /updates: values\.map/); assert.doesNotMatch(app, /查看完整设置示例|renderAdvancedSettingsDemo|advanced-demo/);
   assert.doesNotMatch(app, /input\.disabled = true; row\.append\(label\(setting\.description, input\)/);
   assert.match(app, /Zotero Web 配置/); assert.match(app, /个人文库/); assert.doesNotMatch(app, /群组文库|Group ID/); assert.match(app, /Zotero 数字 User ID/); assert.match(app, /API v3/); assert.match(app, /写入权限/); assert.match(app, /配置 API Key/); assert.match(app, /替换 API Key/); assert.match(app, /清除/);
   assert.doesNotMatch(app, /runtimePathFields[\s\S]{0,400}web\.apiBase/); assert.match(app, /PaperEcho 本地工作区/);
@@ -97,8 +97,8 @@ test('UI feedback and responsive contracts retain fail-closed messaging and acce
   assert.match(css, /overflow-wrap:anywhere/);
   assert.match(app, /aria-modal', 'true'/); assert.match(app, /event\.key === 'Escape'/); assert.match(css, /\.completion-backdrop/);
 });
-test('rule demos are isolated and typography supports the desktop hierarchy', () => {
-  assert.match(app, /const demoRuleSuggestions = \[/); assert.match(app, /data\.demo \? Promise\.resolve/); assert.match(app, /刷新后恢复，不写入规则、配置或反馈/);
+test('rule review and typography support the desktop hierarchy without demo branches', () => {
+  assert.match(app, /async function suggestions/); assert.match(app, /api\('\/api\/decision'/); assert.doesNotMatch(app, /data\.demo|demoRuleSuggestions|示例决策/);
   assert.match(css, /font-size:16px; line-height:1\.65/); assert.match(css, /h2\{font-size:clamp\(29px,2vw,32px\)/); assert.match(css, /\.primary-nav>button[^}]*font-size:18px/);
   assert.match(css, /\.secondary-nav button[^}]*font-size:16px/); assert.match(css, /\.tertiary-nav button[^}]*font-size:16px/); assert.match(css, /\.keyboard-help kbd/);
   assert.match(css, /\.review-navigation\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/); assert.match(css, /\.review-navigation button[^}]*min-height:54px/);
