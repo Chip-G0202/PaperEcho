@@ -110,11 +110,11 @@ Desktop launcher 固定 `mode=desktop`，Runner 为子流程设置 `ZOTERO_BACKE
 |---|---|---|---|---|---|---|
 | 启用识别 | `web.enabled` | - | 自动选择 Web 时 | `false` | 否 | 不根据残留 API key 自动选择 |
 | API key 引用 | `web.apiKeyEnv` | 指向的变量，通常 `ZOTERO_API_KEY` | Web 必需 | - | 引用否/值是 | preflight 只检查存在，不请求网络 |
-| User ID | `web.userId` | `ZOTERO_USER_ID` | 可选 | 可由生产入口按 key 解析 | 否 | 当前仅支持 user library |
-| API base | `web.apiBase` | `ZOTERO_API_BASE` | 可选 | `https://api.zotero.org` | 否 | 自定义时仍由 Web adapter 负责协议 |
+| User ID | `web.userId` | `ZOTERO_USER_ID` | Web 必需 | - | 否 | Zotero 个人文库数字 ID，不是用户名或邮箱 |
+| API base | `web.apiBase` | `ZOTERO_API_BASE` | 仅测试/开发覆盖 | `https://api.zotero.org` | 否 | Control Center 普通设置不暴露 |
 | 请求并发 | `web.requestConcurrency` | `ZOTERO_WEB_API_REQUEST_CONCURRENCY` | 可选 | `4` | 否 | 有效范围 `1-4` |
 
-当前实现不提供 group library 或可配置 `libraryType`，因此模板不会虚构这些字段。Web launcher 固定 `mode=web`，不会启动 Zotero Desktop。
+Zotero 官方 API 同时定义个人与群组文库 URL；PaperEcho v2.4 的 Web 路径按当前产品范围只使用个人文库 `/users/<User ID>`。正式请求固定使用 HTTPS、`Zotero-API-Version: 3` 与 `Zotero-API-Key` 请求头，API Key 必须由 Zotero 授予个人文库写权限。`common.projectRoot` 只管理 PaperEcho 本地状态、索引与报告，不属于 Zotero 官方字段。Web launcher 固定 `mode=web`，不会启动 Zotero Desktop。
 
 ## 4. Standalone Local 路径配置
 
@@ -216,8 +216,8 @@ node skills/paperecho-local/scripts/run.mjs --check --config config/paperecho.co
 | `desktop.postStartDelayMs` | integer 0-120000 | 可选，默认 5000 | 越界 blocked | config loader -> Desktop launcher |
 | `web.enabled` | boolean | 唯一路径选择时必需为 true | 多启用且无 mode 时 blocked | config loader |
 | `web.apiKeyEnv` | env-name string | Web 必需 | 引用变量为空时 blocked | config loader；Web preflight |
-| `web.userId` | string/null | 可选 | 缺失只列 optional，生产入口可按 key 解析 | config loader/Web backend |
-| `web.apiBase` | URL string | 可选，默认 Zotero API | loader 只校验 string；连接/协议由生产 adapter 负责 | config loader/Web backend；preflight 不联网 |
+| `web.userId` | numeric string/null | Web 必需 | 缺失时 blocked | config loader/Web backend；preflight 不联网 |
+| `web.apiBase` | URL string | 仅测试/开发覆盖 | 普通 UI 不暴露；默认官方 HTTPS base | config loader/Web backend |
 | `web.requestConcurrency` | integer 1-4 | 可选，默认 4 | 越界 blocked | config loader/Web backend |
 | `local.enabled` | boolean | 唯一路径选择时必需为 true | 多启用且无 mode 时 blocked | config loader |
 | `local.input` | path string | Local 两种 profile 都必需 | 缺失、不可读或无 JSON/JSONL 时 blocked | config loader；Local preflight |

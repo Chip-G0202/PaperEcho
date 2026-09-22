@@ -16,7 +16,7 @@ import { wait } from './async_utils.mjs';
 import { createServiceConcurrencyController, parseServerDelayMs } from "./adaptive_concurrency.mjs";
 import { randomUUID } from "node:crypto";
 
-const ZOTERO_API_BASE = "https://api.zotero.org";
+export const ZOTERO_WEB_API_BASE = "https://api.zotero.org";
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_RETRIES = 3;
 const DEFAULT_INTERVAL_MS = 2000;
@@ -95,12 +95,17 @@ function isPreconditionError(error) {
   return error?.status === 412 || error?.status === 428;
 }
 
+function safeResponseText(text, apiKey) {
+  const value = String(text || "");
+  return (apiKey ? value.replaceAll(apiKey, "[REDACTED]") : value).slice(0, 2000);
+}
+
 export class ZoteroWebApiBackend extends ZoteroBackendBase {
   constructor(config = {}) {
     super();
     this.userId = config.userId || process.env.ZOTERO_USER_ID || "";
     this.apiKey = config.apiKey || process.env.ZOTERO_API_KEY || "";
-    this.apiBase = config.apiBase || process.env.ZOTERO_API_BASE || ZOTERO_API_BASE;
+    this.apiBase = config.apiBase || process.env.ZOTERO_API_BASE || ZOTERO_WEB_API_BASE;
     this.timeoutMs = config.timeoutMs || DEFAULT_TIMEOUT_MS;
     this.retries = config.retries || DEFAULT_RETRIES;
     this.intervalMs = config.intervalMs || DEFAULT_INTERVAL_MS;
@@ -110,7 +115,6 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
       initialConcurrency: this.requestConcurrency,
       maxConcurrency: this.requestConcurrency,
     });
-    this._resolvedUserId = Boolean(this.userId);
     this._backoffUntil = 0;
     this.libraryVersion = 0;
     this._stats = { retryAfterCount: 0, backoffCount: 0, rateLimitCount: 0 };
@@ -132,9 +136,7 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
       await new Promise((r) => setTimeout(r, waitMs));
     }
 
-    if (!this.userId) {
-      await this.resolveUserId();
-    }
+    if (!this.userId) throw new Error("Missing ZOTERO_USER_ID");
     const url = `${this.apiBase}/users/${this.userId}${path}`;
     const headers = {
       "Zotero-API-Key": this.apiKey,
@@ -197,7 +199,7 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
         }
 
         if (!response.ok) {
-          const text = await response.text().catch(() => "");
+          const text = safeResponseText(await response.text().catch(() => ""), this.apiKey);
           const error = new Error(`Zotero API ${method} ${path} failed: HTTP ${response.status} - ${text}`);
           error.status = response.status;
           throw error;
@@ -236,19 +238,16 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
     throw lastError || new Error(`Request failed after ${maxAttempts} attempts`);
   }
 
-  /**
-   * API key 可以解析 userID；真正的 Zotero library URL 仍使用 /users/<userID>。
-   */
+  /** Backward-compatible identity lookup; formal Runner configuration requires an explicit User ID. */
   async resolveUserId(options = {}) {
     if (this.userId) {
-      this._resolvedUserId = true;
       return this.userId;
     }
     if (!this.apiKey) {
       throw new Error("Missing ZOTERO_API_KEY");
     }
 
-    const response = await fetch(`${this.apiBase}/keys/${encodeURIComponent(this.apiKey)}`, {
+    const response = await fetch(`${this.apiBase}/keys/current`, {
       method: "GET",
       headers: {
         "Zotero-API-Key": this.apiKey,
@@ -257,7 +256,7 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
       signal: AbortSignal.timeout(options.timeoutMs || this.timeoutMs),
     });
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
+      const text = safeResponseText(await response.text().catch(() => ""), this.apiKey);
       throw new Error(`Zotero API key lookup failed: HTTP ${response.status} - ${text}`);
     }
     const data = await response.json();
@@ -266,7 +265,6 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
       throw new Error("Zotero API key lookup did not return userID");
     }
     this.userId = String(userId);
-    this._resolvedUserId = true;
     return this.userId;
   }
 
@@ -320,21 +318,19 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
         diagnostics: {
           backend: "web_api",
           error: "Missing ZOTERO_API_KEY",
-          userId: this.userId ? "configured" : "auto_resolve_pending",
+          userId: this.userId ? "configured" : "missing",
           apiKey: this.apiKey ? "configured" : "missing",
         },
       };
     }
 
-    try {
-      await this.resolveUserId();
-    } catch (error) {
+    if (!this.userId) {
       return {
         ok: false,
         diagnostics: {
           backend: "web_api",
-          error: error?.message || String(error),
-          userId: "lookup_failed",
+          error: "Missing ZOTERO_USER_ID",
+          userId: "missing",
           apiKey: "configured",
         },
       };
@@ -348,7 +344,7 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
           ok: true,
           started_now: false,
           was_running: true,
-          diagnostics: { backend: "web_api", attempts: attempt, userId: this._resolvedUserId ? "resolved" : "configured" },
+          diagnostics: { backend: "web_api", attempts: attempt, userId: "configured" },
         };
       }
       if (attempt < retries) await wait(intervalMs);

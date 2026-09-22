@@ -130,7 +130,7 @@ test('config batch rolls every owner back when post-write verification fails', a
 test('runner settings remain available before first local config and initialize through the formal owner', async (t) => {
   const root = await fixture(t);
   const example = path.join(root, 'config', 'paperecho.config.example.json');
-  await fs.writeFile(example, JSON.stringify({ schemaVersion: 2, mode: null, profile: 'standard', common: {}, desktop: { enabled: false }, web: { enabled: false, apiBase: 'https://api.zotero.org' }, local: { enabled: false, input: null, outputRoot: null, feedback: null } }));
+  await fs.writeFile(example, JSON.stringify({ schemaVersion: 2, mode: null, profile: 'standard', common: {}, desktop: { enabled: false }, web: { enabled: false, userId: null }, local: { enabled: false, input: null, outputRoot: null, feedback: null } }));
   const service = new ConfigService({ root, runtimeMode: 'desktop' });
   const mode = (await service.list()).find((entry) => entry.id === 'runtime.mode');
   assert.equal(mode.available, true); assert.equal(mode.ownerPresent, false); assert.equal(mode.effectiveValue, 'desktop');

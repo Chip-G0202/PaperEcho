@@ -2,7 +2,7 @@
  * Zotero Adapter
  *
  * 统一适配层，自动检测并选择后端，支持降级链：
- * - 有 ZOTERO_API_KEY → Web API 模式（无桌面端；ZOTERO_USER_ID 可自动解析）
+ * - 有 API Key + 个人文库数字 User ID → Web API 模式（无桌面端）
  * - 否则 → 桌面 CLI 模式（需要 Zotero 桌面端 + cli-anything-zotero）
  *
  * 降级链：Web API 失败 → CLI → 失败才报错。
@@ -32,7 +32,7 @@ export class ZoteroAdapter {
       log = console.log,
     } = options;
 
-    const hasWebApiConfig = !!process.env.ZOTERO_API_KEY;
+    const hasWebApiConfig = Boolean(process.env.ZOTERO_API_KEY && process.env.ZOTERO_USER_ID);
 
     // 决定后端尝试顺序
     let backendOrder;
@@ -51,7 +51,7 @@ export class ZoteroAdapter {
       try {
         if (targetMode === "web_api") {
           if (!hasWebApiConfig) {
-            throw new Error("Web API mode requires ZOTERO_API_KEY; ZOTERO_USER_ID is optional and can be resolved from the key");
+            throw new Error("Web API mode requires ZOTERO_API_KEY and ZOTERO_USER_ID");
           }
           this.backend = new ZoteroWebApiBackend();
           this.mode = "web_api";

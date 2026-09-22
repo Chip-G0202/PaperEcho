@@ -37,16 +37,18 @@ describe("zotero_backend_base", () => {
 });
 
 describe("zotero_adapter auto-detection", () => {
-  it("recommends web_api when only API key is set", async () => {
+  it("recommends web_api only when API key and the selected library ID are set", async () => {
     const origKey = process.env.ZOTERO_API_KEY;
     const origUser = process.env.ZOTERO_USER_ID;
     try {
       process.env.ZOTERO_API_KEY = "test_key";
-      delete process.env.ZOTERO_USER_ID;
+      process.env.ZOTERO_USER_ID = "12345";
       const { getRecommendedBackend } = await import("../tools/lib/ensure_zotero_backend_ready.mjs");
       const rec = getRecommendedBackend();
       assert.equal(rec.backend, "web_api");
       assert.equal(rec.desktopRequired, false);
+      delete process.env.ZOTERO_USER_ID;
+      assert.equal(getRecommendedBackend().backend, "cli");
     } finally {
       if (origKey === undefined) delete process.env.ZOTERO_API_KEY;
       else process.env.ZOTERO_API_KEY = origKey;
@@ -891,14 +893,14 @@ describe("stage2 runtime options", () => {
 });
 
 describe("zotero_web_api_backend version protection", () => {
-  it("resolves userID from API key when user id is omitted", async () => {
+  it("resolves userID through keys/current without placing the key in the URL", async () => {
     const { ZoteroWebApiBackend } = await import("../tools/lib/zotero_web_api_backend.mjs");
     const backend = new ZoteroWebApiBackend({ apiKey: "test_key", apiBase: "https://api.example.test" });
 
-    const urls = [];
+    const requests = [];
     const origFetch = globalThis.fetch;
     globalThis.fetch = async (url, opts) => {
-      urls.push(String(url));
+      requests.push({ url: String(url), headers: opts.headers });
       return {
         ok: true,
         status: 200,
@@ -911,10 +913,39 @@ describe("zotero_web_api_backend version protection", () => {
     try {
       const userId = await backend.resolveUserId();
       assert.equal(userId, "12345");
-      assert.equal(urls[0], "https://api.example.test/keys/test_key");
+      assert.equal(requests[0].url, "https://api.example.test/keys/current");
+      assert.equal(requests[0].url.includes("test_key"), false);
+      assert.equal(requests[0].headers["Zotero-API-Key"], "test_key");
+      assert.equal(requests[0].headers["Zotero-API-Version"], "3");
     } finally {
       globalThis.fetch = origFetch;
     }
+  });
+
+  it("uses the official API v3 base, header authentication, and personal library route", async () => {
+    const { ZoteroWebApiBackend, ZOTERO_WEB_API_BASE } = await import("../tools/lib/zotero_web_api_backend.mjs");
+    const backend = new ZoteroWebApiBackend({ userId: "12345", apiKey: "secret-value", retries: 1 });
+    let captured;
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => { captured = { url: String(url), headers: opts.headers }; return { ok: true, status: 200, headers: new Map([["Content-Type", "application/json"]]), json: async () => [], text: async () => "" }; };
+    try {
+      await backend._request("GET", "/items");
+      assert.equal(ZOTERO_WEB_API_BASE, "https://api.zotero.org");
+      assert.equal(captured.url, "https://api.zotero.org/users/12345/items");
+      assert.equal(captured.url.includes("secret-value"), false);
+      assert.equal(captured.headers["Zotero-API-Key"], "secret-value");
+      assert.equal(captured.headers["Zotero-API-Version"], "3");
+    } finally { globalThis.fetch = origFetch; }
+  });
+
+  it("redacts the API key from Web API response errors", async () => {
+    const { ZoteroWebApiBackend } = await import("../tools/lib/zotero_web_api_backend.mjs");
+    const backend = new ZoteroWebApiBackend({ userId: "12345", apiKey: "raw-secret-key", retries: 1 });
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: false, status: 403, headers: new Map(), text: async () => "denied raw-secret-key" });
+    try {
+      await assert.rejects(backend._request("GET", "/items"), (error) => /\[REDACTED\]/.test(error.message) && !error.message.includes("raw-secret-key"));
+    } finally { globalThis.fetch = origFetch; }
   });
 
   it("createItem reads Zotero API successful object maps", async () => {

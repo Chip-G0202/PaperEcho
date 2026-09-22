@@ -73,7 +73,8 @@ test('Settings exposes product controls while hiding internal LLM request batchi
   assert.match(app, /writeIds: \['review\.enabled', 'preference\.enabled'\]/); assert.doesNotMatch(app, /\['rating', '评级设置'/);
   assert.match(app, /translation\.enabled/); assert.match(app, /updates: values\.map/); assert.doesNotMatch(app, /查看完整设置示例|renderAdvancedSettingsDemo|advanced-demo/); assert.match(app, /未写入真实配置/);
   assert.doesNotMatch(app, /input\.disabled = true; row\.append\(label\(setting\.description, input\)/);
-  assert.match(app, /Zotero Web 配置/); assert.match(app, /用户 ID 选填/); assert.match(app, /配置 API Key/); assert.match(app, /替换 API Key/); assert.match(app, /清除/);
+  assert.match(app, /Zotero Web 配置/); assert.match(app, /个人文库/); assert.doesNotMatch(app, /群组文库|Group ID/); assert.match(app, /Zotero 数字 User ID/); assert.match(app, /API v3/); assert.match(app, /写入权限/); assert.match(app, /配置 API Key/); assert.match(app, /替换 API Key/); assert.match(app, /清除/);
+  assert.doesNotMatch(app, /runtimePathFields[\s\S]{0,400}web\.apiBase/); assert.match(app, /PaperEcho 本地工作区/);
   assert.match(app, /基础配置：不完整/); assert.match(app, /连接状态：运行前检测尚未执行/); assert.doesNotMatch(app, /Web 连接将在运行时验证/);
 });
 test('UI renders untrusted content through text nodes and keeps credentials write-only', () => {

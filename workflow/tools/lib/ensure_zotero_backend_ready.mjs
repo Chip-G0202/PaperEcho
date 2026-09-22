@@ -55,7 +55,7 @@ export async function ensureZoteroBackendReady(options = {}) {
     log = console.log,
   } = options;
 
-  const hasWebApiConfig = !!process.env.ZOTERO_API_KEY;
+  const hasWebApiConfig = Boolean(process.env.ZOTERO_API_KEY && process.env.ZOTERO_USER_ID);
 
   let backendOrder;
   if (preferredBackend === "web_api" || preferredBackend === "webapi") {
@@ -145,12 +145,12 @@ export async function ensureZoteroBackendReady(options = {}) {
  * 获取推荐的后端类型
  */
 export function getRecommendedBackend() {
-  const hasWebApiConfig = !!process.env.ZOTERO_API_KEY;
+  const hasWebApiConfig = Boolean(process.env.ZOTERO_API_KEY && process.env.ZOTERO_USER_ID);
 
   if (hasWebApiConfig) {
     return {
       backend: "web_api",
-      reason: "ZOTERO_API_KEY configured; ZOTERO_USER_ID is optional and can be resolved",
+      reason: "ZOTERO_API_KEY and ZOTERO_USER_ID configured",
       desktopRequired: false,
     };
   }

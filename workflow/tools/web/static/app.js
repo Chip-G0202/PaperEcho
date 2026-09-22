@@ -522,7 +522,7 @@ function settingPlaceholder(setting) {
     'translation.endpoint': '例如：https://api.example.com/v1/chat/completions', 'preference.endpoint': '例如：https://api.example.com/v1/chat/completions',
     'email.recipient': '例如：name@example.com', 'smtp.host': '例如：smtp.example.com', 'smtp.port': '例如：465', 'smtp.user': '例如：name@example.com',
     'web.userId': '例如：1234567', 'zotero.batch': '例如：25', 'pubmed.days': '例如：10', 'openalex.days': '例如：10',
-    'runtime.projectRoot': '例如：C:\\Research\\PaperEcho', 'local.input': '例如：input', 'local.output': '例如：output', 'local.feedback': '例如：feedback', 'desktop.zoteroExe': '例如：C:\\Program Files\\Zotero\\zotero.exe', 'web.apiBase': '例如：https://api.zotero.org',
+    'runtime.projectRoot': '例如：C:\\Research\\PaperEcho', 'local.input': '例如：input', 'local.output': '例如：output', 'local.feedback': '例如：feedback', 'desktop.zoteroExe': '例如：C:\\Program Files\\Zotero\\zotero.exe',
     'translation.temperature': '例如：0.1', 'preference.temperature': '例如：0.1', 'translation.timeout': '例如：30000', 'preference.timeout': '例如：30000',
     'review.batch': '例如：20', 'pubmed.limit': '例如：500', 'openalex.page_size': '例如：100', 'weekly.interval': '例如：7',
   };
@@ -563,17 +563,18 @@ function appendCredentialEditor(section, item, onStatusChange = () => {}) {
 const runtimePaths = {
   local: { title: '本地运行', summary: '不使用 Zotero，直接使用 PaperEcho 本地研究目录。', fit: '适合希望以本地目录作为输入与输出的工作方式。', data: '从配置的 JSON / JSONL 文件或目录读取。', result: '写入配置的本地输出目录；反馈文件可选。', needs: '不需要 Zotero Desktop，也不需要 Zotero Web API 凭据。' },
   desktop: { title: 'Zotero Desktop', summary: '让 PaperEcho 与当前电脑上的 Zotero Desktop 配合工作。', fit: '适合已经安装 Zotero Desktop，并希望使用本机文献库的人。', data: '由既有 Desktop owner 连接本机 Zotero 工作流。', result: '按正式 Desktop owner 写入本机 Zotero 集合与本地报告。', needs: '需要 Zotero Desktop；不需要 Zotero Web API Key。' },
-  web: { title: 'Zotero Web', summary: '通过 Zotero 官方 Web API 访问指定 Library。', fit: '适合不依赖本机 Zotero Desktop，或需要远程访问 Library 的场景。', data: '使用 Zotero 用户 ID、API 地址与写入凭据访问 Library。', result: '由既有 Web backend owner 完成读取与写入。', needs: '不需要 Zotero Desktop；需要 Zotero Web API 凭据。' },
+  web: { title: 'Zotero Web', summary: '通过 Zotero 官方 Web API v3 访问个人文库。', fit: '适合不依赖本机 Zotero Desktop，或需要远程访问个人文库的场景。', data: '提供数字 User ID 与写入凭据。', result: '由既有 Web backend owner 完成读取与写入。', needs: '不需要 Zotero Desktop；需要具有个人文库写权限的 API Key。' },
 };
 const runtimeExamples = {
   local: { 'local.input': 'input', 'local.output': 'C:\\Users\\Name\\Documents\\PaperEcho-Output', 'local.feedback': 'feedback' },
-  desktop: { 'runtime.projectRoot': 'C:\\Users\\Name\\Documents\\PaperEcho-Research', 'desktop.zoteroExe': 'C:\\Program Files\\Zotero\\zotero.exe' },
-  web: { 'runtime.projectRoot': 'C:\\Users\\Name\\Documents\\PaperEcho-Research', 'web.userId': '1234567', 'web.apiBase': 'https://api.zotero.org' },
+  desktop: { 'desktop.zoteroExe': 'C:\\Program Files\\Zotero\\zotero.exe' },
+  web: { 'web.userId': '1234567' },
+  shared: { 'runtime.projectRoot': 'C:\\Users\\Name\\Documents\\PaperEcho-Research' },
 };
 const runtimePathFields = {
   local: [{ id: 'local.input', required: true }, { id: 'local.output', required: true }, { id: 'local.feedback', required: false }],
-  desktop: [{ id: 'runtime.projectRoot', required: false }, { id: 'desktop.zoteroExe', required: false }],
-  web: [{ id: 'runtime.projectRoot', required: false }, { id: 'web.userId', required: false }, { id: 'web.apiBase', required: false }],
+  desktop: [{ id: 'desktop.zoteroExe', required: false }],
+  web: [{ id: 'web.userId', required: true }],
 };
 function runtimePathOptions(selected, onChange) {
   const fieldset = el('fieldset', undefined, 'runtime-path-options'); fieldset.append(el('legend', '选择运行路径')); const name = `runtime-path-${crypto.randomUUID()}`;
@@ -679,23 +680,41 @@ async function settings(group = settingsGroup, view = settingsView) {
     const current = !runtimeDemo ? el('p', `当前运行路径：${runtimePaths[mode.value || mode.effectiveValue]?.title || '未配置'}${mode.ownerPresent === false ? '（当前启动路径；统一配置尚未保存）' : ''}`, 'runtime-current') : null;
     const options = runtimePathOptions(selectedMode, (value) => { selectedMode = value; if (runtimeDemo) runtimeDemoMode = value; else { current.textContent = `正在配置：${runtimePaths[value].title}（尚未保存）`; current.className = 'runtime-current unsaved'; } sync(); }); section.append(options);
     if (current) section.append(current);
-    const panels = {}; const records = []; const readinessFor = {};
+    const panels = {}; const records = []; const readinessFor = {}; let save;
     for (const pathName of Object.keys(runtimePathFields)) {
       const panel = el('div', undefined, 'runtime-path-panel'); panel.dataset.path = pathName;
       panel.append(el('h4', pathName === 'web' && !runtimeDemo ? 'Zotero Web 配置' : `${runtimePaths[pathName].title}${runtimeDemo ? ' · 示例配置' : ' · 当前路径配置'}`));
+      if (pathName === 'web') panel.append(el('p', 'Zotero 官方接口固定使用 https://api.zotero.org，并由 PaperEcho 通过 API v3 请求；无需手工填写 API 地址或版本。', 'meta'));
       const specs = runtimePathFields[pathName];
-      const runtimeReadiness = () => { const missingRequired = specs.filter((spec) => spec.required && !String(data.find((item) => item.id === spec.id)?.value || '').trim()).map((spec) => data.find((item) => item.id === spec.id)?.description || spec.id); if (pathName === 'local') return missingRequired.length ? `尚未完成配置：缺少${missingRequired.join('、')}。` : '基础配置完整；路径可读写性将在运行前检查。'; if (pathName === 'desktop') return '无需额外必填配置；Zotero Desktop 与 CLI bridge 将在运行前检测。'; return credentials.find((item) => item.id === 'ZOTERO_API_KEY')?.configured ? '基础配置：完整。连接状态：运行前检测尚未执行。' : '基础配置：不完整。缺少：Zotero Web API Key。连接状态：运行前检测尚未执行。'; };
+      const runtimeReadiness = () => { const missingRequired = specs.filter((spec) => spec.required && !String(data.find((item) => item.id === spec.id)?.value || '').trim()).map((spec) => data.find((item) => item.id === spec.id)?.description || spec.id); if (pathName === 'local') return missingRequired.length ? `尚未完成配置：缺少${missingRequired.join('、')}。` : '基础配置完整；路径可读写性将在运行前检查。'; if (pathName === 'desktop') return '无需额外必填配置；Zotero Desktop 与 CLI bridge 将在运行前检测。'; if (!credentials.find((item) => item.id === 'ZOTERO_API_KEY')?.configured) missingRequired.push('Zotero Web API Key'); return missingRequired.length ? `基础配置：不完整。缺少：${missingRequired.join('、')}。连接状态：运行前检测尚未执行。` : '基础配置：完整。连接状态：运行前检测尚未执行。'; };
       readinessFor[pathName] = runtimeReadiness;
       const readiness = el('p', runtimeReadiness(), 'runtime-readiness'); panel.append(readiness);
-      if (pathName === 'web' && !runtimeDemo) panel.append(el('p', '用户 ID 选填；留空时由 API Key 在运行前解析。API 地址留空时沿用当前默认值。', 'meta'));
-      for (const spec of specs) { const id = spec.id; const entry = data.find((item) => item.id === id); if (!entry?.available && !runtimeDemo) continue; if (runtimeDemo) { const row = el('div', undefined, 'runtime-example-row'); row.append(el('span', entry?.description || id), el('strong', runtimeExamples[pathName][id])); panel.append(row); continue; } const input = settingControl(entry); if (spec.required && !String(entry.value || '').trim()) input.required = true; const currentValue = el('p', `当前：${currentSettingText(entry)}`, 'setting-current'); const row = el('div', undefined, 'setting'); row.append(currentValue, label(`${entry.description}${spec.required ? '（必填；留空保持现值）' : '（选填；留空不变）'}`, input)); panel.append(row); records.push({ pathName, entry, input, currentValue, required: spec.required }); }
-      if (pathName === 'web') runtimeDemo ? panel.append(el('p', 'Zotero Web API 密钥：未配置（示例，不读取真实凭据）', 'runtime-example-credential')) : appendCredentialEditor(panel, credentials.find((item) => item.id === 'ZOTERO_API_KEY'), () => { readiness.textContent = runtimeReadiness(); });
+      for (const spec of specs) {
+        const id = spec.id; const entry = data.find((item) => item.id === id);
+        if (!entry?.available && !runtimeDemo) continue;
+        if (runtimeDemo) { const row = el('div', undefined, 'runtime-example-row'); row.append(el('span', entry?.description || id), el('strong', runtimeExamples[pathName][id])); panel.append(row); continue; }
+        const input = settingControl(entry); const row = el('div', undefined, 'setting'); let currentValue = null;
+        if (spec.required && !String(entry.value || '').trim()) input.required = true;
+        currentValue = el('p', `当前：${currentSettingText(entry)}`, 'setting-current');
+        row.append(currentValue, label(`${entry.description}${spec.required ? '（必填；留空保持现值）' : '（选填；留空不变）'}`, input));
+        if (id === 'web.userId') row.append(el('small', 'Zotero 数字 User ID，不是用户名或邮箱。PaperEcho v2.4 的 Web 路径使用个人文库。'));
+        panel.append(row); records.push({ pathName, entry, input, currentValue, required: spec.required, row });
+      }
+      if (pathName === 'web') {
+        runtimeDemo ? panel.append(el('p', 'Zotero Web API Key：未配置（示例，不读取真实凭据）', 'runtime-example-credential')) : appendCredentialEditor(panel, credentials.find((item) => item.id === 'ZOTERO_API_KEY'), () => { readiness.textContent = runtimeReadiness(); });
+        panel.append(el('p', 'PaperEcho 需要一个对个人 Zotero 文库具有写入权限的 API Key；权限由 Zotero 管理，不在此处手工填写。', 'meta'));
+      }
       panels[pathName] = panel; section.append(panel);
     }
-    function sync() { for (const [name, panel] of Object.entries(panels)) panel.hidden = name !== selectedMode; }
+    const workspace = el('div', undefined, 'runtime-shared-panel'); workspace.append(el('h4', 'PaperEcho 本地工作区'), el('p', '这是 PaperEcho 用于保存运行状态、索引与报告的本地目录，不是 Zotero Web API 配置。留空时沿用当前运行根目录。', 'meta'));
+    const projectEntry = data.find((item) => item.id === 'runtime.projectRoot');
+    if (runtimeDemo) { const row = el('div', undefined, 'runtime-example-row'); row.append(el('span', projectEntry?.description || '项目根目录'), el('strong', runtimeExamples.shared['runtime.projectRoot'])); workspace.append(row); }
+    else if (projectEntry?.available) { const input = settingControl(projectEntry); const currentValue = el('p', `当前：${currentSettingText(projectEntry)}`, 'setting-current'); const row = el('div', undefined, 'setting'); row.append(currentValue, label(`${projectEntry.description}（选填；留空不变）`, input)); workspace.append(row); records.push({ pathName: 'shared', entry: projectEntry, input, currentValue, required: false, row }); }
+    section.append(workspace);
+    function sync() { for (const [name, panel] of Object.entries(panels)) panel.hidden = name !== selectedMode; workspace.hidden = selectedMode === 'local'; if (save) save.textContent = selectedMode === 'web' ? '保存 Zotero Web 配置' : '保存运行路径'; }
     sync();
     if (runtimeDemo) { body.append(section); return; }
-    const actions = el('div', undefined, 'actions group-save section-actions'); const save = button('保存运行路径', async () => { const selected = options.value; if (!selected) throw new Error('请先选择一种运行路径。'); const selectedRecords = records.filter((entry) => entry.pathName === selected); const updates = [{ id: 'runtime.mode', value: selected }]; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); if (record.required && value === undefined && !String(record.entry.value || '').trim()) throw new Error(`请先填写${record.entry.description}，原设置未改变。`); if (record.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); if (value !== undefined) updates.push({ id: record.entry.id, value }); } await api('/api/settings', { updates }); mode.value = selected; mode.ownerPresent = true; current.textContent = `当前运行路径：${runtimePaths[selected].title}`; current.className = 'runtime-current'; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); record.entry.ownerPresent = true; if (value !== undefined) { record.entry.value = value; record.input.value = ''; } record.currentValue.textContent = `当前：${currentSettingText(record.entry)}`; } panels[selected].querySelector('.runtime-readiness').textContent = readinessFor[selected](); notice.textContent = selected === 'web' ? 'Zotero Web 配置已保存；下次运行生效。连接状态仍由运行前检测确认。' : '“运行路径”已保存，下次运行生效；连接与路径可用性仍由运行前检查确认。'; }); save.className = 'primary'; actions.append(save); section.append(actions); body.append(section); return;
+    const actions = el('div', undefined, 'actions group-save section-actions'); save = button('', async () => { const selected = options.value; if (!selected) throw new Error('请先选择一种运行路径。'); const selectedRecords = records.filter((entry) => entry.pathName === selected || entry.pathName === 'shared' && selected !== 'local'); const updates = [{ id: 'runtime.mode', value: selected }]; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); if (record.required && value === undefined && !String(record.entry.value || '').trim()) throw new Error(`请先填写${record.entry.description}，原设置未改变。`); if (record.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); if (value !== undefined) updates.push({ id: record.entry.id, value }); } await api('/api/settings', { updates }); mode.value = selected; mode.ownerPresent = true; current.textContent = `当前运行路径：${runtimePaths[selected].title}`; current.className = 'runtime-current'; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); record.entry.ownerPresent = true; if (value !== undefined) { record.entry.value = value; if (record.input.dataset?.replacement === 'true') record.input.value = ''; } if (record.currentValue) record.currentValue.textContent = `当前：${currentSettingText(record.entry)}`; } panels[selected].querySelector('.runtime-readiness').textContent = readinessFor[selected](); notice.textContent = selected === 'web' ? 'Zotero Web 配置已保存；下次运行生效。连接状态仍由运行前检测确认。' : '“运行路径”已保存，下次运行生效；连接与路径可用性仍由运行前检查确认。'; }); save.className = 'primary'; actions.append(save); section.append(actions); sync(); body.append(section); return;
   }
   if (settingsGroup === 'connections' && settingsView === 'notifications') {
     const emailEntries = data.filter((entry) => entry.category === 'Notifications' && (entry.id.startsWith('email.') || entry.id.startsWith('smtp.')));

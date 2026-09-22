@@ -174,7 +174,7 @@ test("preflight resolves the shared Stage0 entry for Desktop/Web and Local entry
   await fs.mkdir(repoRoot);
   const baseDeps = { repoRoot, env: {}, entries: entries(paths.entry), existsSync: (value) => value === paths.entry, resolveLlmRuntimeImpl: () => ({ apiKeyConfigured: true }) };
   const desktop = await runPreflight({ ...localOptions(paths), mode: "desktop", input: "", outputRoot: "", llmMode: "" }, { ...baseDeps, desktopApplicationImpl: () => "zotero", findExecutableImpl: () => "zotero-cli" });
-  const web = await runPreflight({ ...localOptions(paths), mode: "web", input: "", outputRoot: "", llmMode: "" }, { ...baseDeps, env: { ZOTERO_API_KEY: "secret" } });
+  const web = await runPreflight({ ...localOptions(paths), mode: "web", input: "", outputRoot: "", llmMode: "" }, { ...baseDeps, env: { ZOTERO_API_KEY: "secret", ZOTERO_USER_ID: "12345" } });
   const local = await runPreflight(localOptions(paths), baseDeps);
   assert.equal(desktop.resolvedEntry, web.resolvedEntry);
   assert.equal(local.resolvedEntry, `<external>/${path.basename(paths.entry)}`);

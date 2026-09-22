@@ -160,6 +160,7 @@ function validatePathSection(mode, raw) {
     optionalInteger(value.postStartDelayMs, "desktop.postStartDelayMs", { min: 0, max: 120000 });
   } else if (mode === "web") {
     for (const field of ["apiKeyEnv", "userId", "apiBase"]) optionalString(value[field], `web.${field}`);
+    if (value.userId != null && !/^\d+$/.test(value.userId)) fail("CONFIG_VALUE_INVALID", "web.userId must be a numeric Zotero User ID", { field: "web.userId" });
     optionalInteger(value.requestConcurrency, "web.requestConcurrency", { min: 1, max: 4 });
   } else {
     for (const field of ["input", "outputRoot", "feedback"]) optionalString(value[field], `local.${field}`);
@@ -317,6 +318,9 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
     if (has(pathSection, "postStartDelayMs")) setEnvValue(effectiveEnv, "WORKFLOW_STARTUP_ZOTERO_POST_START_DELAY_MS", pathSection.postStartDelayMs);
   } else if (mode === "web") {
     if (has(pathSection, "apiKeyEnv")) mapSecretReference({ target: effectiveEnv, sourceEnv: env, canonicalName: "ZOTERO_API_KEY", envName: pathSection.apiKeyEnv, secretStatus });
+    delete effectiveEnv.ZOTERO_USER_ID;
+    delete effectiveEnv.ZOTERO_GROUP_ID;
+    delete effectiveEnv.ZOTERO_LIBRARY_TYPE;
     if (pathSection.userId) effectiveEnv.ZOTERO_USER_ID = pathSection.userId;
     if (pathSection.apiBase) effectiveEnv.ZOTERO_API_BASE = pathSection.apiBase;
     if (has(pathSection, "requestConcurrency")) setEnvValue(effectiveEnv, "ZOTERO_WEB_API_REQUEST_CONCURRENCY", pathSection.requestConcurrency);

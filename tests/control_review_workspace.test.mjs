@@ -204,24 +204,25 @@ test('runtime path presents three exclusive modes and only the selected owner fi
     { category: 'Runtime', available: true, id: 'local.output', description: '本地输出目录', type: 'string', value: 'output', validation: {} },
     { category: 'Runtime', available: true, id: 'local.feedback', description: '本地反馈目录', type: 'string', value: 'feedback', validation: {} },
     { category: 'Runtime', available: true, id: 'desktop.zoteroExe', description: 'Zotero Desktop 程序路径', type: 'string', value: 'zotero.exe', validation: {} },
-    { category: 'Runtime', available: true, id: 'web.userId', description: 'Zotero Web 用户 ID', type: 'string', value: '123', validation: {} },
-    { category: 'Runtime', available: true, id: 'web.apiBase', description: 'Zotero Web API 地址', type: 'url', value: 'https://api.zotero.org', validation: {} },
+    { category: 'Runtime', available: true, id: 'web.userId', description: 'Zotero User ID', type: 'string', value: '123', validation: {} },
+    { category: 'Advanced', available: true, id: 'web.apiBase', description: 'Zotero Web API 地址（测试/开发覆盖）', type: 'url', value: 'https://api.zotero.org', validation: {} },
   ];
   app.setApi(async (url, value) => { if (url === '/api/credentials' && !value) return [{ id: 'ZOTERO_API_KEY', configured: true, writable: true }]; if (!value) return settings; calls.push([url, value]); return { saved: true }; });
   await app.settings('runtime', 'path'); const section = app.main.querySelector('.runtime-settings');
   assert.equal(section.querySelector('.runtime-path-options').querySelectorAll('input').length, 3);
-  assert.match(section.textContent, /本地运行.*不使用 Zotero.*Zotero Desktop.*不需要 Zotero Web API Key.*Zotero Web.*需要 Zotero Web API 凭据/);
+  assert.match(section.textContent, /本地运行.*不使用 Zotero.*Zotero Desktop.*不需要 Zotero Web API Key.*Zotero Web.*需要具有个人文库写权限的 API Key/);
   assert.match(section.textContent, /当前运行路径：Zotero Desktop/);
   const panels = Object.fromEntries(section.querySelectorAll('.runtime-path-panel').map((entry) => [entry.dataset.path, entry]));
-  assert.equal(panels.desktop.hidden, false); assert.match(panels.desktop.textContent, /无需额外必填配置.*项目根目录.*Zotero Desktop 程序路径/);
-  assert.doesNotMatch(panels.desktop.textContent, /API Key|用户 ID|本地输入目录/);
+  assert.equal(panels.desktop.hidden, false); assert.match(panels.desktop.textContent, /无需额外必填配置.*Zotero Desktop 程序路径/);
+  assert.doesNotMatch(panels.desktop.textContent, /项目根目录|API Key|User ID|本地输入目录/);
   const choices = section.querySelector('.runtime-path-options').querySelectorAll('input');
   choices.forEach((input) => { input.checked = input.value === 'web'; }); choices.find((input) => input.value === 'web').listeners.change();
-  const webDraft = panels.web.querySelectorAll('input').find((input) => /用户 ID/.test(input.getAttribute('aria-label'))); webDraft.value = '7654321';
+  const webDraft = panels.web.querySelectorAll('input').find((input) => /User ID/.test(input.getAttribute('aria-label'))); webDraft.value = '7654321';
   choices.forEach((input) => { input.checked = input.value === 'desktop'; }); choices.find((input) => input.value === 'desktop').listeners.change();
   choices.forEach((input) => { input.checked = input.value === 'web'; }); choices.find((input) => input.value === 'web').listeners.change();
   assert.equal(webDraft.value, '7654321'); assert.match(section.textContent, /正在配置：Zotero Web（尚未保存）/);
-  assert.match(panels.web.textContent, /Zotero Web 配置.*基础配置：完整.*运行前检测尚未执行.*用户 ID 选填.*API 地址.*API Key/); assert.doesNotMatch(panels.web.textContent, /Zotero Desktop 程序路径|本地反馈目录|已连接/);
+  assert.match(panels.web.textContent, /Zotero Web 配置.*api\.zotero\.org.*API v3.*基础配置：完整.*运行前检测尚未执行.*Zotero User ID.*个人文库.*写入权限.*API Key/); assert.doesNotMatch(panels.web.textContent, /群组文库|Group ID|API 地址（测试|Zotero Desktop 程序路径|本地反馈目录|已连接/);
+  assert.match(section.querySelector('.runtime-shared-panel').textContent, /PaperEcho 本地工作区.*不是 Zotero Web API 配置.*项目根目录/);
   choices.forEach((input) => { input.checked = input.value === 'local'; }); choices.find((input) => input.value === 'local').listeners.change();
   assert.match(panels.local.textContent, /本地输入目录.*本地输出目录.*本地反馈目录/); assert.doesNotMatch(panels.local.textContent, /项目根目录|Zotero/);
   panels.local.querySelectorAll('input').find((input) => /本地输入目录/.test(input.getAttribute('aria-label'))).value = 'fixture.jsonl';
@@ -232,7 +233,7 @@ test('runtime path presents three exclusive modes and only the selected owner fi
   await byText(section, '保存运行路径').click(); assert.equal(JSON.stringify(calls[0][1].updates), JSON.stringify([{ id: 'runtime.mode', value: 'desktop' }]));
   assert.match(section.textContent, /当前运行路径：Zotero Desktop.*无需额外必填配置/);
   calls.length = 0; choices.forEach((input) => { input.checked = input.value === 'web'; }); choices.find((input) => input.value === 'web').listeners.change();
-  await byText(section, '保存运行路径').click(); assert.equal(JSON.stringify(calls[0][1].updates), JSON.stringify([{ id: 'runtime.mode', value: 'web' }, { id: 'web.userId', value: '7654321' }])); assert.match(app.notice.textContent, /Zotero Web 配置已保存/);
+  await byText(section, '保存 Zotero Web 配置').click(); assert.equal(JSON.stringify(calls[0][1].updates), JSON.stringify([{ id: 'runtime.mode', value: 'web' }, { id: 'web.userId', value: '7654321' }])); assert.match(app.notice.textContent, /Zotero Web 配置已保存/);
   const secret = 'fixture-zotero-secret'; await byText(panels.web, '替换 API Key').click(); const secretInput = panels.web.querySelectorAll('input').find((input) => input.type === 'password'); secretInput.value = secret; await byText(panels.web, '保存 API Key').click();
   assert.equal(calls.at(-1)[0], '/api/credentials'); assert.equal(app.main.textContent.includes(secret), false); assert.match(panels.web.textContent, /Zotero Web API Key：已配置/);
   await byText(panels.web, '清除').click(); assert.equal(calls.at(-1)[1].action, 'clear'); assert.match(panels.web.textContent, /Zotero Web API Key：未配置/); assert.ok(byText(panels.web, '配置 API Key'));
@@ -240,7 +241,7 @@ test('runtime path presents three exclusive modes and only the selected owner fi
   const demo = app.main.querySelector('.runtime-settings'); assert.match(app.main.textContent, /示例模式.*不会修改真实设置.*运行路径示例/);
   assert.match(demo.textContent, /本地输入目录.*PaperEcho-Output.*PaperEcho-Research/); assert.equal(byText(demo, '保存运行路径'), undefined);
   const demoChoices = demo.querySelector('.runtime-path-options').querySelectorAll('input'); demoChoices.forEach((input) => { input.checked = input.value === 'web'; }); demoChoices.find((input) => input.value === 'web').listeners.change();
-  assert.match(demo.querySelectorAll('.runtime-path-panel').find((entry) => entry.dataset.path === 'web').textContent, /1234567.*api\.zotero\.org.*未配置（示例，不读取真实凭据）/); assert.equal(calls.length, 0);
+  assert.match(demo.querySelectorAll('.runtime-path-panel').find((entry) => entry.dataset.path === 'web').textContent, /api\.zotero\.org.*API v3.*1234567.*未配置（示例，不读取真实凭据）/); assert.match(demo.textContent, /Web API v3 访问个人文库/); assert.doesNotMatch(demo.textContent, /群组文库|Group ID|API 地址（测试/); assert.equal(calls.length, 0);
 });
 test('completion plans route to remaining queues and end only when all work is done', () => {
   const app = ui();

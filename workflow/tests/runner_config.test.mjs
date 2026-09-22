@@ -63,7 +63,11 @@ test("one enabled module selects Desktop, Web, or Local and reuses common settin
       assert.equal(resolved.env.PAPERFLOW_CLEANUP_ENABLED, "true");
       assert.equal(resolved.env.PAPERFLOW_RETENTION_DAYS, "21");
       if (mode === "desktop") assert.equal(resolved.env.ZOTERO_DESKTOP_CLI_TOOL, "zotero-cli");
-      if (mode === "web") assert.equal(resolved.env.ZOTERO_API_KEY, "web-secret");
+      if (mode === "web") {
+        assert.equal(resolved.env.ZOTERO_API_KEY, "web-secret");
+        assert.equal(resolved.env.ZOTERO_USER_ID, "12345");
+        assert.equal(resolved.env.ZOTERO_GROUP_ID, undefined);
+      }
       if (mode === "local") {
         assert.equal(resolved.options.input, paths.input);
         assert.equal(resolved.options.outputRoot, paths.outputRoot);
@@ -321,7 +325,24 @@ test("execution plans map Desktop/Web to Stage0 semantics and strip Zotero from 
   assert.equal(web.childEnv.ZOTERO_BACKEND, "web_api");
   assert.equal(local.entry, path.resolve("local-entry"));
   assert.equal(local.childEnv.ZOTERO_API_KEY, undefined);
+  assert.equal(local.childEnv.ZOTERO_USER_ID, undefined);
+  assert.equal(local.childEnv.ZOTERO_GROUP_ID, undefined);
+  assert.equal(local.childEnv.ZOTERO_LIBRARY_TYPE, undefined);
+  assert.equal(local.childEnv.ZOTERO_API_BASE, undefined);
   assert.equal(local.childEnv.ZOTERO_BACKEND, undefined);
+});
+
+test("Web preflight requires the personal library User ID and API key", async (t) => {
+  const paths = await fixture(t);
+  const options = { mode: "web", action: "check", profile: "standard", input: "", outputRoot: "", feedback: "", email: "", llmMode: "disabled", forceResend: false, requireLlm: false, configPath: paths.configPath, configSummary: { sectionsChecked: ["common", "web"], secretStatus: {} }, configWarnings: [] };
+  const dependencies = { entries: { desktop: paths.entry, web: paths.entry, local: paths.entry }, existsSync: (value) => value === paths.entry, resolveLlmRuntimeImpl: () => ({ apiKeyConfigured: false }) };
+  const personal = await runPreflight(options, { ...dependencies, env: { ZOTERO_API_KEY: "secret" } });
+  assert.equal(personal.canRun, false); assert.ok(personal.requiredMissing.some((entry) => entry.name === "ZOTERO_USER_ID"));
+  const personalWithoutKey = await runPreflight(options, { ...dependencies, env: { ZOTERO_USER_ID: "12345" } });
+  assert.ok(personalWithoutKey.requiredMissing.some((entry) => entry.name === "ZOTERO_API_KEY"));
+  const ready = await runPreflight(options, { ...dependencies, env: { ZOTERO_API_KEY: "secret", ZOTERO_USER_ID: "12345" } });
+  assert.equal(ready.requiredMissing.some((entry) => entry.section === "web"), false);
+  assert.equal(ready.readiness.find((entry) => entry.name === "zotero_web_api")?.status, "ready");
 });
 
 test("preflight reports only common plus selected path and a secret-free retry", async (t) => {

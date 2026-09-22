@@ -58,8 +58,8 @@ for (const [id, category, key, type, description, validation] of [
   ['local.output', 'Runtime', 'local.outputRoot', 'string', '本地输出目录', { maxLength: 2000 }],
   ['local.feedback', 'Runtime', 'local.feedback', 'string', '本地反馈目录', { maxLength: 2000 }],
   ['desktop.zoteroExe', 'Runtime', 'desktop.zoteroExe', 'string', 'Zotero Desktop 程序路径', { maxLength: 2000 }],
-  ['web.userId', 'Runtime', 'web.userId', 'string', 'Zotero Web 用户 ID', { pattern: '^\\d+$' }],
-  ['web.apiBase', 'Runtime', 'web.apiBase', 'url', 'Zotero Web API 地址'],
+  ['web.userId', 'Runtime', 'web.userId', 'string', 'Zotero User ID', { pattern: '^\\d+$' }],
+  ['web.apiBase', 'Advanced', 'web.apiBase', 'url', 'Zotero Web API 地址（测试/开发覆盖）'],
   ['zotero.user', 'Zotero', 'web.userId', 'string', 'Zotero Web 用户 ID', { pattern: '^\\d+$' }],
   ['zotero.batch', 'Zotero', 'desktop.writebackBatchSize', 'integer', 'Zotero 写入批大小', { min: 1, max: 50 }],
 ]) setting(id, category, 'paperecho.config.json', key, type, description, validation);

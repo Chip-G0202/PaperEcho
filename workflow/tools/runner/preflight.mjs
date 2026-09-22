@@ -115,11 +115,14 @@ export function buildExecutionPlan(options, { env = process.env, repoRoot = REPO
   const childEnv = { ...env };
   if (options.mode === "desktop") {
     childEnv.ZOTERO_BACKEND = "cli";
-    delete childEnv.ZOTERO_API_KEY;
+    for (const name of ["ZOTERO_API_KEY", "ZOTERO_USER_ID", "ZOTERO_GROUP_ID", "ZOTERO_LIBRARY_TYPE", "ZOTERO_API_BASE"]) delete childEnv[name];
   } else if (options.mode === "web") {
     childEnv.ZOTERO_BACKEND = "web_api";
+    delete childEnv.ZOTERO_EXE;
+    delete childEnv.ZOTERO_GROUP_ID;
+    delete childEnv.ZOTERO_LIBRARY_TYPE;
   } else {
-    for (const name of ["ZOTERO_BACKEND", "ZOTERO_API_KEY", "ZOTERO_USER_ID", "ZOTERO_EXE"]) delete childEnv[name];
+    for (const name of ["ZOTERO_BACKEND", "ZOTERO_API_KEY", "ZOTERO_USER_ID", "ZOTERO_GROUP_ID", "ZOTERO_LIBRARY_TYPE", "ZOTERO_API_BASE", "ZOTERO_EXE"]) delete childEnv[name];
   }
   childEnv.PAPERECHO_CONFIG_HASH = options.recoveryConfigHash || canonicalQueryHash({ mode: options.mode, profile: options.profile });
   childEnv.PAPERECHO_INPUT_HASH = options.recoveryInputHash || canonicalQueryHash({ mode: options.mode, input: options.input || "", feedback: options.feedback || "" });
@@ -164,9 +167,9 @@ export async function runPreflight(options, dependencies = {}) {
   }
 
   if (options.mode === "web" && !radarProfile) {
-    if (!String(env.ZOTERO_API_KEY || "").trim()) requiredMissing.push({ ...missing("ZOTERO_API_KEY", "Web API 认证与 library 解析", "设置 web.apiKeyEnv 指向已配置的环境变量", "configuration"), section: "web" });
-    readiness.push({ name: "zotero_web_api", status: env.ZOTERO_API_KEY ? "ready" : "blocked", connectivity: "not_probed" });
-    if (!env.ZOTERO_USER_ID) optionalMissing.push(optional("ZOTERO_USER_ID", "避免运行时解析 user library ID", "可在环境中配置；生产入口也可按 API key 解析"));
+    if (!String(env.ZOTERO_API_KEY || "").trim()) requiredMissing.push({ ...missing("ZOTERO_API_KEY", "认证并写入目标 Zotero 文库", "配置具有目标文库写权限的 API Key", "configuration"), section: "web" });
+    if (!String(env.ZOTERO_USER_ID || "").trim()) requiredMissing.push({ ...missing("ZOTERO_USER_ID", "定位 Zotero 个人文库", "配置 web.userId", "configuration"), section: "web" });
+    readiness.push({ name: "zotero_web_api", status: env.ZOTERO_API_KEY && env.ZOTERO_USER_ID ? "ready" : "blocked", connectivity: "not_probed", libraryType: "user" });
   }
 
   if (radarProfile && options.mode !== "local") {

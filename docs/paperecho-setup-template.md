@@ -140,15 +140,13 @@
 - 启用：是 / 否
 - Zotero API key 环境变量名（默认 `ZOTERO_API_KEY`）：
 - 该环境变量已在本机配置：是 / 否 / 未检查
-- Zotero user ID（可选，缺失时生产入口可按 key 解析）：
-- API base URL（默认 `https://api.zotero.org`）：
-- API version：固定 `3`（无需填写）
+- Zotero User ID（个人文库必填；数字 ID，不是用户名或邮箱）：
 - request concurrency（默认 `4`，范围 `1-4`）：
 - API key 具备所需 library 写权限：是 / 否 / 未检查
 - 允许访问 Zotero Web API 网络：是 / 否
 - 预期执行 Stage2/Stage3：是 / 否（Web 正常生产路径应为“是”）
 
-固定行为，无需填写：读取 page size 上限 100、写入 batch 上限 50、timeout 30 秒、默认 3 次尝试、2 秒重试间隔、`Retry-After`/`Backoff`、版本保护与 recovery。当前只支持 user library；不要填写 group ID、library type、OAuth、refresh token、Desktop executable 或 CLI bridge。
+固定行为，无需填写：使用个人文库、官方 base `https://api.zotero.org`、API v3、header 认证、读取 page size 上限 100、写入 batch 上限 50、timeout 30 秒、默认 3 次尝试、2 秒重试间隔、`Retry-After`/`Backoff`、版本保护与 recovery。不要填写群组文库、OAuth、refresh token、Desktop executable 或 CLI bridge。
 
 ## 2.3 Standalone Local 路径配置
 

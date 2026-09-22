@@ -71,7 +71,6 @@
     "enabled": false,
     "apiKeyEnv": "ZOTERO_API_KEY",
     "userId": null,
-    "apiBase": "https://api.zotero.org",
     "requestConcurrency": 4
   },
   "local": {

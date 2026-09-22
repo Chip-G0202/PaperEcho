@@ -53,7 +53,7 @@ node -e "
 ### 自动模式（推荐）
 
 ```bash
-# 有 API Key 时用 Web API，否则用 CLI
+# 有 API Key 和所选文库 ID 时用 Web API，否则用 CLI
 node -e "
   import('./workflow/tools/lib/zotero_backend_integration.mjs').then(async (m) => {
     const result = await m.initZoteroBackend(); // auto 模式
@@ -67,18 +67,20 @@ node -e "
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `ZOTERO_USER_ID` | Zotero 用户 ID | （Web API 必填） |
-| `ZOTERO_API_KEY` | Zotero API Key | （Web API 必填） |
-| `ZOTERO_API_BASE` | API 基础 URL | `https://api.zotero.org` |
+| `ZOTERO_USER_ID` | 个人文库的数字 User ID | Web API 必填 |
+| `ZOTERO_API_KEY` | 具有个人文库写权限的 Zotero API Key | Web API 必填 |
+| `ZOTERO_API_BASE` | API 基础 URL，仅测试/开发覆盖 | `https://api.zotero.org` |
 | `ZOTERO_WEB_CLI_TOOL` | headless CLI 工具名 | `zot` |
 | `ZOTERO_DESKTOP_CLI_TOOL` | desktop CLI 工具名 | `zotero-cli` |
 | `ZOTERO_BACKEND` | 后端选择 | `auto` |
 
 ### ZOTERO_BACKEND 可选值
 
-- `auto`：有 Web API 配置时用 Web API，否则用 CLI（默认）
+- `auto`：API Key 与个人文库 User ID 都存在时用 Web API，否则用 CLI（默认）
 - `web_api`：强制使用 Web API
 - `cli`：强制使用 CLI
+
+正式 Web 请求固定使用 `Zotero-API-Version: 3` 和 `Zotero-API-Key` 请求头；API Key 不进入 URL 或日志。PaperEcho v2.4 使用个人文库 `/users/<User ID>`；Zotero 官方虽定义群组文库 URL，本版本不在设置页提供该能力。
 
 ## API 方法速查
 
