@@ -7,6 +7,8 @@ import ExcelJS from 'exceljs';
 import { FeedbackService, readCanonicalFeedback, canonicalFeedbackPath, canonicalFeedbackActionRows, manualGradeFeedback } from '../tools/lib/control_feedback_service.mjs';
 import { importLegacyWorkbook } from '../tools/lib/control_legacy_feedback_adapter.mjs';
 import { ConfigService } from '../tools/lib/control_config_service.mjs';
+import { getTranslationConfig } from '../tools/lib/title_translation_support.mjs';
+import { getPreferenceLearningConfig } from '../tools/lib/preference_learning_support.mjs';
 import { RuleSuggestionService } from '../tools/lib/control_rule_suggestion_service.mjs';
 import { SecretService } from '../tools/lib/control_credentials_service.mjs';
 import { processResearchEvaluation, processManualStandardEvaluation } from '../tools/stage1/manual_standard_evaluation.mjs';
@@ -117,8 +119,36 @@ test('missing model owners remain configurable and initialize atomically on firs
   for (const id of ['translation.enabled', 'translation.model', 'review.enabled', 'preference.enabled', 'preference.model']) assert.equal(listed.find((entry) => entry.id === id).available, true);
   await service.update('translation.enabled', false);
   assert.equal(JSON.parse(await fs.readFile(path.join(root, 'config', 'title_translation.config.json'), 'utf8')).enabled, false);
-  await service.updateMany([{ id: 'review.enabled', value: true }, { id: 'preference.enabled', value: true }]);
-  assert.deepEqual(JSON.parse(await fs.readFile(path.join(root, 'config', 'review-workflow-rules.json'), 'utf8')).llm_review, { grade_review_enabled: true, preference_learning_enabled: true });
+  await service.updateMany([{ id: 'review.master', value: true }, { id: 'review.enabled', value: true }, { id: 'preference.enabled', value: true }]);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(root, 'config', 'review-workflow-rules.json'), 'utf8')).llm_review, { enabled: true, grade_review_enabled: true, preference_learning_enabled: true });
+});
+test('v2.3 model config paths and review master switch use the same formal owners as the workflow', async (t) => {
+  const root = await fixture(t);
+  const translation = path.join(root, 'legacy-translation.json');
+  const preference = path.join(root, 'legacy-preference.json');
+  const review = path.join(root, 'config', 'review-workflow-rules.json');
+  await fs.writeFile(translation, JSON.stringify({ model: 'legacy-translation', endpoint: 'https://translation.example/v1/chat/completions', temperature: 0.2 }));
+  await fs.writeFile(preference, JSON.stringify({ model: 'legacy-preference', endpoint: 'https://preference.example/v1/chat/completions', temperature: 0.3 }));
+  await fs.writeFile(review, JSON.stringify({ llm_review: { enabled: false, grade_review_enabled: true, preference_learning_enabled: true } }));
+  const env = { TITLE_TRANSLATION_CONFIG_PATH: translation, PREFERENCE_LEARNING_CONFIG_PATH: preference };
+  const service = new ConfigService({ root, env });
+  const listed = await service.list();
+  assert.equal(listed.find((entry) => entry.id === 'translation.model').value, 'legacy-translation');
+  assert.equal(listed.find((entry) => entry.id === 'preference.model').value, 'legacy-preference');
+  assert.equal(listed.find((entry) => entry.id === 'review.master').value, false);
+  await service.updateMany([
+    { id: 'translation.model', value: 'saved-translation' },
+    { id: 'preference.model', value: 'saved-preference' },
+    { id: 'review.master', value: true },
+    { id: 'review.enabled', value: true },
+    { id: 'preference.enabled', value: true },
+  ]);
+  assert.equal(getTranslationConfig({ env }).model, 'saved-translation');
+  assert.equal(getPreferenceLearningConfig({ env }).model, 'saved-preference');
+  const workflowRules = JSON.parse(await fs.readFile(review, 'utf8')).llm_review;
+  assert.equal(workflowRules.enabled && workflowRules.grade_review_enabled && workflowRules.preference_learning_enabled, true);
+  await assert.rejects(fs.access(path.join(root, 'config', 'title_translation.config.json')), { code: 'ENOENT' });
+  await assert.rejects(fs.access(path.join(root, 'config', 'preference_learning.config.json')), { code: 'ENOENT' });
 });
 test('config batch rolls every owner back when post-write verification fails', async (t) => {
   const root = await fixture(t); const translation = path.join(root, 'config', 'title_translation.config.json'); const review = path.join(root, 'config', 'review-workflow-rules.json');

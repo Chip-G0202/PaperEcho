@@ -70,7 +70,7 @@ test('Settings exposes product controls while hiding internal LLM request batchi
   assert.match(css, /\.source-options label:has\(input:checked\)/);
   assert.match(css, /\.source-options label:has\(input:focus-visible\)/);
   assert.match(app, /featureToggleIds/); assert.match(app, /container\.dataset\.featureCollapsed/); assert.match(app, /row\.hidden = !expanded/); assert.match(app, /input\.placeholder = settingPlaceholder/);
-  assert.match(app, /writeIds: \['review\.enabled', 'preference\.enabled'\]/); assert.doesNotMatch(app, /\['rating', '评级设置'/);
+  assert.match(app, /writeIds: \['review\.master', 'review\.enabled', 'preference\.enabled'\]/); assert.doesNotMatch(app, /\['rating', '评级设置'/);
   assert.match(app, /translation\.enabled/); assert.match(app, /updates: values\.map/); assert.doesNotMatch(app, /查看完整设置示例|renderAdvancedSettingsDemo|advanced-demo/);
   assert.doesNotMatch(app, /input\.disabled = true; row\.append\(label\(setting\.description, input\)/);
   assert.match(app, /Zotero Web 配置/); assert.match(app, /个人文库/); assert.doesNotMatch(app, /群组文库|Group ID/); assert.match(app, /Zotero 数字 User ID/); assert.match(app, /API v3/); assert.match(app, /写入权限/); assert.match(app, /配置 API Key/); assert.match(app, /替换 API Key/); assert.match(app, /清除/);

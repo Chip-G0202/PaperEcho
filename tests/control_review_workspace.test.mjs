@@ -328,7 +328,7 @@ test('Settings separates databases and RSS, colocates review toggles and preserv
   assert.equal(toggles.length, 1); assert.match(preferenceSection.textContent, /启用智能评审与偏好学习/); assert.doesNotMatch(preferenceSection.textContent, /启用等级复审|启用偏好学习[^）]/);
   assert.equal(preferenceRows.every((row) => row.hidden), true); assert.equal(preferenceFields.every((input) => input.disabled), true); assert.equal(preferenceFields[0].value, '');
   assert.equal(toggles[0].disabled, undefined); await toggles[0].click(); assert.equal(preferenceRows.every((row) => !row.hidden), true); assert.equal(preferenceFields.every((input) => !input.disabled), true); await toggles[0].press('Space'); assert.equal(preferenceRows.every((row) => row.hidden), true); await toggles[0].press('Space'); assert.equal(preferenceRows.every((row) => !row.hidden), true);
-  await byText(preferenceSection, '保存偏好学习').click(); assert.equal(JSON.stringify(calls[0].updates), JSON.stringify([{ id: 'review.enabled', value: true }, { id: 'preference.enabled', value: true }]));
+  await byText(preferenceSection, '保存偏好学习').click(); assert.equal(JSON.stringify(calls[0].updates), JSON.stringify([{ id: 'review.master', value: true }, { id: 'review.enabled', value: true }, { id: 'preference.enabled', value: true }]));
   assert.doesNotMatch(app.main.textContent, /评级设置|请求超时/);
 });
 test('model capability toggles remain in the real DOM when registry entries are incomplete', async () => {

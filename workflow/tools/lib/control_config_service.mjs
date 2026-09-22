@@ -7,7 +7,12 @@ import { buildPubMedQueryFromKeywordGroups } from './literature_config.mjs';
 const INITIAL_OWNER_VALUES = Object.freeze({
   'title_translation.config.json': { enabled: true },
   'preference_learning.config.json': {},
-  'review-workflow-rules.json': { llm_review: { grade_review_enabled: false, preference_learning_enabled: false } },
+  'review-workflow-rules.json': { llm_review: { enabled: false, grade_review_enabled: false, preference_learning_enabled: false } },
+});
+
+const OWNER_PATH_ENV = Object.freeze({
+  'title_translation.config.json': 'TITLE_TRANSLATION_CONFIG_PATH',
+  'preference_learning.config.json': 'PREFERENCE_LEARNING_CONFIG_PATH',
 });
 
 const definitions = [];
@@ -15,6 +20,7 @@ function setting(id, category, file, key, type, description, validation = {}) {
   definitions.push({ id, category, file, key, type, description, validation, secret: false, advanced: category === 'Advanced', reload: 'next_run' });
 }
 setting('preference.enabled', 'Models', 'review-workflow-rules.json', 'llm_review.preference_learning_enabled', 'boolean', '启用偏好学习');
+setting('review.master', 'Models', 'review-workflow-rules.json', 'llm_review.enabled', 'boolean', '启用智能评审总开关');
 setting('translation.enabled', 'Models', 'title_translation.config.json', 'enabled', 'boolean', '启用标题翻译');
 for (const [capability, file] of [['translation', 'title_translation.config.json'], ['preference', 'preference_learning.config.json']]) {
   setting(`${capability}.model`, 'Models', file, 'model', 'string', `${capability} 模型名称`, { maxLength: 200 });
@@ -107,7 +113,12 @@ export function validateSetting(definition, value) {
 }
 export class ConfigService {
   constructor({ root, env = process.env, atomicOptions, verify = async () => {}, configPath, runtimeMode = '' }) { Object.assign(this, { root, env, atomicOptions, verify, configPath, runtimeMode }); }
-  ownerPath(file) { return file === 'paperecho.config.json' && this.configPath ? this.configPath : path.join(this.root, 'config', file); }
+  ownerPath(file) {
+    if (file === 'paperecho.config.json' && this.configPath) return this.configPath;
+    const envName = OWNER_PATH_ENV[file];
+    if (envName && String(this.env[envName] || '').trim()) return path.resolve(this.root, this.env[envName]);
+    return path.join(this.root, 'config', file);
+  }
   async readOwner(file) {
     // Fixed registry owns paths; callers cannot choose arbitrary files.
     return JSON.parse(await fs.readFile(this.ownerPath(file), 'utf8'));
