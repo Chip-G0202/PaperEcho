@@ -123,3 +123,10 @@ review_results/文献评价/screening_standards.backup.docx
 
 # PaperEcho updater state, lock, staging metadata, and rollback snapshots
 /.paperecho/update/
+
+# Local planning, output, editor and test temp caches
+.hermes/
+.planning/
+output/
+workflow/tests/.control-test-tmp/
+docs/paperecho-architecture*

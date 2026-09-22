@@ -942,9 +942,8 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
 
     if (q) {
       path += `&q=${encodeURIComponent(q)}&qmode=everything`;
-    }
-    if (title) {
-      path += `&q=${encodeURIComponent(title)}&qmode=title`;
+    } else if (title) {
+      path += `&q=${encodeURIComponent(title)}&qmode=titleCreatorYear`;
     }
 
     const result = await this._request("GET", path);
