@@ -17,11 +17,25 @@ test('UI shell keeps five real routes, skip target, live status and collapsible 
 });
 test('sidebar owns L1 and L2 navigation while workspace owns L3 tabs', () => {
   assert.match(html, /class="primary-nav"/); assert.match(html, /class="secondary-nav" aria-label="反馈导航"/); assert.match(html, /class="secondary-nav" aria-label="设置导航"/);
-  for (const route of ['feedback/rating/normal', 'feedback/research', 'feedback/rules', 'settings/general/databases', 'settings/models/translation', 'settings/runtime/path', 'settings/automation/radar', 'settings/connections/notifications']) assert.match(html, new RegExp(`data-nav-route="${route}"`));
+  for (const route of ['feedback/rating/normal', 'feedback/research', 'feedback/rules', 'settings/general/databases', 'settings/models/translation', 'settings/runtime/path', 'settings/automation/plan', 'settings/connections/notifications']) assert.match(html, new RegExp(`data-nav-route="${route}"`));
   assert.match(app, /function tertiaryNav/); assert.match(app, /feedback\/rating\/\$\{key\}/); assert.match(app, /function parseRoute/);
   assert.match(app, /\['databases', '文献数据库'/); assert.match(app, /\['rss', 'RSS 订阅'/); assert.match(app, /\['period', '检索周期'/);
   assert.match(app, /settingsView === 'rss' \? 'RSS 订阅状态'/);
   assert.doesNotMatch(app, /className = 'settings-nav'/);
+});
+
+test('daily plan navigation and copy use read-only schedule facts', () => {
+  assert.match(app, /\['plan', '每日计划'/);
+  assert.match(app, /api\('\/api\/schedule-status'\)/);
+  assert.match(app, /timeZone: 'Asia\/Shanghai'/);
+  assert.match(app, /尚未建立周报周期/);
+  assert.match(app, /Radar 未启用/);
+  assert.match(app, /计划状态异常/);
+  assert.match(app, /通知状态：待恢复/);
+  assert.match(app, /每日计划运行暂不支持本地运行路径/);
+  assert.match(app, /非 Weekly 到期日运行/);
+  assert.match(app, /完成时间不会改变下一个周期日期/);
+  assert.doesNotMatch(app, /Agent：运行中|自动任务已启用|下一次 Agent 运行/);
 });
 test('header and favicon reference the same canonical SVG mark', () => {
   assert.match(html, /rel="icon" href="\/paperecho-mark\.svg\?v=2\.4" type="image\/svg\+xml"/);

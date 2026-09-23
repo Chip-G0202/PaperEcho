@@ -32,7 +32,7 @@ Windows 的 `PaperEcho.exe` 是基于系统 .NET Framework 4.x 的小型 C# GUI 
 
 当前 EXE 使用默认 application icon，未签名；正式品牌图标和签名留待分发阶段。v2.4 源码分发仍要求系统已有 Node.js 与项目依赖，完整运行环境打包属于后续 Distribution 版本。
 
-1. **概览**：最近可用 Weekly、可识别的 Radar、最近运行结果、来源与审核数量。无可靠证据的状态显示未知；Zotero 只反映最近写入记录，不表示实时连接正常。
+1. **概览**：每日计划摘要、最近可用 Weekly、可识别的 Radar、最近运行结果、来源与审核数量。无可靠证据的状态显示未知；Zotero 只反映最近写入记录，不表示实时连接正常。
 2. **文献**：当前结果的只读汇总，仅显示 A/B/C 最终等级，点击等级按钮筛选，每页最多 50 篇；D 仍保留在内部工作流，不进入用户界面。英文原始标题在前、中文翻译在后。基于实际运行根的 registered run manifest 查询；Desktop/Web 经过现有 verified-write filter，Local 复用 Local Stage4 筛选规则，不依赖临时 export source。绝不展示 Stage1 全候选池，也不在此页提交反馈。
 3. **研究反馈**：自然语言直接调用共享 evaluation 核心，先保存收据再尝试处理。需要原有 LLM 配置。失败保留输入，显示 blocker；重试相同请求不会重复生成已完成建议。网页不显示 prompt 或 raw LLM response。
 4. **规则建议**：一次审阅一条，点击“接受”“拒绝”直接提交人工决策；“修改后接受”先进入编辑区，再显式提交。不重复弹窗确认，原安全校验仍是正式应用的必要条件。高风险或无可靠 mutation owner 的建议保持 pending，回执说明对应建议、原因与下一步；本次接受意图不代表正式规则已修改。
@@ -88,7 +88,7 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 ## 当前能力边界
 
 - 查询覆盖正式 resolver 选定的 Desktop/Web runtime roots 和 Local output root。未注册历史输出不自动扫描或迁移；不会混入仓库默认根中其他实例的数据。
-- 下一次调度只有在可可靠读取时才应显示；当前显示未知。Weekly 间隔只读，不重写正式 scheduler state。未来系统调度器每天北京时间 15:00 只调用所选 Desktop/Web launcher 的 `--run --scheduled-daily`；Runner/Stage0 按上次成功 Weekly 的计划时隙选择当日 Weekly 或 Radar，系统调度器无需自行分流。本仓库尚未注册系统定时任务。
+- 外部 Agent 每天北京时间 15:00 唤醒 PaperEcho；PaperEcho 自己根据最近成功 Weekly 的计划时隙选择 Radar 或 Weekly。漏跑的历史 Radar 不补跑，Control Center 无需保持打开。自动化“每日计划”只读复用共享调度决策，不显示未经核实的 Agent 任务状态，也不提供周期重置。当前 v2.4 不注册 OS Scheduler；Local 路径不支持 scheduled-daily。
 - 等级复审和 literature overview 使用现有 preference learning 模型配置，不增加第二套模型 owner。
 - 缺少 owner JSON 时设置只显示未初始化；按原配置指南初始化后再使用网页。
 - ConfigService 不提供 arbitrary JSON/path API。PubMed keyword groups 更新由现有 query builder 生成检索式；已有 keyword groups 时直接 query 编辑被拒绝。

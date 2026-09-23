@@ -83,6 +83,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       const cookie = String(req.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
       if (!equal(cookie, session)) return send(403, { error: 'SESSION_REQUIRED' });
       if (req.method === 'GET') {
+        if (decoded === '/api/schedule-status') return send(200, await services.schedule.status());
         if (decoded === '/api/status') return send(200, await services.review.status());
         if (decoded === '/api/weekly') return send(200, await services.review.weekly({ offset: Number(url.searchParams.get('offset') || 0), limit: Number(url.searchParams.get('limit') || 50) }));
         if (decoded === '/api/pending-summary') return send(200, await services.review.pendingSummary());

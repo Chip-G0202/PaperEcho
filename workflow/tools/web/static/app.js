@@ -30,7 +30,7 @@ const settingViews = {
   common: [['databases', '文献数据库', ['Sources']], ['rss', 'RSS 订阅', ['Sources', 'RSS']], ['period', '检索周期', ['General', 'Search']]],
   review: [['translation', '标题翻译', ['Models']], ['preference', '偏好学习', ['Models', 'Ranking / Review']]],
   runtime: [['path', '运行路径', ['Runtime']]],
-  automation: [['radar', 'Daily Radar', ['Radar']], ['weekly', 'Weekly', ['Weekly', 'Integrity']]],
+  automation: [['plan', '每日计划', []], ['radar', 'Daily Radar', ['Radar']], ['weekly', 'Weekly 周报', ['Weekly', 'Integrity']]],
   connections: [['notifications', '通知', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
 };
 function el(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; }
@@ -57,6 +57,64 @@ function contextCard(title, rows) {
   const card = el('aside', undefined, 'context-card'); card.append(el('h3', title));
   for (const row of rows.filter(Boolean)) card.append(el('p', row));
   return card;
+}
+const planTime = (value) => value ? `${new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))} 中国标准时间` : '尚未建立';
+const flowName = (flow) => flow === 'weekly' ? 'Weekly 周报' : flow === 'radar' ? 'Daily Radar' : '待确认';
+function planMessage(plan) {
+  if (plan.status === 'unsupported') return ['每日计划运行暂不支持本地运行路径', '请切换至 Zotero Desktop 或 Zotero Web。', 'settings/runtime/path'];
+  if (plan.status === 'invalid') return ['计划状态异常', 'PaperEcho 已停止自动选择流程，以避免重复运行或错误写入。', plan.reason === 'SCHEDULE_WEEKLY_MODE_INVALID' ? 'settings/automation/weekly' : 'system'];
+  if (plan.currentRun?.state === 'unconfirmed') return ['上次运行结果尚未确认', 'PaperEcho 已暂停开启新的写入流程。', 'system'];
+  if (plan.currentRun?.state === 'recovery_required') return ['需要恢复上次运行', '后续触发将优先处理同一次运行；请查看最近运行结果。', 'system'];
+  if (plan.status === 'radar_disabled') return ['Radar 未启用', '今日计划运行会明确停止，不会自动改跑 Weekly。', 'settings/automation/radar'];
+  if (!plan.weekly.lastSuccessfulPlannedSlot && !plan.currentRun) return ['尚未建立周报周期', '首次计划运行将在下一个合法计划时隙执行 Weekly，并建立七天周期基线。', null];
+  if (plan.status === 'before_slot') return ['尚未到达计划时隙', '计划将在北京时间 15:00 到达；页面不代表外部 Agent 已触发。', null];
+  if (plan.currentRun?.state === 'completed') return ['本次计划流程已完成', '这里显示 PaperEcho 的运行结果，不表示外部 Agent 的任务状态。', null];
+  return ['今日计划已就绪', '如果外部 Agent 在计划时隙调用 PaperEcho，将按当前周期选择流程。', null];
+}
+function planCard(plan, compact = false) {
+  const [headline, explanation, route] = planMessage(plan);
+  const card = el('section', undefined, `card daily-plan${['invalid', 'recovery_required'].includes(plan.status) ? ' daily-plan-warning' : ''}`);
+  card.append(el('h3', '每日计划'), el('p', headline, 'plan-headline'), el('p', explanation, 'meta'));
+  if (plan.status === 'invalid') {
+    const cause = plan.reason === 'SCHEDULE_WEEKLY_MODE_INVALID' ? '周报运行配置不兼容'
+      : plan.reason === 'SCHEDULE_INTERVAL_UNSUPPORTED' ? '周报周期配置不受支持'
+        : plan.reason === 'SCHEDULE_STATE_UNREADABLE' ? '计划记录暂无法读取'
+          : plan.reason?.startsWith('SCHEDULE_DAY_DECISION_') ? '当日计划记录异常' : '计划记录格式或内容不一致';
+    card.append(el('p', `原因：${cause}。`, 'meta'));
+  }
+  if (plan.status !== 'unsupported' && plan.status !== 'invalid') {
+    const value = plan.status === 'before_slot' ? `尚未到时隙 · 预计 ${flowName(plan.today.selectedFlow)}` : flowName(plan.today.selectedFlow);
+    card.append(el('p', `今日计划：${value}`, 'plan-flow'), el('p', `计划时隙：${planTime(plan.today.plannedSlot)}`, 'meta'));
+    if (plan.weekly.nextDuePlannedSlot) card.append(el('p', `下一 Weekly 到期：${planTime(plan.weekly.nextDuePlannedSlot)}`, 'meta'));
+  }
+  if (!compact) {
+    if (route) card.append(button(route === 'settings/runtime/path' ? '前往运行路径' : route === 'settings/automation/radar' ? '前往 Radar 设置' : route === 'settings/automation/weekly' ? '前往 Weekly 设置' : '查看运行状态', () => navigate(route)));
+  } else card.append(button('查看每日计划', () => navigate('settings/automation/plan')));
+  return card;
+}
+async function dailyPlan(body) {
+  const plan = await api('/api/schedule-status');
+  body.append(planCard(plan));
+  if (plan.status === 'unsupported') return;
+  const grid = el('div', undefined, 'grid plan-summary');
+  for (const [title, value] of [['计划时隙', planTime(plan.today.plannedSlot)], ['上次成功周报时隙', planTime(plan.weekly.lastSuccessfulPlannedSlot)], ['下一次 Weekly 到期', planTime(plan.weekly.nextDuePlannedSlot)], ['当前运行路径', ({ desktop: 'Zotero Desktop', web: 'Zotero Web', local: 'Local' })[plan.runtimePath] || '待确认']]) {
+    const item = el('section', undefined, 'card'); item.append(el('h3', title), el('p', value, 'plan-value')); grid.append(item);
+  }
+  body.append(grid);
+  if (plan.currentRun) {
+    const run = el('section', undefined, 'settings-section plan-run');
+    run.append(el('h3', '当前流程状态'), el('p', `计划流程：${flowName(plan.currentRun.flow)}`));
+    const state = { running: '运行中', completed: '已完成', recovery_required: '等待恢复', unconfirmed: '结果尚未确认' }[plan.currentRun.state] || '待确认';
+    run.append(el('p', `运行状态：${state}`));
+    if (plan.currentRun.flow === 'weekly') {
+      run.append(el('p', `周报业务：${plan.currentRun.business === 'completed' ? '已完成' : plan.currentRun.business === 'running' ? '运行中' : '尚未完成'}`));
+      if (plan.currentRun.business === 'completed' && plan.notification === 'pending') run.append(el('p', '通知状态：待恢复。周报主体已成功，不会重新执行检索、入库或导出；通知按现有收据机制恢复。', 'plan-alert'));
+      if (plan.currentRun.business === 'not_completed') run.append(el('p', '周报周期尚未推进；下次计划触发仍将优先处理 Weekly。', 'plan-alert'));
+    }
+    body.append(run);
+  }
+  const context = contextCard('运行机制', ['触发方式：外部 Agent。Agent 只负责按时唤醒 PaperEcho，实际执行哪条流程由 PaperEcho 决定。', 'Weekly 以成功周报的计划时隙为周期基线；Daily Radar 不推进 Weekly 周期，也不补跑历史 Radar。', 'Control Center 无需保持打开。']);
+  body.append(context);
 }
 function keyboardHelp(title, rows, note = '在输入框中输入文字时，快捷键会自动暂停。') {
   const card = el('aside', undefined, 'context-card keyboard-help'); card.append(el('h3', title));
@@ -189,8 +247,9 @@ function gradeEvidence(item) {
   return grades;
 }
 async function home() {
-  const status = await api('/api/status'); const weeklyData = await loadWeekly(); const visibleWeekly = displayablePapers(weeklyData.items); const grades = gradeCounts(visibleWeekly);
+  const [status, schedule, weeklyData] = await Promise.all([api('/api/status'), api('/api/schedule-status'), loadWeekly()]); const visibleWeekly = displayablePapers(weeklyData.items); const grades = gradeCounts(visibleWeekly);
   main.append(pageIntro('研究工作空间', '从最近的文献开始，让每次反馈帮助下一次推荐。'));
+  main.append(planCard(schedule, true));
   const grid = el('div', undefined, 'grid page-summary');
   const date = (value) => value ? new Date(value).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }) : '暂无记录';
   for (const [name, value] of [['最近 Weekly', date(status.lastWeekly)], ['最近 Radar', date(status.lastRadar)], ['本次文献数量', visibleWeekly.length], ['待确认规则建议', status.pendingSuggestions ?? '暂无统计']]) {
@@ -199,7 +258,6 @@ async function home() {
   main.append(grid, el('p', `A级 ${grades.A} · B级 ${grades.B} · C级 ${grades.C} · 待处理反馈 ${visibleWeekly.filter((item) => !item.feedback).length}`, 'overview-summary'));
   const strip = el('div', undefined, 'summary-strip page-summary'); strip.append(el('p', `最近运行：${status.lastRun?.status === 'completed' ? '已完成' : status.lastRun?.status === 'failed' ? '未完成，请检查运行报告' : '暂无可靠状态'}`), el('p', `需人工复核：${status.needsReview ?? '暂无统计'}`)); main.append(strip);
   if (status.integrity) main.append(el('p', `完整性提醒：新撤稿 ${status.integrity.newlyConfirmedRetractions ?? 0} · 更正 ${status.integrity.newCorrections ?? 0} · 关注声明 ${status.integrity.newExpressionsOfConcern ?? 0}`, 'meta'));
-  if (status.nextScheduledRun) main.append(el('p', `下一次运行：${date(status.nextScheduledRun)}`, 'meta'));
   const actions = el('div', undefined, 'actions quick-links page-toolbar'); const review = button('开始文献评级', () => navigate('feedback/rating/normal')); review.className = 'primary'; actions.append(review, button('提交研究方向反馈', () => navigate('feedback/research'))); main.append(actions);
 }
 function empty(title, text) { const box = el('section', undefined, 'empty-state'); box.append(el('h3', title), el('p', text)); main.append(box); }
@@ -545,15 +603,25 @@ function runtimePathOptions(selected, onChange) {
 }
 async function settings(group = settingsGroup, view = settingsView) {
   settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common'; settingsView = view;
-  main.append(pageIntro('工作空间设置', '这里只保留日常最常用的选项；检索词、检索式和底层参数继续由原配置维护。'));
+  const planView = settingsGroup === 'automation' && settingsView === 'plan';
+  main.append(pageIntro(planView ? '每日计划运行' : '工作空间设置', planView
+    ? '外部 Agent 每天北京时间 15:00 唤醒 PaperEcho；PaperEcho 根据最近一次成功周报的计划时隙，选择 Daily Radar 或 Weekly。'
+    : '这里只保留日常最常用的选项；检索词、检索式和底层参数继续由原配置维护。'));
   const data = await api('/api/settings');
   const credentials = await api('/api/credentials');
   const groupPath = { common: 'general', review: 'models', runtime: 'runtime', automation: 'automation', connections: 'connections' }[settingsGroup];
-  const hasContent = ([key, , categories]) => ['translation', 'preference', 'path'].includes(key) || (key === 'credentials' ? credentials.length > 0 : categories.some((category) => data.some((entry) => entry.category === category && visibleSetting(entry) && (category !== 'Models' || entry.id.startsWith(`${key}.`)))));
+  const hasContent = ([key, , categories]) => ['translation', 'preference', 'path', 'plan'].includes(key) || (key === 'credentials' ? credentials.length > 0 : categories.some((category) => data.some((entry) => entry.category === category && visibleSetting(entry) && (category !== 'Models' || entry.id.startsWith(`${key}.`)))));
   const views = settingViews[settingsGroup].filter(hasContent);
   if (!views.some(([key]) => key === settingsView)) settingsView = views[0]?.[0] || settingViews[settingsGroup][0][0];
   if (views.length > 1) main.append(tertiaryNav('设置任务', views.map(([key, title]) => [key, title]), settingsView, `settings/${groupPath}`));
   const body = el('div', undefined, 'settings-body page-content'); main.append(body);
+  if (settingsGroup === 'automation' && settingsView === 'plan') { await dailyPlan(body); return; }
+  if (settingsGroup === 'automation' && settingsView === 'radar') { body.append(el('p', 'Daily Radar 在非 Weekly 到期日运行；Weekly 到期日不会额外运行 Radar。流程由每日计划自动选择。', 'meta'), button('查看每日计划', () => navigate('settings/automation/plan'))); }
+  if (settingsGroup === 'automation' && settingsView === 'weekly') {
+    body.append(el('p', 'Weekly 以最近一次成功周报的计划时隙计算七天周期，完成时间不会改变下一个周期日期。周报日由每日计划自动选择。', 'meta'), button('查看每日计划', () => navigate('settings/automation/plan')));
+    const profile = data.find((entry) => entry.id === 'general.profile');
+    if (profile?.value === 'radar') body.append(el('p', '当前旧运行配置仅指向 Radar，不适用于每日计划。', 'plan-alert'), button('修复为标准周报模式', async () => { await api('/api/settings', { id: 'general.profile', value: 'standard' }); notice.textContent = '周报执行模式已修复，下次运行生效。'; await settings(); }));
+  }
   const appendSettingsControls = (container, entries, saveName, saveLabel = '保存本组', featureToggleIds = [], featureOptions = {}) => {
     const toggleIds = new Set(featureToggleIds); const saves = []; const dependentRows = []; const featureToggles = []; let unavailable = 0;
     const orderedEntries = toggleIds.size ? [...entries].sort((a, b) => Number(toggleIds.has(b.id)) - Number(toggleIds.has(a.id))) : entries;
@@ -678,7 +746,7 @@ async function settings(group = settingsGroup, view = settingsView) {
     const section = el('section', undefined, 'settings-section section'); section.append(el('h3', groupTitle, 'section-header'));
     let entries = data.filter((entry) => entry.category === group && visibleSetting(entry));
     appendSettingsControls(section, entries, groupTitle);
-    if (group === 'Radar') section.append(el('p', '运行时间由系统调度配置维护；此处只控制 Daily Radar 能力是否启用。', 'meta'));
+    if (group === 'Radar') section.append(el('p', '每日计划负责选择流程；此处只控制 Daily Radar 能力是否启用。', 'meta'));
     if (group === 'Credentials') {
       section.append(el('p', '凭据是敏感操作，仍需逐项明确替换或清除；原值永不回显。', 'meta'));
       for (const item of credentials.filter((entry) => entry.id !== 'ZOTERO_API_KEY')) appendCredentialEditor(section, item);
@@ -713,7 +781,7 @@ function parseRoute(hash) {
   if (state.page === 'settings') {
     const groups = { general: 'common', common: 'common', models: 'review', review: 'review', runtime: 'runtime', automation: 'automation', connections: 'connections' };
     state.settingsGroup = groups[section] || 'common';
-    const fallback = { common: 'databases', review: 'translation', runtime: 'path', automation: 'radar', connections: 'notifications' }[state.settingsGroup];
+    const fallback = { common: 'databases', review: 'translation', runtime: 'path', automation: 'plan', connections: 'notifications' }[state.settingsGroup];
     state.settingsView = settingViews[state.settingsGroup].some(([key]) => key === task) ? task : fallback;
   }
   return state;
@@ -722,7 +790,7 @@ function route() {
   if (location.hash === '#content' && main.getAttribute('aria-busy') === 'false') { main.focus(); return; }
   ({ page, feedbackView, reviewSection, settingsGroup, settingsView } = parseRoute(location.hash));
   notice.textContent = ''; document.querySelector('#sidebar').dataset.open = 'false'; document.querySelector('#menu-toggle').setAttribute('aria-expanded', 'false');
-  return render().then(() => (activeReview?.workspace || main).focus());
+  return render().then(() => { window.scrollTo?.(0, 0); (activeReview?.workspace || main).focus({ preventScroll: true }); });
 }
 const defaultRoutes = { feedback: 'feedback/rating/normal', settings: 'settings/general/databases' };
 document.querySelectorAll('[data-page]').forEach((node) => node.addEventListener('click', () => navigate(defaultRoutes[node.dataset.page] || node.dataset.page)));

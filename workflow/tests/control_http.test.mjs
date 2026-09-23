@@ -43,6 +43,11 @@ test('loopback default, Host/Origin/CSRF/session rejection, traversal, CSP and s
   const app = await setup(t);
   assert.equal(app.server.address().address, '127.0.0.1');
   assert.equal((await app.request('/api/settings')).status, 403);
+  assert.equal((await app.request('/api/schedule-status')).status, 403);
+  const schedule = await app.get('/api/schedule-status');
+  assert.equal(schedule.status, 200);
+  assert.equal(schedule.json.timezone, 'Asia/Shanghai');
+  assert.equal(Object.hasOwn(schedule.json, 'runtimeState'), false);
   assert.equal((await app.post('/api/settings', {}, { host: 'evil.example' })).status, 403);
   assert.equal((await app.post('/api/settings', {}, { origin: 'https://evil.example' })).status, 403);
   assert.equal((await app.post('/api/settings', {}, { 'x-csrf-token': '' })).status, 403);

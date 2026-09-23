@@ -269,6 +269,7 @@ test('delivery pages contain no demo entry points or bundled demo data', async (
   assert.doesNotMatch(script, /demoMode|demoPapers|demoRuleSuggestions|radar-demo|weekly-demo|体验示例|查看[^'\n]*示例|示例模式|演示内容/);
   const app = ui(); app.setApi(async (url) => {
     if (url === '/api/status') return {};
+    if (url === '/api/schedule-status') return { status: 'before_slot', today: { plannedSlot: '2026-09-23T07:00:00.000Z', selectedFlow: 'radar' }, weekly: { lastSuccessfulPlannedSlot: '2026-09-21T07:00:00.000Z', nextDuePlannedSlot: '2026-09-28T07:00:00.000Z' } };
     if (url === '/api/settings' || url === '/api/credentials' || url === '/api/suggestions') return [];
     return { runId: 'real-empty', total: 0, items: [] };
   });
@@ -358,7 +359,7 @@ test('email toggle owns its configuration panel and preserves fields while off',
 test('automation switch saves through its owner and updates visible state', async () => {
   const app = ui(); const calls = []; const settings = [{ category: 'Radar', available: true, id: 'radar.enabled', description: '启用 Daily Radar', type: 'boolean', value: false, validation: {} }];
   app.setApi(async (url, value) => { if (url === '/api/credentials') return []; if (!value) return settings; calls.push(value); return { saved: true }; });
-  await app.settings('automation', 'radar'); assert.match(app.main.textContent, /当前已关闭.*由系统调度配置维护/);
+  await app.settings('automation', 'radar'); assert.match(app.main.textContent, /当前已关闭.*每日计划负责选择流程/);
   const toggle = app.main.querySelectorAll('input').find((input) => input.type === 'checkbox'); toggle.checked = true; await byText(app.main, '保存本组').click();
   assert.equal(calls[0].updates[0].id, 'radar.enabled'); assert.match(app.main.textContent, /当前已开启/);
 });
