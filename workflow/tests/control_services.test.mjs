@@ -28,17 +28,17 @@ async function fixture(t) {
 }
 const paper = { doi: '10.1234/example', title: '中文 & 特殊字符 <script> — 文献' };
 
-test('deferred rule decisions persist once across reload without changing formal rules', async (t) => {
+test('unsupported accept fails without recording success; reject remains available', async (t) => {
   const root = await fixture(t);
   const service = new RuleSuggestionService({ reviewRoot: root });
   const file = ruleSuggestionsLogPath(root);
   await fs.writeFile(file, JSON.stringify({ suggestions: [{ id: 'high', status: 'pending', target: 'pubmed_pmc_search.json', risk_level: 'high', rule_text: '删除检索词' }] }));
   const before = await fs.readFile(path.join(root, 'screening_standards.md'), 'utf8');
   const input = { id: 'high', decision: 'accepted', humanApproval: true };
-  await service.decideWithReceipt(input); await service.decideWithReceipt(input);
+  await assert.rejects(service.decideWithReceipt(input), /FORMAL_MUTATION_OWNER_UNVERIFIED/);
   const [item] = await new RuleSuggestionService({ reviewRoot: root }).list();
-  assert.equal(item.status, 'pending'); assert.equal(item.decision_history.length, 1);
-  assert.equal(item.decision_receipt.requested_decision, 'accepted');
+  assert.equal(item.status, 'pending'); assert.equal(item.decision_history, undefined);
+  assert.equal(item.decision_receipt, undefined);
   assert.equal(await fs.readFile(path.join(root, 'screening_standards.md'), 'utf8'), before);
   await service.decideWithReceipt({ ...input, decision: 'rejected' });
   assert.equal((await service.list())[0].decision_receipt, undefined);
@@ -225,11 +225,11 @@ test('failed first runner settings write removes the newly initialized owner', a
   await assert.rejects(service.update('runtime.mode', 'desktop'), /post-write/);
   await assert.rejects(fs.access(path.join(root, 'config', 'paperecho.config.json')), { code: 'ENOENT' });
 });
-test('suggestion accept/reject/revise use formal owner; high-risk and no-apply fail closed', async (t) => {
+test('suggestion accept/reject/revise use formal owner; high-risk add applies and unverified targets fail closed', async (t) => {
   const root = await fixture(t);
   const suggestions = ['a', 'b', 'c', 'd', 'e'].map((id) => ({ id, suggestion_id: id, status: 'pending', target: 'screening_standards.md', change_type: 'add_rule', rule_text: `优先关注 ${id}` }));
-  suggestions[3].change_type = 'delete_rule';
-  suggestions[4].target = 'pubmed_pmc_search.json';
+  suggestions[3].risk_level = 'high'; suggestions[3].decision_receipt = { requested_decision: 'accepted', application_status: 'requires_manual_action' };
+  suggestions[4].target = 'review-workflow-rules.json';
   await fs.writeFile(ruleSuggestionsLogPath(root), JSON.stringify({ suggestions }));
   const service = new RuleSuggestionService({ reviewRoot: root });
   await assert.rejects(service.decide({ id: 'a', decision: 'accepted' }), /APPROVAL/);
@@ -237,13 +237,76 @@ test('suggestion accept/reject/revise use formal owner; high-risk and no-apply f
   await service.decide({ id: 'b', decision: 'rejected', humanApproval: true });
   await service.decide({ id: 'c', decision: 'revised', revisedRule: '修订后的范围', humanApproval: true });
   assert.match(await fs.readFile(path.join(root, 'screening_standards.md'), 'utf8'), /修订后的范围/);
-  for (const id of ['d', 'e']) await assert.rejects(service.decide({ id, decision: 'accepted', humanApproval: true }), /UNVERIFIED/);
+  await service.decide({ id: 'd', decision: 'accepted', humanApproval: true });
+  assert.match(await fs.readFile(path.join(root, 'screening_standards.md'), 'utf8'), /优先关注 d/);
+  assert.equal((await service.list()).find((entry) => entry.id === 'd').decision_receipt, undefined);
+  await assert.rejects(service.decide({ id: 'e', decision: 'accepted', humanApproval: true }), /UNVERIFIED/);
   const blocked = new RuleSuggestionService({ reviewRoot: root, noFormalRuleApply: true });
-  await assert.rejects(blocked.decide({ id: 'd', decision: 'accepted', humanApproval: true }), /NO_FORMAL/);
-  const result = await processUserSuggestionDecisions({ suggestions_table: [['建议ID', '状态'], ['d', 'accept']] }, { reviewRoot: root });
+  await assert.rejects(blocked.decide({ id: 'e', decision: 'accepted', humanApproval: true }), /NO_FORMAL/);
+  const result = await processUserSuggestionDecisions({ suggestions_table: [['建议ID', '状态'], ['e', 'accept']] }, { reviewRoot: root });
   assert.equal(result.receipts[0].status, 'blocked');
   await writeUnifiedPendingRuleSuggestions(ruleSuggestionsLogPath(root), { suggestions });
   assert.equal((await service.list()).find((entry) => entry.id === 'a').status, 'accepted');
+});
+test('accepted deletion, revision and PubMed keyword changes update the formal owners', async (t) => {
+  const root = await fixture(t);
+  const md = path.join(root, 'screening_standards.md');
+  await fs.writeFile(md, '# 标准\n\n## 优先关注\n\n* 旧规则\n* 保留规则\n\n## 相对降权\n');
+  const pubmed = path.join(root, 'config', 'pubmed_pmc_search.json');
+  await fs.writeFile(pubmed, JSON.stringify({ query: '(old OR base)', keyword_groups: { required: [['old', 'base']], optional: ['optional'], negative: [] }, days_back: 10 }));
+  await fs.writeFile(ruleSuggestionsLogPath(root), JSON.stringify({ suggestions: [
+    { id: 'delete', status: 'pending', target: 'screening_standards.md', change_type: 'delete_rule', risk_level: 'high', rule_text: '旧规则' },
+    { id: 'revise', status: 'pending', target: 'screening_standards.md', change_type: 'revise_rule', rule_text: '将“保留规则”修改为“优先关注临床机制研究”' },
+    { id: 'revise2', status: 'pending', target: 'screening_standards.md', change_type: 'revise_rule', rule_text: '将“优先关注临床机制研究”修改为“优先关注临床研究”' },
+    { id: 'keyword', status: 'pending', target: 'pubmed_pmc_search.json', change_type: 'add_keyword', risk_level: 'high', rule_text: '添加必含检索词：新词' },
+    { id: 'remove', status: 'pending', target: 'pubmed_pmc_search.json', change_type: 'remove_keyword', risk_level: 'high', rule_text: '移除检索词：optional' },
+  ] }));
+  const service = new RuleSuggestionService({ reviewRoot: root, pubmedConfigPath: pubmed });
+  for (const id of ['delete', 'revise', 'keyword', 'remove']) {
+    const receipt = await service.decide({ id, decision: 'accepted', humanApproval: true });
+    assert.equal(receipt.application_status, 'applied'); assert.equal(receipt.formal_rules_modified, true);
+  }
+  assert.equal((await service.decide({ id: 'revise2', decision: 'revised', revisedRule: '优先关注临床转化研究', humanApproval: true })).application_status, 'applied');
+  const text = await fs.readFile(md, 'utf8');
+  assert.doesNotMatch(text, /旧规则|保留规则|优先关注临床机制研究/); assert.match(text, /优先关注临床转化研究/);
+  const search = JSON.parse(await fs.readFile(pubmed, 'utf8'));
+  assert.equal(search.days_back, 10);
+  assert.deepEqual(search.keyword_groups.required, [['old', 'base'], ['新词']]);
+  assert.deepEqual(search.keyword_groups.optional, []);
+  assert.match(search.query, /新词/);
+  assert.equal((await service.list()).filter((item) => item.status === 'accepted').length, 4);
+  assert.equal((await service.list()).find((item) => item.id === 'revise2').status, 'revised');
+});
+test('ambiguous or custom search changes never mark suggestions accepted', async (t) => {
+  const root = await fixture(t);
+  const pubmed = path.join(root, 'config', 'pubmed_pmc_search.json');
+  await fs.writeFile(pubmed, JSON.stringify({ query: 'custom query', keyword_groups: { required: [['old']], optional: [], negative: [] } }));
+  await fs.writeFile(ruleSuggestionsLogPath(root), JSON.stringify({ suggestions: [
+    { id: 'missing', status: 'pending', target: 'screening_standards.md', change_type: 'delete_rule', rule_text: '不存在的规则' },
+    { id: 'custom', status: 'pending', target: 'pubmed_pmc_search.json', change_type: 'add_keyword', rule_text: '添加必含检索词：新词' },
+  ] }));
+  const service = new RuleSuggestionService({ reviewRoot: root, pubmedConfigPath: pubmed });
+  const before = await fs.readFile(pubmed, 'utf8');
+  await assert.rejects(service.decide({ id: 'missing', decision: 'accepted', humanApproval: true }), /EXACT_MATCH/);
+  await assert.rejects(service.decide({ id: 'custom', decision: 'accepted', humanApproval: true }), /CUSTOM_UNVERIFIED/);
+  assert.equal(await fs.readFile(pubmed, 'utf8'), before);
+  assert.equal((await service.list()).filter((item) => item.status === 'pending').length, 2);
+});
+test('substring duplicate and atomic write failure cannot falsely accept a rule', async (t) => {
+  const root = await fixture(t);
+  const md = path.join(root, 'screening_standards.md');
+  await fs.writeFile(md, '# 标准\n\n## 优先关注\n\n* 优先关注临床机制研究\n\n## 相对降权\n');
+  await fs.writeFile(ruleSuggestionsLogPath(root), JSON.stringify({ suggestions: [
+    { id: 'substring', status: 'pending', target: 'screening_standards.md', change_type: 'add_rule', rule_text: '优先关注临床机制' },
+    { id: 'atomic', status: 'pending', target: 'screening_standards.md', change_type: 'add_rule', rule_text: '优先关注组学研究' },
+  ] }));
+  const before = await fs.readFile(md, 'utf8');
+  const service = new RuleSuggestionService({ reviewRoot: root });
+  await assert.rejects(service.decide({ id: 'substring', decision: 'accepted', humanApproval: true }), /FORMAL_RULE_APPLY_FAILED/);
+  const failing = new RuleSuggestionService({ reviewRoot: root, atomicOptions: { renameImpl: async () => { throw new Error('injected'); } } });
+  await assert.rejects(failing.decide({ id: 'atomic', decision: 'accepted', humanApproval: true }), /injected/);
+  assert.equal(await fs.readFile(md, 'utf8'), before);
+  assert.equal((await service.list()).filter((item) => item.status === 'pending').length, 2);
 });
 test('text and DOCX evaluation share proposal core, text never changes DOCX', async (t) => {
   const root = await fixture(t);

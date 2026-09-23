@@ -176,17 +176,17 @@ test('manual review failure stays on the paper and editor focus suppresses direc
   const textarea = new Element('textarea'); const event = await key(work(app.main), '2', textarea); assert.equal(event.defaultPrevented, undefined); assert.equal(calls.length, 0);
   await byText(app.main, 'C 3').click(); assert.equal(currentTitle(app.main), title); assert.equal(items[0].manualGrade, undefined); assert.match(app.main.textContent, /当前文献未前进/);
 });
-test('rule focused queue has no confirm; high risk receipt visible, edit mode suppresses shortcuts', async () => {
-  const app = ui(); const rows = [{ id: 'high', status: 'pending', risk_level: 'high', target: 'pubmed_pmc_search.json', rule_text: '高风险检索建议' }, { id: 'low', status: 'pending', risk_level: 'low', rule_text: '机制研究' }]; const calls = [];
-  app.setApi(async (url, payload) => { if (!payload) return rows; calls.push(payload); return payload.id === 'high' ? { status: 'pending', application_status: 'requires_manual_action', explanation: '安全门禁未通过', next_action: '人工核对范围' } : { status: payload.decision }; });
+test('rule focused queue retries an old unapplied receipt; successful accept applies and editor suppresses shortcuts', async () => {
+  const app = ui(); const rows = [{ id: 'high', status: 'pending', risk_level: 'high', target: 'pubmed_pmc_search.json', rule_text: '添加必含检索词：机制', can_apply: true, decision_receipt: { application_status: 'requires_manual_action' } }, { id: 'low', status: 'pending', risk_level: 'low', rule_text: '机制研究', can_apply: true }]; const calls = [];
+  app.setApi(async (url, payload) => { if (!payload) return rows; calls.push(payload); return { status: payload.decision, application_status: 'applied' }; });
   await app.suggestions(); assert.equal(app.main.querySelectorAll('article').length, 1);
-  await byText(app.main, '接受 1').click(); assert.equal(calls[0].humanApproval, true); assert.equal(rows[0].status, 'pending'); assert.match(app.main.textContent, /已记录，待应用/); assert.equal(currentTitle(app.main), rows[1].rule_text);
-  await key(work(app.main), 'ArrowUp'); assert.match(app.main.textContent, /正式规则尚未改变/);
+  await byText(app.main, '接受 1').click(); assert.equal(calls[0].humanApproval, true); assert.equal(rows[0].status, 'accepted'); assert.match(app.main.textContent, /已写入正式规则/); assert.equal(currentTitle(app.main), rows[1].rule_text);
+  await key(work(app.main), 'ArrowUp'); assert.match(app.main.textContent, /已处理/);
   await key(work(app.main), 'ArrowDown'); await key(work(app.main), '3');
   assert.ok(work(app.main).querySelector('textarea'));
   await key(work(app.main), '1'); await key(work(app.main), 'ArrowUp'); assert.equal(calls.length, 1); assert.equal(currentTitle(app.main), rows[1].rule_text);
   await byText(app.main, '提交修改并接受').click(); assert.equal(calls[1].decision, 'revised'); assert.equal(rows[1].status, 'revised');
-  await key(work(app.main), 'ArrowUp'); await byText(app.main, '拒绝 2').click(); assert.equal(calls.at(-1).decision, 'rejected');
+  await key(work(app.main), 'ArrowUp'); assert.equal(rows[0].status, 'accepted');
 });
 test('route parser restores L1/L2/L3 state and Settings keeps credentials write-only', async () => {
   const app = ui(); app.setApi(async (url) => url === '/api/credentials' ? [{ id: 'SMTP_PASS', configured: true, writable: true }] : [{ category: 'General', available: true, id: 'mode', description: '运行模式', type: 'enum', value: 'local', validation: { values: ['local', 'desktop'] } }, { category: 'Sources', available: true, id: 'source', description: '启用来源', type: 'boolean', value: true, validation: {} }]);

@@ -35,7 +35,7 @@ Windows 的 `PaperEcho.exe` 是基于系统 .NET Framework 4.x 的小型 C# GUI 
 1. **概览**：今日任务摘要、最近可用周报、可识别的 Radar、最近运行结果、来源与审核数量。无可靠证据的状态显示未知；Zotero 只反映最近写入记录，不表示实时连接正常。
 2. **文献**：当前结果的只读汇总，仅显示 A/B/C 最终等级，点击等级按钮筛选，每页最多 50 篇；D 仍保留在内部工作流，不进入用户界面。英文原始标题在前、中文翻译在后。基于实际运行根的 registered run manifest 查询；Desktop/Web 经过现有 verified-write filter，Local 复用 Local Stage4 筛选规则，不依赖临时 export source。绝不展示 Stage1 全候选池，也不在此页提交反馈。
 3. **研究反馈**：自然语言直接调用共享 evaluation 核心，先保存收据再尝试处理。需要原有 LLM 配置。失败保留输入，显示 blocker；重试相同请求不会重复生成已完成建议。网页不显示 prompt 或 raw LLM response。
-4. **规则建议**：一次审阅一条，点击“接受”“拒绝”直接提交人工决策；“修改后接受”先进入编辑区，再显式提交。不重复弹窗确认，原安全校验仍是正式应用的必要条件。高风险或无可靠 mutation owner 的建议保持 pending，回执说明对应建议、原因与下一步；本次接受意图不代表正式规则已修改。
+4. **规则建议**：一次审阅一条，点击“接受”“拒绝”直接提交人工决策；“修改后接受”先进入编辑区，再显式提交。不重复弹窗确认。接受成功即表示正式规则或检索配置已写入并核验，下一次运行会读取；高风险仍须通过精确定位、校验、备份和人工确认。无法安全定位的建议会明确报错并保持 pending，不会显示为已接受。
 5. **设置**：常用设置、模型与审阅、运行路径、自动化、连接与通知作为主 Sidebar 内的二级导航。长期交互契约是“选择器或开关 → 当前能力专属配置 → 保存 → 状态”；能力参数不完整时开关仍可操作，启用不等于已就绪，关闭不会清空配置。工作台隐藏研究领域、检索词、检索式、运行 profile 和高级底层参数；标题翻译有独立开关，等级复审与 LLM 偏好学习由一个产品开关协调，并同步正式总开关与两个子开关。v2.3 已通过 `TITLE_TRANSLATION_CONFIG_PATH` / `PREFERENCE_LEARNING_CONFIG_PATH` 选择模型配置文件时，工作台读取和保存同一 owner，不另写默认文件。Local、Zotero Desktop、Zotero Web 三条真实路径互斥，只显示所选路径需要的字段，无关字段不得跨模式出现；Zotero Web 页面默认使用个人文库并要求数字 User ID，官方 API base 与 v3 版本由内部管理，API Key 与 Desktop 设置分离。普通设置按组原子保存，空替换值表示保持原值；secret 仅显示配置状态并提供明确配置、替换和清除入口，永不回显原值。
 
 ## 反馈语义与存储
@@ -92,9 +92,9 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 - 等级复审和 literature overview 使用现有 preference learning 模型配置，不增加第二套模型 owner。
 - 缺少 owner JSON 时设置只显示未初始化；按原配置指南初始化后再使用网页。
 - ConfigService 不提供 arbitrary JSON/path API。PubMed keyword groups 更新由现有 query builder 生成检索式；已有 keyword groups 时直接 query 编辑被拒绝。
-- 安全 apply 当前仅支持正文追加及修订后追加。高风险、删除、已有规则替换、搜索关键词 suggestion、其他 target mutation 保持 pending；网页的接受或修改选择原子记录在原建议日志的 `decision_receipt`，刷新后仍可看到“已记录，待应用”，不重复计入待确认数。正式规则尚未改变；可以拒绝建议，或通过现有规则/检索配置维护流程人工核对范围、验证和备份。旧建议原文若含占位符、乱码或英文长句，须修改为清晰中文或拒绝；新建议在入队前过滤这些内容。
+- 安全 apply 支持筛选标准正文追加、精确删除、精确替换，以及明确的 PubMed 必含／可选／排除词添加和精确移除。高风险不因风险标签单独禁止，但必须通过人工确认、目标白名单、精确匹配、配置一致性、备份、原子写入和回读核验。无法确定删除目标、存在自定义检索式冲突、或其他 target/change type 没有可靠 owner 时，接受请求失败且建议保持 pending。旧版未应用 `decision_receipt` 仍可在网页重试，成功后清除；旧建议原文若含占位符、乱码或英文长句，须修改为清晰中文或拒绝，新建议在入队前过滤这些内容。
 - Credentials 支持 configured/not configured、Replace、Clear；覆盖 TITLE_TRANSLATION_API_KEY、PREFERENCE_LEARNING_API_KEY、EASYSCHOLAR_SECRET_KEY、SMTP_PASS、ZOTERO_API_KEY。Configured 不等于连接有效。没有可复用的安全连接测试 owner，因此 Test 未开放。不提供 raw secret GET，不创建 credential vault。
-- 低风险规则正文变更先保存固定 `.backup`，再原子替换正文；日志写入失败时恢复正文。进程在正文提交后中断、决策日志提交前中断时，pending 保留，重试经已有 duplicate guard 不重复追加。
+- 正式规则或检索配置变更先保存固定 `.backup`，再原子替换并回读；日志写入失败时恢复原文件。进程在正式文件提交后、决策日志提交前中断时，pending 保留；追加规则经 duplicate guard 不重复写入，删除／替换／检索词等精确变更需核对已生效内容后处理。
 
 这些边界不能统一等同于“v2.4 未完成”：安全限制、明确非目标和可推迟增强均不阻塞发布。发布判断应仅依据下方核心路径差距。没有 tag、release 或自动更新切换。
 
@@ -111,7 +111,7 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 | 模型能力共享 owner | 等级复审、overview 复用 preference learning 模型配置 | 常用模型可修改，不需要为每个能力制造独立配置 | B. Accepted safety boundary |
 | 缺失配置文件的初始化 | 显示未初始化，首次按原配置指南准备文件 | 初次安装配置入口未统一；已有 v2.3 项目的日常设置不因此缺失。不会自动选择或切换运行模式 | D. Deferred enhancement |
 | Config Registry 和检索式 owner | 固定字段白名单；keyword groups 存在时通过词组控件生成 PubMed query | 模型、sources、搜索、RSS、review、Radar、Weekly、Integrity、Zotero、邮件均有常用控件；拒绝任意 JSON/path 编辑不阻断正常设置 | B. Accepted safety boundary |
-| 高风险／删除／搜索建议 | 保持 pending，返回 requires_manual_action、target、risk、原因和下一步 | 普通建议可接受、拒绝、修订；危险变更不自动应用是明确安全策略，不是按钮失败 | B. Accepted safety boundary |
+| 高风险／删除／搜索建议 | 有明确 owner 且通过精确校验时，接受后立即写入正式文件；否则保持 pending 并返回错误 | 安全门槛仍有效，不能把未应用意向显示为已接受 | B. Accepted safety boundary |
 | Credentials Test／原值读取 | 五类本地凭据可 Replace/Clear；Test 未开放，原值永不返回 | UI 明示 Configured 不等于连接成功；缺少安全 test owner 不影响凭据维护 | B. Accepted safety boundary |
 | 外部凭据和 env 格式 | 外部覆盖只读；含糊格式、重复 key、非 allowlist 值拒绝写入 | 支持格式的本地凭据可维护；避免破坏外部注入、其他 entries 或泄露 secret | B. Accepted safety boundary |
 | 规则两文件崩溃恢复 | 正文／日志分别原子写入；失败回滚，崩溃后保留 pending，经 duplicate guard 重试 | 不误报正式应用成功，不重复添加；保留既有物理 owner | B. Accepted safety boundary |

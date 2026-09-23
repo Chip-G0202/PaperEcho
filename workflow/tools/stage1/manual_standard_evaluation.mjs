@@ -369,7 +369,7 @@ async function processResearchEvaluationInput({
   const resolvedSuggestionsLogPath = ruleSuggestionsLogPath(reviewRoot);
   let userDecisionResult = { decisions: [], log: null };
   try {
-    userDecisionResult = await processUserSuggestionDecisions(parsed, { reviewRoot, logPath: resolvedSuggestionsLogPath, noFormalRuleApply: modeConfig.no_formal_rule_apply });
+    userDecisionResult = await processUserSuggestionDecisions(parsed, { reviewRoot, logPath: resolvedSuggestionsLogPath, pubmedConfigPath, noFormalRuleApply: modeConfig.no_formal_rule_apply });
     audit.suggestion_decision_receipts = userDecisionResult.receipts || [];
     if (userDecisionResult.decisions.length) {
       const decisionSync = syncSuggestionsToScreeningStandardsMd(

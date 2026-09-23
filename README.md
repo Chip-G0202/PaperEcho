@@ -24,7 +24,7 @@ PaperEcho 不替代研究者作出判断。它负责整理不断传来的文献�
 
 推荐通过本地 **PaperEcho Control Center** 浏览最近 Weekly、提交论文反馈和研究评价、处理规则建议与管理常用设置。Windows 在项目目录双击 **PaperEcho.exe**；macOS 双击 **PaperEcho.app**。启动器等待服务就绪后打开默认浏览器，再次双击复用同一工作区实例。仍需已安装 Node.js 18+ 和项目依赖；macOS 包装当前仅通过静态检查，Finder 实机验证待完成。诊断入口及关闭方法见 [启动说明](docs/control-center.md#启动与使用)。
 
-XLSX、`screening_standards.docx` 和直接配置编辑继续作为兼容入口。Credentials 支持本地凭据状态、替换和清除；高风险建议在没有安全 apply owner 时保持待确认，并说明未应用原因及人工处理方式。使用范围与升级边界见 [Control Center 使用与兼容说明](docs/control-center.md)。
+XLSX、`screening_standards.docx` 和直接配置编辑继续作为兼容入口。Credentials 支持本地凭据状态、替换和清除；规则建议只有在正式文件写入成功后才显示为已接受，无法安全定位的变更仍待确认。使用范围与升级边界见 [Control Center 使用与兼容说明](docs/control-center.md)。
 
 ### v2.3 稳定基线
 

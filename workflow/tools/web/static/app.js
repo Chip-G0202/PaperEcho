@@ -157,7 +157,7 @@ function pendingPaperCounts(items = []) {
     manual: visible.filter((item) => item.needsReview && item.feedbackAllowed && !item.manualGrade).length,
   };
 }
-const pendingRuleCount = (rows = []) => rows.filter((entry) => ['pending', 'candidate'].includes(entry.status) && !entry.decision_receipt).length;
+const pendingRuleCount = (rows = []) => rows.filter((entry) => ['pending', 'candidate'].includes(entry.status)).length;
 async function loadPendingSummary() { return api('/api/pending-summary'); }
 function completionPlan(kind, counts = { normal: 0, manual: 0, rules: 0 }) {
   const values = { normal: Number(counts.normal || 0), manual: Number(counts.manual || 0), rules: Number(counts.rules || 0) };
@@ -411,30 +411,29 @@ async function suggestions(showIntro = true) {
     return item.content_issue ? '这条旧建议内容不完整，请修改或拒绝。' : raw || '待确认变更';
   };
   const rationaleText = (item) => String(item.rationale || '').startsWith('Proposed ') ? '根据研究方向评价提出，待确认。' : item.rationale || '未提供';
-  const queue = createReviewQueue(rows, (item) => !pending(item) || decisionReceipts.has(idOf(item)), pending);
+  const queue = createReviewQueue(rows, (item) => !pending(item), pending);
   let editing = false; let draft = ''; let message = ''; let messageKind = 'success';
   const workspace = el('section', undefined, 'review-workspace page-content document-column'); workspace.tabIndex = -1; workspace.setAttribute('aria-label', '规则建议审阅工作区'); const context = el('div'); main.append(workspaceColumns([workspace], [context]));
   const draw = (focus = false) => {
     workspace.replaceChildren();
     const item = rows[queue.index]; const id = idOf(item); const receipt = decisionReceipts.get(id);
     context.replaceChildren(
-      contextCard('建议概览', [`待确认 ${pendingRuleCount(rows)} 条`, `当前风险：${riskLabels[item.risk_level] || '待核对'}`, '你的选择会自动保存；生效情况可在详情查看。']),
+      contextCard('建议概览', [`待确认 ${pendingRuleCount(rows)} 条`, `当前风险：${riskLabels[item.risk_level] || '待核对'}`, '接受成功后立即写入正式规则，下一次运行会读取。']),
       keyboardHelp('数字键快速处理', [['1', '接受当前建议'], ['2', '拒绝当前建议'], ['3', '修改当前建议'], ['↑', '返回上一条'], ['↓', '前往下一条']], '可使用主键盘或小键盘数字键；编辑建议时快捷键会自动暂停。'),
     );
-    workspace.append(el('p', `共 ${rows.length} 条 · 待确认 ${pendingRuleCount(rows)} · 已记录选择 ${rows.filter((entry) => decisionReceipts.has(idOf(entry))).length} 条`, 'queue-progress'));
+    workspace.append(el('p', `共 ${rows.length} 条 · 待确认 ${pendingRuleCount(rows)}`, 'queue-progress'));
     if (message) { const state = el('p', message, `queue-receipt ${messageKind}`); state.setAttribute('role', 'status'); workspace.append(state); }
     const card = el('article', undefined, 'focused-card rule-card');
     const badges = el('div', undefined, 'badge-row'); badges.append(el('span', statusLabels[item.status] || '状态未提供', 'badge'), el('span', `风险：${riskLabels[item.risk_level] || '待核对'}`, item.risk_level === 'high' ? 'badge warning' : 'badge'));
     card.append(badges, el('h3', ruleTitle(item)), el('p', `目标：${({ 'screening_standards.md': '长期筛选标准', 'pubmed_pmc_search.json': 'PubMed 检索条件', 'openalex_search.json': 'OpenAlex 检索条件' })[item.target] || '待核对配置'}`), el('p', `建议理由：${rationaleText(item)}`));
     if (pending(item) && item.content_issue) card.append(el('p', '旧建议原文需要核对。请修改为清晰中文，或拒绝。', 'meta'));
     const details = el('details'); details.append(el('summary', '查看依据与技术详情'), el('p', item.evidence_text_excerpt || (item.evidence_titles || []).join('；') || '没有附加证据。'), el('p', `编号：${id} · 目标：${item.target || 'screening_standards.md'} · 变更类型：${item.change_type || 'add_rule'}`, 'meta')); card.append(details);
-    if (receipt?.application_status === 'requires_manual_action') {
-      card.append(el('p', '已记录，待应用。无需重复提交。', 'meta'));
-      details.append(el('p', '这次选择已保存，正式规则尚未改变。'), el('p', receipt.explanation), el('p', receipt.next_action));
-    } else card.append(el('p', pending(item) ? '选择后自动保存。' : '已记录。', 'meta'));
+    if (receipt?.application_status === 'requires_manual_action' && pending(item)) card.append(el('p', '此前的接受意向未应用。可再次接受以尝试写入，或拒绝。', 'meta'));
+    else card.append(el('p', pending(item) ? '接受成功后立即写入正式规则。' : '已处理。', 'meta'));
+    if (pending(item) && !item.can_apply) card.append(el('p', '此建议没有可验证的自动写入位置，无法接受；可拒绝。', 'meta'));
     const actions = el('div', undefined, 'actions feedback-actions');
     for (const [action, text] of [['accepted', '接受 1'], ['rejected', '拒绝 2'], ['edit', '修改后接受 3']]) {
-      const control = button(text, () => choose(action)); control.disabled = queue.busy || !pending(item) || editing || (action === 'accepted' && Boolean(item.content_issue)); control.setAttribute('aria-pressed', String((receipt?.requested_decision || item.status) === (action === 'edit' ? 'revised' : action))); actions.append(control);
+      const control = button(text, () => choose(action)); control.disabled = queue.busy || !pending(item) || editing || (action !== 'rejected' && (!item.can_apply || (action === 'accepted' && Boolean(item.content_issue)))); control.setAttribute('aria-pressed', String(item.status === (action === 'edit' ? 'revised' : action))); actions.append(control);
     }
     card.append(actions);
     if (editing) {
@@ -449,13 +448,14 @@ async function suggestions(showIntro = true) {
   };
   const choose = async (action) => {
     const item = rows[queue.index]; if (queue.busy || !pending(item)) return;
+    if (action !== 'rejected' && !item.can_apply) { message = '这条建议没有安全的自动写入位置，可拒绝；正式规则未修改。'; messageKind = 'error'; draw(true); return; }
     if (action === 'accepted' && item.content_issue) { message = '这条建议内容异常，请修改为中文或拒绝。'; messageKind = 'error'; draw(true); return; }
-    if (action === 'edit') { editing = true; draft = item.content_issue ? (ruleTitle(item).startsWith('这条旧建议') ? '' : ruleTitle(item)) : item.rule_text || item.suggested_rule || ''; draw(true); return; }
+    if (action === 'edit') { editing = true; const original = item.rule_text || item.suggested_rule || ''; const revision = item.change_type === 'revise_rule' ? /^将“[^”]+”修改为“([^”]+)”$/.exec(original) : null; draft = revision ? revision[1] : item.content_issue ? (ruleTitle(item).startsWith('这条旧建议') ? '' : ruleTitle(item)) : original; draw(true); return; }
     if (action === 'revised' && !draft.trim()) { message = '请填写修改后的建议内容。'; messageKind = 'error'; draw(true); return; }
-    const pendingBefore = rows.filter((entry) => pending(entry) && !decisionReceipts.has(idOf(entry))).length;
+    const pendingBefore = rows.filter(pending).length;
     const work = queue.submit(action + (action === 'revised' ? ':' + draft : ''),
       (entry) => api('/api/decision', { id: idOf(entry), decision: action, revisedRule: action === 'revised' ? draft : '', humanApproval: true }),
-      (entry, result) => { entry.status = result.status; if (action === 'revised') entry.rule_text = draft; if (result.application_status === 'requires_manual_action') entry.decision_receipt = result; decisionReceipts.set(idOf(entry), { ...result, requested_decision: action }); });
+      (entry, result) => { entry.status = result.status; if (action === 'revised') entry.rule_text = draft; delete entry.decision_receipt; decisionReceipts.delete(idOf(entry)); });
     draw();
     let saved = null;
     try {
@@ -463,13 +463,26 @@ async function suggestions(showIntro = true) {
       if (saved) {
         editing = false;
         messageKind = 'success';
-        message = saved.result.application_status === 'requires_manual_action'
-          ? '已记录，待应用。'
-          : action === 'rejected' ? '已记录：拒绝。' : '已记录，已生效。';
+        message = action === 'rejected' ? '已记录：拒绝。' : '已写入正式规则，下一次运行会读取。';
       }
-    } catch (error) { message = error.message === 'SUGGESTION_CONTENT_INVALID' ? '建议内容需使用清晰中文，请修改后再提交。' : error.message + ' 当前建议未前进，请重试。'; messageKind = 'error'; }
+    } catch (error) {
+      const explanations = {
+        SUGGESTION_CONTENT_INVALID: '建议内容需使用清晰中文，请修改后再提交。',
+        FORMAL_RULE_EXACT_MATCH_REQUIRED: '无法在正式规则中唯一定位这条原规则，请核对原文。',
+        FORMAL_RULE_REVISION_UNCLEAR: '这条修改建议没有明确写出原规则与新规则。',
+        SEARCH_MUTATION_UNCLEAR: '检索词建议缺少明确的操作或词语，请修改后再提交。',
+        SEARCH_TERM_EXACT_MATCH_REQUIRED: '无法在当前检索配置中唯一定位该词，请核对。',
+        SEARCH_TERM_ALREADY_PRESENT: '该检索词已存在，请核对当前配置。',
+        SEARCH_REQUIRED_TERMS_EMPTY: '不能移除最后一组必含检索词。',
+        SEARCH_QUERY_CUSTOM_UNVERIFIED: '当前检索式含自定义内容，无法安全自动改写。',
+        FORMAL_MUTATION_OWNER_UNVERIFIED: '此类变更没有安全的自动写入位置。',
+        NO_FORMAL_RULE_APPLY: '当前运行策略禁止修改正式规则。',
+      };
+      message = `正式规则未修改：${explanations[error.message] || '请核对建议内容与配置后重试。'}`;
+      messageKind = 'error';
+    }
     draw(true);
-    const pendingAfter = rows.filter((entry) => pending(entry) && !decisionReceipts.has(idOf(entry))).length;
+    const pendingAfter = rows.filter(pending).length;
     if (saved && pendingBefore > 0 && pendingAfter === 0) showCompletionModal(completionPlan('rules', await loadPendingSummary()));
   };
   bindReview(workspace, 'rules', queue, draw, choose, () => editing); draw();

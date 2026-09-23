@@ -16,7 +16,7 @@ export function createControlServices({ root, reviewRoot, env = process.env, llm
   reviewRoot ||= context.reviewRoot;
   env = context.env || env;
   const secrets = new SecretService({ root, env });
-  const rules = new RuleSuggestionService({ reviewRoot });
+  const rules = new RuleSuggestionService({ reviewRoot, root });
   const config = new ConfigService({ root, env, configPath: context.configPath, runtimeMode: context.mode });
   const feedback = new FeedbackService({
     reviewRoot,

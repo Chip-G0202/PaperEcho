@@ -36,9 +36,9 @@ function defaultPubmedConfigPath(reviewRoot) {
   return path.join(path.dirname(path.dirname(reviewRoot)), "config", "pubmed_pmc_search.json");
 }
 
-export async function processUserSuggestionDecisions(parsedDocx, { reviewRoot, logPath, noFormalRuleApply = false } = {}) {
+export async function processUserSuggestionDecisions(parsedDocx, { reviewRoot, logPath, pubmedConfigPath, noFormalRuleApply = false } = {}) {
   if (logPath && path.resolve(logPath) !== path.resolve(ruleSuggestionsLogPath(reviewRoot))) throw new Error('SUGGESTION_LOG_OWNER_MISMATCH');
-  const service = new RuleSuggestionService({ reviewRoot, noFormalRuleApply });
+  const service = new RuleSuggestionService({ reviewRoot, pubmedConfigPath: pubmedConfigPath || defaultPubmedConfigPath(reviewRoot), noFormalRuleApply });
   const receipts = [];
   for (const row of suggestionObjectsFromTable(parsedDocx?.suggestions_table)) {
     const status = normalizeSuggestionStatus(row.status).status;
