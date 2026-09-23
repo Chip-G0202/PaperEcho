@@ -8,6 +8,7 @@ import { loadSourceSelectionConfig } from './literature_config.mjs';
 import { buildRuntimeConfig } from './runtime_config.mjs';
 import { buildLocalStage4ExportSource } from '../stage4/export_source_step.mjs';
 import { getWeeklyReviewEvidence } from '../stage4/spreadsheet_adapter.mjs';
+import { listPendingPaperReview } from './pending_paper_review.mjs';
 
 const inside = (root, candidate) => { const rel = path.relative(root, candidate); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
 export class ReviewQueryService {
@@ -72,9 +73,26 @@ export class ReviewQueryService {
     }
     return null;
   }
+  async reviewData() {
+    const weekly = await this.latestWeeklyData();
+    const current = await this.feedback.current();
+    const queued = this.localRepository ? [] : await listPendingPaperReview({ reviewRoot: this.reviewRoot, current });
+    const admittedKeys = new Set((weekly?.items || []).flatMap((item) => {
+      try { return feedbackIdentity(item); } catch { return []; }
+    }));
+    const pending = queued.filter((item) => {
+      const keys = feedbackIdentity(item).filter((key) => !key.startsWith('review:'));
+      return !keys.some((key) => admittedKeys.has(key));
+    });
+    if (!weekly && !pending.length) return null;
+    return {
+      ...(weekly || { run: { runId: 'pending-review' }, report: {}, writeback: null, items: [] }),
+      items: [...(weekly?.items || []), ...pending],
+    };
+  }
   async weekly({ offset = 0, limit = 50 } = {}) {
     if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error('PAGINATION_INVALID');
-    const data = await this.latestWeeklyData();
+    const data = await this.reviewData();
     if (!data) return { runId: null, total: 0, items: [] };
     const current = await this.feedback.current();
     const items = data.items.slice(offset, offset + limit).map((item, index) => {
@@ -89,7 +107,8 @@ export class ReviewQueryService {
         authors: (Array.isArray(item.authors) ? item.authors : [item.authors || '']).map((author) => typeof author === 'string' ? author : [author?.firstName, author?.lastName].filter(Boolean).join(' ')), journal: String(item.journal || item.publicationTitle || ''), year: String(item.year || ''),
         doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), source: String(item.source || item.source_type || ''),
         ...evidence,
-        grade: evidence.finalGrade, zotero: this.localRepository ? 'not_used_local' : 'admitted',
+        grade: evidence.finalGrade, zotero: item.pending_review_id ? 'not_written' : this.localRepository ? 'not_used_local' : 'admitted',
+        pendingReview: Boolean(item.pending_review_id),
         abstract: typeof item.abstract === 'string' ? item.abstract : '',
         integrity: item.integrity_status || null,
         feedback: currentEntry?.value || null,
@@ -99,7 +118,7 @@ export class ReviewQueryService {
     return { runId: data.run.runId, total: data.items.length, items };
   }
   async resolvePaper(runId, id) {
-    const data = await this.latestWeeklyData();
+    const data = await this.reviewData();
     if (!data || data.run.runId !== runId) throw new Error('WEEKLY_CHANGED_RELOAD');
     const matches = data.items.filter((item, index) => {
       let keys = []; try { keys = feedbackIdentity(item); } catch {}
@@ -116,9 +135,9 @@ export class ReviewQueryService {
       total = page.total; items.push(...page.items); offset += page.items.length;
       if (!page.items.length) break;
     } while (offset < total);
-    const visible = items.filter((item) => ['A', 'B', 'C'].includes(item.finalGrade ?? item.grade));
+    const visible = items.filter((item) => ['A', 'B', 'C'].includes(item.finalGrade ?? item.grade) || item.pendingReview);
     return {
-      normal: visible.filter((item) => !item.needsReview && item.feedbackAllowed && !item.feedback).length,
+      normal: visible.filter((item) => !item.pendingReview && !item.needsReview && item.feedbackAllowed && !item.feedback).length,
       manual: visible.filter((item) => item.needsReview && item.feedbackAllowed && !item.manualGrade).length,
       rules: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
     };
@@ -139,7 +158,7 @@ export class ReviewQueryService {
       nextScheduledRun: null, zotero: weekly ? 'last_writeback_available_not_live_probe' : 'unknown',
       sources: loadSourceSelectionConfig({ root: this.root }).enabled_sources,
       counts: summary?.counts || null, integrity: summary?.integrity || null,
-      needsReview: weekly?.items.filter((item) => getWeeklyReviewEvidence(item).needsReview).length ?? null,
+      needsReview: (await this.pendingSummary()).manual,
       pendingSuggestions: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
     };
   }

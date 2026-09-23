@@ -35,6 +35,7 @@ import { buildLlmReviewCandidates, gradeReviewPromptContractHash, resolveEligibl
 import { runSourceSelectionAndFetch } from "./source_selection_step.mjs";
 import { runPreferenceLearningPhase } from "./preference_learning_step.mjs";
 import { runFeedbackActionsAndWriteback } from "./feedback_actions_step.mjs";
+import { preparePendingPaperReview, attachPendingPaperReview, finalizePendingPaperReview } from "../lib/pending_paper_review.mjs";
 import {
   finalizeRadarStage1,
   isRadarProfile,
@@ -371,10 +372,15 @@ export async function runResearchOsPipeline({
   const weeklyPreparation = weeklyRadarMergeEnabled
     ? await prepareWeeklyCandidatePool({ projectRoot: ROOT, runId, currentCandidates: rawCandidates, llmRuntime })
     : null;
-  const dedupeInput = radarPreparation?.candidates || weeklyPreparation?.candidates || rawCandidates;
+  const currentCandidates = radarPreparation?.candidates || weeklyPreparation?.candidates || rawCandidates;
+  const pendingPreparation = !radarProfile && !zoteroSkipped
+    ? await preparePendingPaperReview({ reviewRoot: REVIEW_ROOT, candidates: currentCandidates })
+    : null;
+  const dedupeInput = pendingPreparation?.input || currentCandidates;
   const dedupeStarted = Date.now();
   const dedupeResult = dedupWithDiagnostics(dedupeInput);
   const merged = dedupeResult.items;
+  if (pendingPreparation) attachPendingPaperReview(merged, pendingPreparation);
   const dedupSummary = buildStage1DedupSummary({
     inputItems: dedupeInput,
     dedupedItems: merged,
@@ -443,6 +449,7 @@ export async function runResearchOsPipeline({
   const workflowRulesForQualityGate = loadWorkflowRules();
   const llmReviewConfig = { ...(workflowRulesForQualityGate?.config?.llm_review || {}) };
   if (radarProfile) llmReviewConfig.eligible_rule_grades = ["A", "B", "C"];
+  else if (pendingPreparation) llmReviewConfig.eligible_rule_grades = ["A", "B", "C", "D"];
   let classificationRuleContext = null;
   try {
     classificationRuleContext = await buildLlmRuleContextSummary({ root: ROOT, reviewRoot: REVIEW_ROOT });
@@ -563,6 +570,12 @@ export async function runResearchOsPipeline({
     mergedCount: merged.length,
     ruleContextSummary: classificationRuleContext,
   });
+  if (pendingPreparation) {
+    report.steps.pending_paper_review = {
+      ...await finalizePendingPaperReview({ reviewRoot: REVIEW_ROOT, items: triagedAll }),
+      previously_confirmed_injected: pendingPreparation.injectedCount,
+    };
+  }
   if (weeklyPreparation) {
     const weeklyFinalize = await finalizeWeeklyRadarReview({
       items: triagedAll,

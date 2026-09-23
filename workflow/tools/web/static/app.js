@@ -154,7 +154,7 @@ function pendingPaperCounts(items = []) {
   const visible = displayablePapers(items);
   return {
     normal: visible.filter((item) => !item.needsReview && item.feedbackAllowed && !item.feedback).length,
-    manual: visible.filter((item) => item.needsReview && item.feedbackAllowed && !item.manualGrade).length,
+    manual: items.filter((item) => item.needsReview && (item.pendingReview || ['A', 'B', 'C'].includes(displayGrade(item))) && item.feedbackAllowed && !item.manualGrade).length,
   };
 }
 const pendingRuleCount = (rows = []) => rows.filter((entry) => ['pending', 'candidate'].includes(entry.status)).length;
@@ -207,7 +207,7 @@ async function loadWeekly() {
   return data;
 }
 function displayGrade(item) { return item.finalGrade ?? item.grade; }
-function displayablePapers(items) { return items.filter((item) => ['A', 'B', 'C'].includes(displayGrade(item))); }
+function displayablePapers(items) { return items.filter((item) => !item.pendingReview && ['A', 'B', 'C'].includes(displayGrade(item))); }
 function gradeCounts(items) { return items.reduce((counts, item) => { const grade = displayGrade(item); if (Object.hasOwn(counts, grade)) counts[grade] += 1; return counts; }, { A: 0, B: 0, C: 0 }); }
 function gradeBadge(value) {
   const text = { A: 'A级 · 高优先', B: 'B级 · 中优先', C: 'C级 · 低优先' }[value] || '最终等级 · 未提供';
@@ -304,9 +304,12 @@ async function paperReview(showIntro = true, section = reviewSection) {
   const tabs = el('nav', undefined, 'tertiary-nav page-toolbar'); tabs.setAttribute('aria-label', '文献评级任务');
   const workspace = el('section', undefined, 'review-workspace page-content document-column'); workspace.tabIndex = -1; workspace.setAttribute('aria-label', '文献审阅工作区');
   const context = el('div'); main.append(workspaceColumns([tabs, workspace], [context]));
-  // needsReview comes exclusively from the shared Weekly exporter owner.
+  // Pending candidates are shown only in manual review, not in admitted Weekly papers.
   const visibleItems = displayablePapers(data.items);
-  const groups = { normal: visibleItems.filter((item) => !item.needsReview), manual: visibleItems.filter((item) => item.needsReview) };
+  const groups = {
+    normal: visibleItems.filter((item) => !item.needsReview),
+    manual: data.items.filter((item) => item.needsReview && (item.pendingReview || ['A', 'B', 'C'].includes(displayGrade(item)))),
+  };
   const queues = Object.fromEntries(Object.entries(groups).map(([key, items]) => [key, createReviewQueue(items, (item) => Boolean(key === 'manual' ? item.manualGrade : item.feedback), (item) => item.feedbackAllowed)]));
   let queue = queues[reviewSection]; let message = ''; let messageKind = 'success';
   const draw = (focus = false) => {
@@ -331,6 +334,7 @@ async function paperReview(showIntro = true, section = reviewSection) {
     const selectedValue = reviewSection === 'manual' ? item.manualGrade : item.feedback;
     card.append(el('span', selectedValue ? reviewSection === 'manual' ? `已人工评级：${selectedValue}` : `已反馈：${feedbackLabels[selectedValue] || '已记录'}` : reviewSection === 'manual' ? '待人工评级' : '待反馈', `feedback-state ${selectedValue ? 'selected' : ''}`));
     if (reviewSection === 'manual') card.append(el('p', '系统评级保持为只读证据；请选择你确认的正确等级。', 'meta'));
+    if (reviewSection === 'manual' && item.pendingReview) card.append(el('p', '这篇文献尚未写入 Zotero。确认 A / B / C 后，下次完整工作流会再次去重并按确认等级处理；确认 D 则排除。', 'boundary-hint'));
     const actions = el('div', undefined, 'actions feedback-actions');
     const availableActions = reviewSection === 'manual' ? manualGrades : feedbackActions;
     for (const [i, value] of availableActions.entries()) {

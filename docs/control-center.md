@@ -62,6 +62,8 @@ UI 定向验证：`node --test workflow/tests/control_ui.test.mjs workflow/tests
 
 文献工作区：1 升级、2 不变、3 降级、4 排除；人工复核：1 A、2 B、3 C、4 D；规则工作区：1 接受、2 拒绝、3 进入修订；↑ / ↓ 回看或继续。每种任务在页面内提供独立的键盘帮助，快捷键仅绑定当前审阅工作区，在 input、textarea、select、contenteditable、dialog 或编辑状态内禁用；不拦截系统组合键，保存期间拒绝重复动作。鼠标和触屏可使用卡片下方等宽的上一篇／下一篇按钮。
 
+完整 Weekly 的新候选同时取得规则评级与标题语义评级后，双方均为 D 的文献直接排除、留在机器审计中，不进入人工复核或 Zotero。两级不一致，或语义评级缺失时，先写入 `review_results/文献评价/pending_paper_review.json` 待审队列，不写回 Zotero；跨次运行按 DOI、PMID 等标识和受约束的规范化标题复用同一记录。工作台“人工复核”可直接确认 A/B/C/D：确认 D 保持排除，确认 A/B/C 后，下一次完整工作流读取 canonical feedback，重新执行正式去重和写回门槛，再按确认等级处理。工作台保存人工评级时不会直接连接或修改 Zotero；待审队列也不混入已写回 Weekly 列表。旧 XLSX/DOCX 继续作为兼容入口。
+
 | 按钮 / 兼容 API 值 | 原 workflow 值 | 意义 |
 |---|---|---|
 | 升级 / highly_relevant | upgrade | 提高最终等级的人工评价信号 |

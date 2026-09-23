@@ -23,6 +23,10 @@ export const canonicalFeedbackPath = (reviewRoot) => path.join(reviewRoot, 'pape
 export function feedbackIdentity(item) {
   const keys = getLiteratureIdentityKeys(item).filter((key) => !key.startsWith('title:'));
   const valid = keys.filter((key) => /^(doi:10\.\d{4,9}\/\S+|pmid:\d+|pmcid:pmc\d+|arxiv:\d{4}\.\d{4,5}(v\d+)?|openalex:w\d+|url:https?:\/\/[^\s]+)$/i.test(key));
+  if (item?.pending_review_id) {
+    if (!/^[0-9a-f-]{36}$/i.test(item.pending_review_id)) throw new Error('FEEDBACK_IDENTITY_REQUIRED');
+    valid.unshift(`review:${item.pending_review_id}`);
+  }
   if (!valid.length) throw new Error('FEEDBACK_IDENTITY_REQUIRED');
   return valid;
 }

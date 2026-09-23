@@ -56,7 +56,9 @@ export function resolveVerifiedWritebackItems(writebackSummary) {
 export function isWritebackEligibleItem(item) {
   return Boolean(item && item.grade && item.grade !== "D" && item.final_grade !== "D"
     && item.pre_llm_skip_writeback !== true
-    && item.llm_review_grade !== "D");
+    && (item.review_consensus_required !== true || item.manual_review_state === "manual_abc"
+      || (item.rule_grade === item.llm_review_grade && ["A", "B", "C"].includes(item.rule_grade)))
+    && (item.manual_review_state === "manual_abc" || item.llm_review_grade !== "D"));
 }
 
 export function buildWritebackReadyItems(triagedItems, { translationCache = null } = {}) {

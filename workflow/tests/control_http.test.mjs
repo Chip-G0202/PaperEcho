@@ -7,6 +7,7 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { startControlCenter, MAX_BODY_BYTES, safeLink } from '../tools/web/server.mjs';
 import { createControlServices } from '../tools/lib/control_application_services.mjs';
+import { finalizePendingPaperReview } from '../tools/lib/pending_paper_review.mjs';
 const base = fileURLToPath(new URL('./.control-test-tmp/', import.meta.url));
 const mockLlm = async () => ({ rules_added: ['优先关注中文机制研究'], rules_deleted: [], rules_changed: [], keywords_added: { required: [], optional: [], negative: [] }, keywords_removed: [], negative_keywords_added: [], unmapped_feedback: [] });
 async function setup(t, count = 0) {
@@ -88,6 +89,34 @@ test('latest Weekly: zero, 1000 items, long title, Chinese, missing DOI, paginat
   const status = (await app.get('/api/status')).json;
   assert.equal(status.needsReview, 1);
   assert.equal(status.lastWeekly, '2026-09-12T05:00:00Z');
+});
+test('held D disagreement appears only in manual review and accepts a durable grade', async (t) => {
+  const app = await setup(t);
+  const item = { title: '罕见疾病机制研究与临床证据', grade: 'D', rule_grade: 'D', llm_review_grade: 'C', final_grade: 'D' };
+  await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items: [item] });
+  const page = (await app.get('/api/weekly')).json;
+  assert.equal(page.total, 1);
+  assert.equal(page.items[0].pendingReview, true);
+  assert.equal(page.items[0].zotero, 'not_written');
+  assert.equal(page.items[0].needsReview, true);
+  assert.deepEqual((await app.get('/api/pending-summary')).json, { normal: 0, manual: 1, rules: 0 });
+  const receipt = await app.post('/api/feedback', { runId: page.runId, paperId: page.items[0].id, manualGrade: 'B', requestId: 'manual-held-b' });
+  assert.equal(receipt.status, 200);
+  assert.equal((await app.get('/api/weekly')).json.total, 0);
+  assert.equal((await app.get('/api/pending-summary')).json.manual, 0);
+  const script = await app.get('/app.js');
+  assert.match(script.text, /这篇文献尚未写入 Zotero/);
+});
+test('held paper remains reviewable when no Weekly export completed', async (t) => {
+  const app = await setup(t);
+  await fs.rm(path.join(app.reviewRoot, 'runs', 'weekly-1', 'run_group.json'));
+  await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items: [
+    { title: '中文标题与跨次待审文献', doi: '10.1234/no-weekly', grade: 'C', rule_grade: 'C', llm_review_grade: 'D', final_grade: 'C' },
+  ] });
+  const page = (await app.get('/api/weekly')).json;
+  assert.equal(page.runId, 'pending-review');
+  assert.equal(page.total, 1);
+  assert.equal((await app.get('/api/pending-summary')).json.manual, 1);
 });
 test('research submit, generated suggestion, accept and replay; settings valid/invalid; no secrets', async (t) => {
   const app = await setup(t);
