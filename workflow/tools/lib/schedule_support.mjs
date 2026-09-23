@@ -1,3 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { withAtomicJsonLock, writeAtomicJson } from "./atomic_json.mjs";
+
 const ASIA_SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const SLOT_HOUR_LOCAL = 15;
 
@@ -207,7 +211,84 @@ export function evaluateRunInterval({
     next_eligible_run_at: nextEligibleRunAt,
   };
 }
-import fs from "node:fs/promises";
-import path from "node:path";
 
-import { withAtomicJsonLock, writeAtomicJson } from "./atomic_json.mjs";
+function scheduleInstant(value, field, { plannedSlot = false } = {}) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
+    throw new Error(`SCHEDULE_STATE_INVALID:${field}`);
+  }
+  const instant = new Date(value);
+  if (!Number.isFinite(instant.getTime()) || instant.toISOString() !== value
+    || (plannedSlot && resolvePlannedSlotAt(instant).toISOString() !== value)) {
+    throw new Error(`SCHEDULE_STATE_INVALID:${field}`);
+  }
+  return instant;
+}
+
+// A read-only decision shared by the scheduled Runner and Stage0. The Stage0
+// claim remains the authority for admitting work on a particular day.
+export function decideScheduledDaily({
+  now = new Date(),
+  runtimeState = null,
+  statePresent = false,
+  weeklyMode = "standard",
+  radarEnabled = false,
+  intervalDays = 7,
+} = {}) {
+  const current = new Date(now);
+  if (!Number.isFinite(current.getTime())) throw new Error("SCHEDULE_TIME_INVALID");
+  if (!["standard", "complete"].includes(weeklyMode)) throw new Error("SCHEDULE_WEEKLY_MODE_INVALID");
+  if (intervalDays !== 7) throw new Error("SCHEDULE_INTERVAL_UNSUPPORTED");
+  if (statePresent && (!runtimeState || typeof runtimeState !== "object" || Array.isArray(runtimeState))) throw new Error("SCHEDULE_STATE_INVALID:root");
+  const state = runtimeState || {};
+  const slot = resolvePlannedSlotAt(current);
+  const plannedSlot = slot.toISOString();
+  const has = (field) => Object.hasOwn(state, field);
+  const plannedField = "last_successful_scheduled_run_at";
+  const legacyField = "last_successful_full_run_at";
+  let referenceSlot = null;
+  let referenceField = null;
+  if (has(plannedField)) {
+    referenceSlot = scheduleInstant(state[plannedField], plannedField, { plannedSlot: true });
+    referenceField = plannedField;
+  } else if (has(legacyField)) {
+    referenceSlot = resolvePlannedSlotAt(scheduleInstant(state[legacyField], legacyField));
+    referenceField = legacyField;
+  } else if (statePresent && Object.keys(state).length) {
+    throw new Error("SCHEDULE_STATE_INVALID:missing_weekly_success");
+  }
+  if (has(legacyField) && referenceField === plannedField) {
+    const completed = scheduleInstant(state[legacyField], legacyField);
+    if (completed < referenceSlot || completed > current) throw new Error("SCHEDULE_STATE_INVALID:success_order");
+  }
+  if (referenceField === legacyField && scheduleInstant(state[legacyField], legacyField) > current) throw new Error("SCHEDULE_STATE_INVALID:future_completion");
+  if (has("last_accepted_planned_slot_at")) {
+    const accepted = scheduleInstant(state.last_accepted_planned_slot_at, "last_accepted_planned_slot_at", { plannedSlot: true });
+    if (!referenceSlot || accepted > referenceSlot) throw new Error("SCHEDULE_STATE_INVALID:accepted_slot");
+  }
+  if (referenceSlot && referenceSlot > slot) throw new Error("SCHEDULE_STATE_INVALID:future_weekly_slot");
+  if (current < slot) return { allowed: false, reason: "before_scheduled_slot", plannedSlot, selectedFlow: null, weeklyMode: null, referenceField };
+  const due = !referenceSlot || slot.getTime() - referenceSlot.getTime() >= 7 * 86400000;
+  const selectedFlow = due ? "weekly" : "radar";
+  if (!due && !radarEnabled) return { allowed: false, reason: "scheduled_radar_disabled", plannedSlot, selectedFlow, weeklyMode: null, referenceField };
+  return {
+    allowed: true,
+    reason: !referenceSlot ? "first_weekly" : due ? "weekly_due" : "weekly_not_due",
+    plannedSlot,
+    selectedFlow,
+    weeklyMode: due ? weeklyMode : null,
+    referenceField,
+    referenceSlot: referenceSlot?.toISOString() || null,
+    nextWeeklySlot: referenceSlot ? new Date(referenceSlot.getTime() + 7 * 86400000).toISOString() : plannedSlot,
+  };
+}
+
+export async function readScheduledRuntimeState(filePath, fsApi = fs) {
+  let raw;
+  try { raw = await fsApi.readFile(filePath, "utf8"); }
+  catch (error) {
+    if (error?.code === "ENOENT") return { statePresent: false, runtimeState: null };
+    throw new Error("SCHEDULE_STATE_UNREADABLE");
+  }
+  try { return { statePresent: true, runtimeState: JSON.parse(raw) }; }
+  catch { throw new Error("SCHEDULE_STATE_INVALID:json"); }
+}
