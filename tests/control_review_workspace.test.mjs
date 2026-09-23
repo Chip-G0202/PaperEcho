@@ -269,7 +269,7 @@ test('delivery pages contain no demo entry points or bundled demo data', async (
   assert.doesNotMatch(script, /demoMode|demoPapers|demoRuleSuggestions|radar-demo|weekly-demo|体验示例|查看[^'\n]*示例|示例模式|演示内容/);
   const app = ui(); app.setApi(async (url) => {
     if (url === '/api/status') return {};
-    if (url === '/api/schedule-status') return { status: 'before_slot', today: { plannedSlot: '2026-09-23T07:00:00.000Z', selectedFlow: 'radar' }, weekly: { lastSuccessfulPlannedSlot: '2026-09-21T07:00:00.000Z', nextDuePlannedSlot: '2026-09-28T07:00:00.000Z' } };
+    if (url === '/api/schedule-status') return { status: 'before_slot', scheduledTime: '15:00', today: { plannedSlot: '2026-09-23T07:00:00.000Z', selectedFlow: 'radar' }, weekly: { lastSuccessfulPlannedSlot: '2026-09-21T07:00:00.000Z', nextDuePlannedSlot: '2026-09-28T07:00:00.000Z' } };
     if (url === '/api/settings' || url === '/api/credentials' || url === '/api/suggestions') return [];
     return { runId: 'real-empty', total: 0, items: [] };
   });
@@ -277,6 +277,34 @@ test('delivery pages contain no demo entry points or bundled demo data', async (
     app.main.replaceChildren(); await renderPage(); assert.doesNotMatch(app.main.textContent, /示例|演示/);
   }
   assert.equal(Object.hasOwn(app.parseRoute('#home/radar-demo'), 'homeView'), false);
+});
+
+test('Overview condenses scheduled status and keeps every actionable exception visible', async () => {
+  const app = ui();
+  const slot = '2026-09-23T07:00:00.000Z';
+  const baseline = { lastSuccessfulPlannedSlot: '2026-09-21T07:00:00.000Z', nextDuePlannedSlot: '2026-09-28T07:00:00.000Z' };
+  const normal = { status: 'ready', scheduledTime: '15:00', today: { plannedSlot: slot, selectedFlow: 'radar' }, weekly: baseline, currentRun: null };
+  const cases = [
+    [normal, /今日任务.*Daily Radar.*今天 15:00 · 北京时间.*下次周报/],
+    [{ ...normal, today: { ...normal.today, selectedFlow: 'weekly' } }, /今日任务.*周报.*今天 15:00/],
+    [{ ...normal, status: 'before_slot' }, /尚未到时间/],
+    [{ ...normal, weekly: { lastSuccessfulPlannedSlot: null, nextDuePlannedSlot: slot } }, /尚未建立周报周期.*首次计划任务将生成周报.*首次周报/],
+    [{ ...normal, status: 'unsupported', runtimePath: 'local' }, /本地运行路径不支持定时任务.*前往运行路径/],
+    [{ ...normal, status: 'invalid', reason: 'SCHEDULE_STATE_INVALID:missing_weekly_success' }, /计划状态异常.*计划记录格式或内容不一致.*查看运行状态/],
+    [{ ...normal, status: 'recovery_required', currentRun: { flow: 'radar', state: 'recovery_required', business: 'not_completed' } }, /需要恢复上次运行.*查看运行状态/],
+    [{ ...normal, status: 'recovery_required', currentRun: { flow: 'weekly', state: 'recovery_required', business: 'not_completed' } }, /周报未完成，等待恢复.*周期尚未推进/],
+    [{ ...normal, status: 'recovery_required', currentRun: { flow: 'weekly', state: 'recovery_required', business: 'completed' }, notification: 'pending' }, /周报已完成，通知待恢复.*周报主体已成功/],
+    [{ ...normal, currentRun: { flow: 'weekly', state: 'completed', business: 'completed' }, notification: 'pending' }, /周报已完成，通知待恢复.*周报主体已成功/],
+    [{ ...normal, status: 'radar_disabled' }, /Daily Radar 未启用.*今日任务无法运行.*前往 Radar 设置/],
+  ];
+  app.setApi(async (url) => url === '/api/status' ? {} : url === '/api/schedule-status' ? app.scheduleFixture : { runId: null, total: 0, items: [] });
+  for (const [schedule, expected] of cases) {
+    app.scheduleFixture = schedule; app.main.replaceChildren(); await app.home();
+    assert.match(app.main.textContent, expected);
+    assert.doesNotMatch(app.main.textContent, /Weekly 周报|外部 Agent|运行机制|查看每日计划/);
+  }
+  assert.deepEqual(JSON.parse(JSON.stringify(app.settingViews.automation.map(([key, title]) => [key, title]))), [['radar', 'Daily Radar'], ['weekly', '周报']]);
+  assert.equal(app.parseRoute('#settings/automation/plan').page, 'home');
 });
 test('Settings separates databases and RSS, colocates review toggles and preserves real values', async () => {
   const app = ui(); const calls = []; const settings = [
@@ -359,7 +387,7 @@ test('email toggle owns its configuration panel and preserves fields while off',
 test('automation switch saves through its owner and updates visible state', async () => {
   const app = ui(); const calls = []; const settings = [{ category: 'Radar', available: true, id: 'radar.enabled', description: '启用 Daily Radar', type: 'boolean', value: false, validation: {} }];
   app.setApi(async (url, value) => { if (url === '/api/credentials') return []; if (!value) return settings; calls.push(value); return { saved: true }; });
-  await app.settings('automation', 'radar'); assert.match(app.main.textContent, /当前已关闭.*每日计划负责选择流程/);
+  await app.settings('automation', 'radar'); assert.match(app.main.textContent, /非周报日运行.*当前已关闭/);
   const toggle = app.main.querySelectorAll('input').find((input) => input.type === 'checkbox'); toggle.checked = true; await byText(app.main, '保存本组').click();
   assert.equal(calls[0].updates[0].id, 'radar.enabled'); assert.match(app.main.textContent, /当前已开启/);
 });
