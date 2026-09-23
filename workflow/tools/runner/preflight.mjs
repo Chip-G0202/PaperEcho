@@ -127,6 +127,13 @@ export function buildExecutionPlan(options, { env = process.env, repoRoot = REPO
   childEnv.PAPERECHO_CONFIG_HASH = options.recoveryConfigHash || canonicalQueryHash({ mode: options.mode, profile: options.profile });
   childEnv.PAPERECHO_INPUT_HASH = options.recoveryInputHash || canonicalQueryHash({ mode: options.mode, input: options.input || "", feedback: options.feedback || "" });
   childEnv.PAPERECHO_RUN_PROFILE = options.profile;
+  if (options.scheduledDaily) {
+    childEnv.review_results_ORCHESTRATOR_TRIGGER = "scheduled";
+    childEnv.PAPERECHO_SCHEDULED_DAILY = "1";
+    childEnv.PAPERECHO_SCHEDULED_SLOT = options.scheduledDecision.plannedSlot;
+    childEnv.PAPERECHO_SCHEDULED_FLOW = options.scheduledDecision.selectedFlow;
+    childEnv.PAPERECHO_SCHEDULED_WEEKLY_MODE = options.scheduledDecision.weeklyMode || "";
+  }
   childEnv.PAPERECHO_LAUNCHER_ID = `${options.mode}-fixed-launcher/runner`;
   const runId = options.resume || `${options.mode === "local" ? "local" : "zlf"}-${Date.now()}-${randomUUID().slice(0, 8)}`;
   childEnv.PAPERECHO_RUN_ID = runId;

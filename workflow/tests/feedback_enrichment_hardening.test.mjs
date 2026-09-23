@@ -80,5 +80,5 @@ test("Stage1 enrichment timeout prevents collection discovery, apply and consuma
     await assert.rejects(fs.access(path.join(dir, "feedback_item_actions_plan.json")));
     const progress = JSON.parse(await fs.readFile(path.join(dir, "feedback_item_actions_progress.json"), "utf8"));
     assert.equal(progress.status, "timed_out"); assert.equal(progress.correction_mutation_started, false);
-  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  } finally { await fs.rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 10 }); }
 });

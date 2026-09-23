@@ -28,7 +28,7 @@ import { buildExportManifest, buildRunSummary, pipelineModeFromBackend } from ".
 import { resolveStage5Request, runStage5Notification } from "../stage5/main.mjs";
 import { receiptPathFor, recipientHash } from "../stage5/email_receipt.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
-import { claimScheduleDayDecision } from "../lib/schedule_support.mjs";
+import { claimScheduleDayDecision, decideScheduledDaily, readScheduledRuntimeState } from "../lib/schedule_support.mjs";
 import { getDefaultZoteroLibraryIndexPath } from "../lib/zotero_library_index_store.mjs";
 import { recordRadarNotificationOutcome, selectRadarNotificationCandidates } from "../radar/state.mjs";
 import { claimWeeklyRadarWritebackCandidates } from "../stage1/weekly_merge_step.mjs";
@@ -212,6 +212,7 @@ export async function runZoteroLiteratureFilter({
   stage5Runner = runStage5Notification,
   radarStage5Runner = sendRadarAggregateNotification,
   scheduleDecisionClaimer = claimScheduleDayDecision,
+  scheduledRuntimeStateReader = readScheduledRuntimeState,
   runId = `zlf-${Date.now()}-${randomUUID().slice(0, 8)}`,
   recoveryCoordinator = null,
 } = {}) {
@@ -220,6 +221,29 @@ export async function runZoteroLiteratureFilter({
   const radarProfile = profile === "radar";
   const manualTrigger = runMode.isManualOrForce;
   const runtimeSafety = buildRuntimeSafetyConfig({ runtime: config });
+  let scheduledDailyDecision = null;
+  if (env.PAPERECHO_SCHEDULED_DAILY === "1") {
+    if (triggerMode !== "scheduled" || manualTrigger || stage1Only || env.review_results_OVERRIDE_DATE
+      || !["standard", "complete", "radar"].includes(profile)
+      || [env.FORCE_review_results_RUN, env.review_results_FORCE_RUN].some((value) => /^(1|true|yes|on)$/i.test(String(value || "")))) {
+      throw new Error("SCHEDULE_STAGE0_MODE_CONFLICT");
+    }
+    const state = await scheduledRuntimeStateReader(path.join(config.researchRoot, "runtime_state.json"));
+    scheduledDailyDecision = decideScheduledDaily({
+      now: new Date(startedAt), ...state,
+      weeklyMode: env.PAPERECHO_SCHEDULED_WEEKLY_MODE || "standard",
+      radarEnabled: /^(1|true|yes|on)$/i.test(String(env.PAPERECHO_RADAR_ENABLED || "")),
+      intervalDays: Number(env.review_results_RUN_INTERVAL_DAYS || 7),
+    });
+    if (!scheduledDailyDecision.allowed
+      || scheduledDailyDecision.plannedSlot !== env.PAPERECHO_SCHEDULED_SLOT
+      || scheduledDailyDecision.selectedFlow !== env.PAPERECHO_SCHEDULED_FLOW
+      || (scheduledDailyDecision.weeklyMode || "") !== (env.PAPERECHO_SCHEDULED_WEEKLY_MODE || "")
+      || (scheduledDailyDecision.selectedFlow === "radar") !== radarProfile
+      || (scheduledDailyDecision.selectedFlow === "weekly" && profile !== scheduledDailyDecision.weeklyMode)) {
+      throw new Error("SCHEDULE_STAGE0_DECISION_CHANGED");
+    }
+  }
   const dryRun = Boolean(runtimeSafety.dry_run);
   const runContext = buildRunContext({
     automationName: AUTOMATION_NAME,
@@ -365,7 +389,7 @@ export async function runZoteroLiteratureFilter({
     stage4: makeStage("stage4_exports", scriptPaths.stage4, () => finalizeResearchOsExports()),
   };
 
-  const intervalGate = await evaluateOrchestratorIntervalGate(config, () => new Date(startedAt), readJson, { triggerMode });
+  const intervalGate = await evaluateOrchestratorIntervalGate(config, () => new Date(startedAt), readJson, { triggerMode, scheduledDailyDecision });
   const skipReport = intervalGate.skipReport;
   const intervalGateDiagnostics = intervalGate.diagnostics;
   const scheduledTrigger = new Set(["scheduled", "background"]).has(String(triggerMode || "").toLowerCase());

@@ -385,3 +385,19 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   };
   return { options, env: effectiveEnv, config, warnings };
 }
+
+export function withRunnerProfile(resolved, profile) {
+  if (!PROFILES.has(profile)) throw new Error("RUNNER_PROFILE_INVALID");
+  const options = resolved.options;
+  const nextOptions = {
+    ...options,
+    profile,
+    configSummary: { ...options.configSummary, profile },
+    recoveryConfigHash: canonicalQueryHash({
+      schemaVersion: resolved.config?.schemaVersion || RUNNER_SCHEMA_VERSION,
+      config: resolved.config || {},
+      effective: { mode: options.mode, profile, llmMode: options.llmMode, requireLlm: options.requireLlm, emailRequested: Boolean(options.email) },
+    }),
+  };
+  return { ...resolved, options: nextOptions };
+}

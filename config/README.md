@@ -11,6 +11,8 @@ Credentials 继续由环境/项目 `.env` 管理，网页支持 allowlist 本地
 | Config | Purpose | 领域 owner | Control Center section | User-editable? | Secret? | Compatibility notes |
 |---|---|---|---|---|---|---|
 | `paperecho.config.example.json` → 本地 `paperecho.config.json` | mode、运行根、Radar/Integrity、邮件与 Zotero 非密钥参数 | `runner/config_loader.mjs`、`lib/runtime_config.mjs` | 常规、Radar、Weekly、Integrity、Zotero、通知 | 是；示例不作为实际配置保存目标 | 否 | 使用启动时解析的配置路径；mode/根路径属高级设置，Weekly 间隔只读 |
+
+每日计划入口 `--run --scheduled-daily` 仅适用于 Desktop/Web。`profile: standard` 或 `complete` 指定到期 Weekly 的执行模式；是否到期由成功 Weekly 的北京时间 15:00 计划时隙决定。`common.radar.enabled` 只在 Radar 日检查，关闭 Radar 不会把当天改成 Weekly。正式间隔为 7 天；手动运行、force 参数和本地 Local 路径不属于此入口。
 | `source_selection.json` | 研究领域与来源策略 | `stage1/source_selection_step.mjs` | 研究与检索 / 来源 | 是 | 否 | 网页管理 domain/override；其余策略保留原文件 |
 | `pubmed_pmc_search.json` | 检索词组、时间和数量限制 | `lib/literature_config.mjs`、`stage1/retrieval_sources.mjs` | 研究与检索 / 检索条件 | 是 | 否 | keyword groups 由 owner 生成 query，不绕过现有规则 |
 | `openalex_search.json` | query、启用、时间与分页限制 | `stage1/retrieval_sources.mjs` | 研究与检索 / 检索条件 | 是 | 否 | 额外 filters/select 等高级字段仍保留 |

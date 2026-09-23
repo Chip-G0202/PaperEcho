@@ -88,7 +88,7 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 ## 当前能力边界
 
 - 查询覆盖正式 resolver 选定的 Desktop/Web runtime roots 和 Local output root。未注册历史输出不自动扫描或迁移；不会混入仓库默认根中其他实例的数据。
-- 下一次调度只有在可可靠读取时才应显示；当前显示未知。Weekly 间隔只读，不重写正式 scheduler state。每天只触发 Radar 不会在第七天自动运行 Weekly；未来设置每日调度时，须由调度器按既有间隔门槛调用 Weekly，非周报日调用 Radar。同日决策和 Weekly 合并去重仍由原 owner 负责。
+- 下一次调度只有在可可靠读取时才应显示；当前显示未知。Weekly 间隔只读，不重写正式 scheduler state。未来系统调度器每天北京时间 15:00 只调用所选 Desktop/Web launcher 的 `--run --scheduled-daily`；Runner/Stage0 按上次成功 Weekly 的计划时隙选择当日 Weekly 或 Radar，系统调度器无需自行分流。本仓库尚未注册系统定时任务。
 - 等级复审和 literature overview 使用现有 preference learning 模型配置，不增加第二套模型 owner。
 - 缺少 owner JSON 时设置只显示未初始化；按原配置指南初始化后再使用网页。
 - ConfigService 不提供 arbitrary JSON/path API。PubMed keyword groups 更新由现有 query builder 生成检索式；已有 keyword groups 时直接 query 编辑被拒绝。

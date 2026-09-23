@@ -177,6 +177,8 @@ node skills/paperecho-local/scripts/run.mjs --check --config config/paperecho.co
 
 检查通过后，将所选命令中的 `--check` 改为 `--run`。
 
+未来配置每日系统调度时，每天北京时间 15:00 只调用一个选定路径的计划入口，例如 `node skills/paperecho-zotero-desktop/scripts/run.mjs --run --scheduled-daily --config config/paperecho.config.json`（Web 路径使用对应 Web launcher）。入口按最近一次成功 Weekly 的计划时隙选择 Weekly 或 Radar：首次有效时隙运行 Weekly，之后第 1～6 天运行 Radar，第 7 天起再次运行 Weekly；漏跑不补历史 Radar。15:00 前调用不占用当天时隙。Weekly 的 `standard` / `complete` 配置只决定到期时所用模式。仅在 Stage4 正式导出成功后推进 Weekly 周期；邮件失败由既有 receipt/recovery 流程处理。失败且同日已占位时，入口优先识别原 runId；状态不确定会明确要求恢复，不另起业务运行。本版本不注册 Windows/macOS 系统定时任务。
+
 检查官方 stable 更新可使用 `$paperecho-update`，或运行：
 
 ```powershell

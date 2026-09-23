@@ -9,6 +9,12 @@ const SLOT_HOUR_LOCAL = 15;
 // or stateful stage gates. Keep this descriptive only; do not migrate or rename
 // persisted runtime_state fields here.
 export const RUNTIME_STATE_FIELD_OWNERSHIP = Object.freeze({
+  last_successful_scheduled_run_at: Object.freeze({
+    semantics: "Beijing 15:00 planned slot of the last successfully exported scheduled Weekly run.",
+    owner: "Stage 4 final export success path",
+    usage: "Primary seven-day cadence anchor for the scheduled daily entry.",
+    write_boundary: "Written atomically after the scheduled Weekly export commits, independently of notification outcome.",
+  }),
   last_successful_full_run_at: Object.freeze({
     semantics: "Timestamp recorded after a scheduled/background complete workflow finishes successfully; manual runs do not advance scheduled cadence.",
     owner: "Stage 4 final export success path",

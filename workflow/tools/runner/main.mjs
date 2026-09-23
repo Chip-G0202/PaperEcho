@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import "../lib/env_file_bootstrap.mjs";
 import { parseRunnerArgs } from "./args.mjs";
 import { resolveRunnerConfiguration } from "./config_loader.mjs";
+import { selectScheduledDailyRun } from "./scheduled_daily.mjs";
 import { EXIT_CODES } from "./constants.mjs";
 import { buildExecutionPlan, runPreflight } from "./preflight.mjs";
 import { extractLastJsonObject, validateProductionResult } from "./result_validation.mjs";
@@ -95,6 +96,25 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "invalid_configuration", code: String(error?.code || "CONFIG_INVALID"), error: redactText(error?.message || error, dependencies.env || process.env), details: error?.details || {} })}\n`);
     return EXIT_CODES.configuration;
   }
+  if (cliOptions.scheduledDaily) {
+    let selection;
+    try {
+      selection = await (dependencies.selectScheduledDailyRunImpl || selectScheduledDailyRun)(resolved, {
+        now: (dependencies.clock || (() => new Date()))(),
+        repoRoot: dependencies.repoRoot,
+        fsApi: dependencies.fsApi,
+      });
+    } catch (error) {
+      stderr.write(`${JSON.stringify({ type: "schedule", status: "blocked", reason: String(error?.message || error) })}\n`);
+      return EXIT_CODES.configuration;
+    }
+    stdout.write(`${JSON.stringify({ type: "schedule", status: selection.status, plannedSlot: selection.decision.plannedSlot, selectedFlow: selection.decision.selectedFlow, weeklyMode: selection.decision.weeklyMode, reason: selection.reason || selection.decision.reason, ...(selection.runId ? { runId: selection.runId } : {}) })}\n`);
+    if (!["ready", "resume"].includes(selection.status)) {
+      return ["before_scheduled_slot", "already_completed"].includes(selection.status) ? EXIT_CODES.success
+        : selection.status === "recovery_required" ? EXIT_CODES.pipeline : EXIT_CODES.configuration;
+    }
+    resolved = { ...selection.resolved, options: { ...selection.resolved.options, scheduledDecision: selection.decision } };
+  }
   const options = resolved.options;
   const runtimeDependencies = { ...dependencies, env: resolved.env };
   const preflight = await (dependencies.runPreflightImpl || runPreflight)(options, runtimeDependencies);
@@ -110,6 +130,11 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     return EXIT_CODES.pipeline;
   }
   const productionReport = extractLastJsonObject(processResult.stdout);
+  if (options.scheduledDaily && processResult.code === 0 && productionReport?.status === "skipped"
+    && productionReport?.skipReport?.reason === "duplicate_schedule_trigger") {
+    stdout.write(`${JSON.stringify({ type: "result", status: "already_claimed", plannedSlot: options.scheduledDecision.plannedSlot, runId: productionReport?.schedule_decision?.businessRunId || null })}\n`);
+    return EXIT_CODES.success;
+  }
   const terminal = terminalWorkflowStatus(processResult.status, productionReport?.status, processResult.code !== 0 ? "failed" : null);
   if (["timed_out", "interrupted"].includes(terminal)) processResult.status = terminal;
   if (["timed_out", "interrupted"].includes(processResult.status)) {

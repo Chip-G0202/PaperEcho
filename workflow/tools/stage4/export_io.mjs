@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fmtDateRfc } from "../lib/date_label_support.mjs";
+import { resolvePlannedSlotAt } from "../lib/schedule_support.mjs";
+import { withAtomicJsonLock, writeAtomicJson } from "../lib/atomic_json.mjs";
 
 export function fmtDate(d) {
   return fmtDateRfc(d);
@@ -15,9 +17,13 @@ export function buildStage4RuntimeStateUpdate({
   const completedIso = completedAt ? new Date(completedAt).toISOString() : now.toISOString();
   const triggerMode = String(runReport?.triggerMode || runReport?.trigger_mode || runReport?.interval_gate_diagnostics?.trigger || "").trim().toLowerCase();
   const scheduledTrigger = triggerMode === "scheduled" || triggerMode === "background";
-  const plannedSlot = runReport?.current_planned_slot_at || runReport?.interval_gate_diagnostics?.planned_slot || now.toISOString();
+  const plannedSlot = runReport?.current_planned_slot_at || runReport?.interval_gate_diagnostics?.planned_slot;
   const nextState = { ...runtimeState };
   if (scheduledTrigger) {
+    if (typeof plannedSlot !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(plannedSlot)
+      || !Number.isFinite(Date.parse(plannedSlot)) || resolvePlannedSlotAt(plannedSlot).toISOString() !== plannedSlot) {
+      throw new Error("SCHEDULE_SUCCESS_SLOT_INVALID");
+    }
     nextState.last_successful_full_run_at = completedIso;
     nextState.last_successful_scheduled_run_at = plannedSlot;
     nextState.last_accepted_planned_slot_at = plannedSlot;
@@ -48,14 +54,17 @@ export async function writeSuccessfulRuntimeState({
   runReport,
   now = new Date(),
 }) {
-  let runtimeState = {};
-  try {
-    runtimeState = JSON.parse(await fs.readFile(runtimeStatePath, "utf8"));
-  } catch {
-    runtimeState = {};
-  }
-  const nextState = buildStage4RuntimeStateUpdate({ runtimeState, runReport, now });
-  await fs.writeFile(runtimeStatePath, JSON.stringify(nextState, null, 2), "utf8");
+  await withAtomicJsonLock(runtimeStatePath, async () => {
+    let runtimeState;
+    try { runtimeState = JSON.parse(await fs.readFile(runtimeStatePath, "utf8")); }
+    catch (error) {
+      if (error?.code !== "ENOENT") throw new Error(error instanceof SyntaxError ? "SCHEDULE_STATE_INVALID:json" : "SCHEDULE_STATE_UNREADABLE");
+      runtimeState = {};
+    }
+    if (!runtimeState || typeof runtimeState !== "object" || Array.isArray(runtimeState)) throw new Error("SCHEDULE_STATE_INVALID:root");
+    const nextState = buildStage4RuntimeStateUpdate({ runtimeState, runReport, now });
+    await writeAtomicJson(runtimeStatePath, nextState);
+  });
 }
 
 export async function markStage4ExportFailure({

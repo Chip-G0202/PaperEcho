@@ -4,7 +4,7 @@ import { MODES, PROFILES } from "./constants.mjs";
 import { validateRecoveryRunId } from "../recovery/operation_ledger.mjs";
 
 const VALUE_ARGS = new Set(["mode", "profile", "email", "input", "output-root", "feedback", "llm-mode", "config", "resume"]);
-const BOOLEAN_ARGS = new Set(["check", "run", "force-resend", "require-llm", "fixed-mode"]);
+const BOOLEAN_ARGS = new Set(["check", "run", "force-resend", "require-llm", "fixed-mode", "scheduled-daily"]);
 
 export function parseRunnerArgs(argv = process.argv.slice(2), { cwd = process.cwd(), allowUnresolvedMode = false } = {}) {
   const values = {};
@@ -31,6 +31,7 @@ export function parseRunnerArgs(argv = process.argv.slice(2), { cwd = process.cw
   if (flags.has("check") === flags.has("run")) throw new Error("RUNNER_ACTION_EXACTLY_ONE_REQUIRED");
   if (values.resume && flags.has("check")) throw new Error("RUNNER_RESUME_REQUIRES_RUN");
   if (values.resume && !flags.has("fixed-mode")) throw new Error("RUNNER_RESUME_FIXED_LAUNCHER_REQUIRED");
+  if (flags.has("scheduled-daily") && (flags.has("check") || values.resume || flags.has("force-resend") || values.profile === "radar" || values.mode === "local")) throw new Error("RUNNER_SCHEDULED_DAILY_CONFLICT");
   const profile = values.profile || "standard";
   if (!PROFILES.has(profile)) throw new Error(`RUNNER_PROFILE_INVALID:${profile}`);
   if (values["llm-mode"] && !["disabled", "mock", "real"].includes(values["llm-mode"])) throw new Error("RUNNER_LLM_MODE_INVALID");
@@ -56,6 +57,7 @@ export function parseRunnerArgs(argv = process.argv.slice(2), { cwd = process.cw
     forceResend: flags.has("force-resend"),
     requireLlm: flags.has("require-llm"),
     fixedMode: flags.has("fixed-mode"),
+    scheduledDaily: flags.has("scheduled-daily"),
     provided: {
       profile: Boolean(values.profile),
       email: Boolean(values.email),

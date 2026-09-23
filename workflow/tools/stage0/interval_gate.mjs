@@ -25,14 +25,17 @@ export function isManualTrigger(triggerMode) {
   return v !== "scheduled" && v !== "background";
 }
 
-export async function evaluateOrchestratorIntervalGate(config, clock, readJson, { triggerMode = "manual" } = {}) {
+export async function evaluateOrchestratorIntervalGate(config, clock, readJson, { triggerMode = "manual", scheduledDailyDecision = null } = {}) {
   const manualTrigger = isManualTrigger(triggerMode);
-  const referenceStateField = "last_successful_full_run_at";
+  const referenceStateField = scheduledDailyDecision?.referenceField || "last_successful_full_run_at";
   let lastSuccessfulRunAt = null;
-  try {
-    const runtimeState = await readJson(`${config.researchRoot}/runtime_state.json`);
-    lastSuccessfulRunAt = runtimeState?.[referenceStateField] || null;
-  } catch {}
+  if (scheduledDailyDecision) lastSuccessfulRunAt = scheduledDailyDecision.referenceSlot;
+  else {
+    try {
+      const runtimeState = await readJson(`${config.researchRoot}/runtime_state.json`);
+      lastSuccessfulRunAt = runtimeState?.[referenceStateField] || null;
+    } catch {}
+  }
   const explicitForceRun = parseForceRun(process.env);
   const intervalDays = Number(process.env.review_results_RUN_INTERVAL_DAYS || 7);
   const intervalInfo = evaluateRunInterval({
@@ -41,6 +44,9 @@ export async function evaluateOrchestratorIntervalGate(config, clock, readJson, 
     intervalDays,
     forceRun: manualTrigger || explicitForceRun,
   });
+  if (scheduledDailyDecision && intervalInfo.skipped_due_to_interval !== (scheduledDailyDecision.selectedFlow === "radar")) {
+    throw new Error("SCHEDULE_STAGE0_INTERVAL_MISMATCH");
+  }
   const skipReason = intervalInfo.skipped_due_to_interval
     ? "interval_not_reached"
     : manualTrigger
