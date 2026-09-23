@@ -13,7 +13,7 @@ export function buildStage5ViewModel(runSummary, { overview = "" } = {}) {
   const gradesAvailable = ["A", "B", "C", "D"].some((grade) => hasNumber(grades[grade]));
   const attention = runSummary.attention || {};
   const warnings = [];
-  if (Number(attention.humanReviewCount) > 0) warnings.push(`有 ${Number(attention.humanReviewCount)} 篇文献等级需人工确认，请在周报表格的“需人工复核”中处理。`);
+  if (Number(attention.humanReviewCount) > 0) warnings.push(`有 ${Number(attention.humanReviewCount)} 篇文献等级需人工确认，请在 PaperEcho 工作台处理。`);
   if (Number(attention.pendingRuleCount) > 0) warnings.push(`有 ${Number(attention.pendingRuleCount)} 条筛选规则待确认，请在“待确认规则建议”中处理。`);
   warnings.push(...(runSummary.warnings || []).map(warningText).filter(Boolean));
   const date = dateText(runSummary);

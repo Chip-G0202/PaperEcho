@@ -77,10 +77,7 @@ async function readDuplicateVerificationItems(itemKeys, { callZotero, zoteroBack
       }
       for (const entry of failed) {
         const key = failedReadbackKey(entry);
-        if (key && !liveItemsByKey.has(key)) liveItemsByKey.set(key, { itemKey: key, key, missing: true });
-      }
-      for (const key of batch) {
-        if (!liveItemsByKey.has(key)) liveItemsByKey.set(key, { itemKey: key, key, missing: true });
+        if (key && entry?.missing === true && !liveItemsByKey.has(key)) liveItemsByKey.set(key, { itemKey: key, key, missing: true });
       }
     }
   } catch {
@@ -396,9 +393,17 @@ export async function runWritebackExecution({
   const liveItemsByKey = duplicateVerification.liveItemsByKey;
   async function processItem(it, i) {
     const dedupeKey = String(it?.dedupe_key || normalizeTitleForMatch(it?.title || "") || `idx:${i}`);
-    if (inFlightByDedupeKey.has(dedupeKey)) {
+    const fingerprints = getFingerprints(it);
+    const identityKeys = [...new Set([
+      `dedupe:${dedupeKey}`,
+      ...["doi", "pmid", "pmcid", "arxiv", "openalex", "url", "title"]
+        .filter((field) => fingerprints[field])
+        .map((field) => `${field}:${fingerprints[field]}`),
+    ])];
+    const waiting = [...new Set(identityKeys.map((key) => inFlightByDedupeKey.get(key)).filter(Boolean))];
+    if (waiting.length) {
       inFlightDedupeWaitCount += 1;
-      await inFlightByDedupeKey.get(dedupeKey);
+      await Promise.all(waiting);
     }
     const running = (async () => {
       try {
@@ -438,8 +443,21 @@ export async function runWritebackExecution({
             duplicateMatch = { ...duplicateMatch, reason: (duplicateMatch.reason || "").replace("duplicate_", "duplicate_worthy_") };
           }
         }
+        let backendExactDuplicateKey = "";
         if (!duplicateInPool && !duplicateInTrash && !duplicateInWorthy && !skipBackendExactDedupe) {
-          itemKey = await findExistingByExactFields(it, { mcpToolCall: callZotero, zoteroBackend, idBase: 700000 + i * 5 });
+          backendExactDuplicateKey = await findExistingByExactFields(it, { mcpToolCall: callZotero, zoteroBackend, idBase: 700000 + i * 5 }) || "";
+        }
+        if (backendExactDuplicateKey) {
+          duplicatePreventedCount += 1;
+          counters.skipped_historical_duplicate += 1;
+          if (duplicateRecords.length < 500) duplicateRecords.push({
+            candidate_id: i,
+            title: (it.title || "").slice(0, 300),
+            matched_pool_item_key: backendExactDuplicateKey,
+            action: "skipped_duplicate_in_library",
+          });
+          writebackRecords.push({ idx: i, dedupe_key: dedupeKey, itemKey: backendExactDuplicateKey, status: "skipped_duplicate_in_library" });
+          return;
         }
         if (duplicateInPool) duplicatePreventedCount += 1;
         const sourceName = sourceCollections[it.source_channel] || sourceCollections.rss;
@@ -578,6 +596,8 @@ export async function runWritebackExecution({
         pushIndex(poolIndex.byPmid, fp.pmid, itemKey);
         pushIndex(poolIndex.byPmcid, fp.pmcid, itemKey);
         pushIndex(poolIndex.byArxiv, fp.arxiv, itemKey);
+        if (poolIndex.byOpenalex) pushIndex(poolIndex.byOpenalex, fp.openalex, itemKey);
+        if (poolIndex.byUrl) pushIndex(poolIndex.byUrl, fp.url, itemKey);
         pushIndex(poolIndex.byTitle, fp.title, itemKey);
         if (poolIndex.meta) poolIndex.meta.set(itemKey, { title: it.title || "" });
         currentLiveItems[itemKey] = normalizeLiveIndexItem({
@@ -628,11 +648,13 @@ export async function runWritebackExecution({
         writebackRecords.push({ idx: i, dedupe_key: dedupeKey, itemKey: "", status: "failed", error: String(e.message || e) });
       }
     })();
-    inFlightByDedupeKey.set(dedupeKey, running);
+    for (const key of identityKeys) inFlightByDedupeKey.set(key, running);
     try {
       await running;
     } finally {
-      inFlightByDedupeKey.delete(dedupeKey);
+      for (const key of identityKeys) {
+        if (inFlightByDedupeKey.get(key) === running) inFlightByDedupeKey.delete(key);
+      }
     }
   }
 
@@ -642,10 +664,16 @@ export async function runWritebackExecution({
     ? Math.min(50, Math.max(1, Math.floor(desktopBatchSizeRaw)))
     : 50;
   const fastPathDedupeKeys = items.map((item, index) => String(item?.dedupe_key || normalizeTitleForMatch(item?.title || "") || `idx:${index}`));
+  const inputFingerprints = items.map(getFingerprints);
+  const fastPathIdentitiesDistinct = ["doi", "pmid", "pmcid", "arxiv", "openalex", "url", "title"].every((field) => {
+    const values = inputFingerprints.map((fingerprint) => fingerprint[field]).filter(Boolean);
+    return new Set(values).size === values.length;
+  });
   const desktopFastPath = zoteroBackend?.backendType === "cli"
     && skipBackendExactDedupe
     && typeof createItem?.createBatch === "function"
     && new Set(fastPathDedupeKeys).size === items.length
+    && fastPathIdentitiesDistinct
     && items.every((item) => !findByIndex(item, poolIndex) && !findByIndex(item, trashIndex) && !findByIndex(item, worthyIndex));
   if (desktopFastPath) {
     for (let offset = 0; offset < items.length && !stopForHighRisk; offset += desktopBatchSize) {
@@ -687,6 +715,8 @@ export async function runWritebackExecution({
         pushIndex(poolIndex.byPmid, fp.pmid, itemKey);
         pushIndex(poolIndex.byPmcid, fp.pmcid, itemKey);
         pushIndex(poolIndex.byArxiv, fp.arxiv, itemKey);
+        if (poolIndex.byOpenalex) pushIndex(poolIndex.byOpenalex, fp.openalex, itemKey);
+        if (poolIndex.byUrl) pushIndex(poolIndex.byUrl, fp.url, itemKey);
         pushIndex(poolIndex.byTitle, fp.title, itemKey);
         if (poolIndex.meta) poolIndex.meta.set(itemKey, { title: it.title || "" });
         currentLiveItems[itemKey] = normalizeLiveIndexItem({ key: itemKey, itemKey, title: it.title || "", doi: it.doi || it.DOI || "", pmid: it.pmid || "", pmcid: it.pmcid || "", arxiv: it.arxiv || it.arxiv_id || "", url: it.url || it.URL || "", collections: [{ key: sourceKeys[sourceName], name: sourceName }, { key: gradeKeys[gradeName], name: gradeName }], collection_roles: ["source", "grade"], tags: ["research-os", "自动入库", gradeName, it.source_channel || ""].filter(Boolean).map((tag) => ({ tag })) });

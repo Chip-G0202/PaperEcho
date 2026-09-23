@@ -54,11 +54,11 @@ test("legacy shared receipt remains readable but new sends write run-scoped stat
   assert.equal(JSON.parse(await fs.readFile(receiptPathFor(ctx.stateRoot), "utf8")).messageId, resent.messageId);
 });
 
-test("forced resend reports an expired or missing retained attachment clearly", async (t) => {
+test("forced resend does not require the old weekly workbook", async (t) => {
   const ctx = await setup(t);
   await fs.unlink(ctx.attachment);
-  const result = await runStage5Notification({ runSummary: ctx.runSummary, recipient: "reader@example.test", forceResend: true, transport: async () => ({ messageId: "no" }), config: { ...disabledLlm, runStateRoot: ctx.stateRoot } });
-  assert.equal(result.status, "failed");
-  assert.equal(result.reason, "run_artifacts_expired_or_missing");
-  assert.match(result.error, /保留期|附件不存在/);
+  let attachmentCount = -1;
+  const result = await runStage5Notification({ runSummary: ctx.runSummary, recipient: "reader@example.test", forceResend: true, transport: async (message) => { attachmentCount = message.attachments.length; return { messageId: message.messageId, accepted: true, acceptedCount: 1 }; }, config: { ...disabledLlm, runStateRoot: ctx.stateRoot } });
+  assert.equal(result.status, "sent");
+  assert.equal(attachmentCount, 0);
 });

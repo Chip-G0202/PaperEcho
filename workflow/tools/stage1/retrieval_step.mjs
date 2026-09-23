@@ -429,6 +429,7 @@ export async function fetchNcbiDatabase(database, cfg, { profile = "weekly", sta
     if (ids.length !== expectedCount) throw new Error(`NCBI_PAGING_COUNT_MISMATCH_${ids.length}_${expectedCount}`);
     stage = "details";
     const batchSize = Math.min(cfg.detail_batch_size || 200, 200);
+    const unresolvedIds = [];
     for (let offset = 0; offset < ids.length; offset += batchSize) {
       const batch = ids.slice(offset, offset + batchSize);
       const params = new URLSearchParams({ db: database, retmode: "xml", id: batch.join(",") });
@@ -436,10 +437,22 @@ export async function fetchNcbiDatabase(database, cfg, { profile = "weekly", sta
       const parsed = parseNcbiDetails(xml, database);
       const returned = new Set(parsed.map((item) => ncbiIdentity(database, item)).filter(Boolean));
       const missing = batch.filter((id) => !returned.has(String(id).replace(/^PMC/i, "")));
-      if (missing.length) throw new Error(`NCBI_DETAILS_INCOMPLETE_${missing.length}`);
       items.push(...parsed);
-      detailBatchesCompleted += 1;
+      const unresolvedBefore = unresolvedIds.length;
+      for (const id of missing) {
+        try {
+          const singleParams = new URLSearchParams({ db: database, retmode: "xml", id });
+          const singleXml = await fetchTextWithRetry(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?${singleParams}`, 2, 20000, fetchImpl, controller);
+          const recovered = parseNcbiDetails(singleXml, database).find((item) => ncbiIdentity(database, item) === String(id).replace(/^PMC/i, ""));
+          if (recovered) items.push(recovered);
+          else unresolvedIds.push(id);
+        } catch {
+          unresolvedIds.push(id);
+        }
+      }
+      if (unresolvedIds.length === unresolvedBefore) detailBatchesCompleted += 1;
     }
+    if (unresolvedIds.length) throw new Error(`NCBI_DETAILS_INCOMPLETE_${unresolvedIds.length}`);
     const proposal = {
       complete: true,
       itemCount: items.length,

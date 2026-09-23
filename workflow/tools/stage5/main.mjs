@@ -6,9 +6,9 @@ import { readNotificationReceipt, receiptPathFor, recipientHash, writeNotificati
 import { generateLiteratureOverview } from "./literature_overview.mjs";
 import { deliverReliableNotification } from "../notification/delivery.mjs";
 
-const MAX_ATTACHMENTS = 2;
+const MAX_ATTACHMENTS = 1;
 const MAX_TOTAL_BYTES = 20 * 1024 * 1024;
-const ALLOWED = new Map([["weekly_xlsx", ".xlsx"], ["monthly_docx", ".docx"]]);
+const ALLOWED = new Map([["monthly_docx", ".docx"]]);
 
 export function resolveStage5Request(argv = process.argv.slice(2), env = process.env) {
   const equals = argv.find((arg) => String(arg).startsWith("--email="));
@@ -22,7 +22,8 @@ export function isValidRecipient(value) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.te
 function isWithin(root, candidate) { const relative = path.relative(path.resolve(root), path.resolve(candidate)); return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)); }
 
 export async function prepareStage5Attachments(runSummary, { fsApi = fs } = {}) {
-  const artifacts = Array.isArray(runSummary.artifacts) ? runSummary.artifacts : [];
+  const artifacts = (Array.isArray(runSummary.artifacts) ? runSummary.artifacts : [])
+    .filter((item) => item.kind !== "weekly_xlsx");
   if (artifacts.length > MAX_ATTACHMENTS) throw Object.assign(new Error("ATTACHMENT_COUNT_LIMIT"), { category: "attachment_limit" });
   const attachments = [];
   let totalBytes = 0;

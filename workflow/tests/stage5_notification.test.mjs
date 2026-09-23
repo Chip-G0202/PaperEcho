@@ -24,12 +24,13 @@ async function fixture({ monthly = false } = {}) {
   return { root, summary: { schemaVersion: 1, runId: "run-1", pipelineMode: "desktop", status: "success", startedAt: "2026-07-13T01:00:00Z", finishedAt: "2026-07-13T01:01:00Z", durationMs: 60000, counts: { retrieved: 10, created: 4, updated: null, deduped: 2, feedback: 1, translated: 3, grades: { A: 1, B: 2, C: 3, D: 4 } }, warnings: ["unsafe <tag> & note"], errors: [], artifacts, outputRoot: root } };
 }
 
-test("mock transport sends HTML and text with explicit safe attachments and writes receipt", async () => {
+test("mock transport sends HTML and text without weekly workbook attachment", async () => {
   const { root, summary } = await fixture({ monthly: true });
   let captured;
   const result = await runStage5Notification({ runSummary: summary, recipient: "reader@example.test", transport: async (message) => { captured = message; return { messageId: message.messageId, accepted: true, acceptedCount: 1 }; }, config: DISABLED_LLM });
   assert.equal(result.status, "sent");
-  assert.deepEqual(captured.attachments.map((item) => item.filename), ["周报.xlsx", "月报.docx"]);
+  assert.deepEqual(captured.attachments.map((item) => item.filename), ["月报.docx"]);
+  assert.deepEqual(result.attachments, ["月报.docx"]);
   assert.doesNotMatch(captured.html, />附件</);
   assert.doesNotMatch(captured.text, /附件：/);
   assert.doesNotMatch(captured.html, /2026-07-13T01:01:00Z|2026-07-13 01:01:00/);
@@ -147,11 +148,14 @@ test("ambiguous SMTP timeout is unknown and never reported sent or auto-retried"
 
 test("attachment whitelist path count and size guards reject unsafe manifests", async () => {
   const { root, summary } = await fixture();
+  assert.deepEqual(await prepareStage5Attachments(summary), []);
   await assert.rejects(() => prepareStage5Attachments({ ...summary, artifacts: [{ kind: "timings", path: path.join(root, "timings.json") }] }), /ATTACHMENT_KIND_BLOCKED/);
-  await assert.rejects(() => prepareStage5Attachments({ ...summary, artifacts: [{ kind: "weekly_xlsx", path: path.join(root, "..", "outside.xlsx") }] }), /ATTACHMENT_OUTSIDE_OUTPUT_ROOT/);
-  await assert.rejects(() => prepareStage5Attachments({ ...summary, artifacts: [...summary.artifacts, ...summary.artifacts, ...summary.artifacts] }), /ATTACHMENT_COUNT_LIMIT/);
+  const monthly = path.join(root, "月报.docx");
+  await fs.writeFile(monthly, "docx");
+  await assert.rejects(() => prepareStage5Attachments({ ...summary, artifacts: [{ kind: "monthly_docx", path: path.join(root, "..", "outside.docx") }] }), /ATTACHMENT_OUTSIDE_OUTPUT_ROOT/);
+  await assert.rejects(() => prepareStage5Attachments({ ...summary, artifacts: [{ kind: "monthly_docx", path: monthly }, { kind: "monthly_docx", path: monthly }] }), /ATTACHMENT_COUNT_LIMIT/);
   const fakeFs = { stat: async () => ({ isFile: () => true, size: 20 * 1024 * 1024 + 1 }) };
-  await assert.rejects(() => prepareStage5Attachments(summary, { fsApi: fakeFs }), /ATTACHMENT_TOTAL_SIZE_LIMIT/);
+  await assert.rejects(() => prepareStage5Attachments({ ...summary, artifacts: [{ kind: "monthly_docx", path: monthly }] }, { fsApi: fakeFs }), /ATTACHMENT_TOTAL_SIZE_LIMIT/);
 });
 
 test("receipt atomic rename failure leaves no temporary file", async () => {
@@ -224,7 +228,7 @@ test("report turns review and pending-rule counts into concise action reminders"
     attention: { humanReviewCount: 2, pendingRuleCount: 3 }, warnings: [], errors: [], artifacts: [], outputRoot: ".",
   };
   const formatted = formatStage5Report(summary, { overview: "根据本轮 A/B/C 级文献标题形成总体概况。" });
-  assert.match(formatted.html, /有 2 篇文献等级需人工确认，请在周报表格的“需人工复核”中处理/);
+  assert.match(formatted.html, /有 2 篇文献等级需人工确认，请在 PaperEcho 工作台处理/);
   assert.match(formatted.text, /有 3 条筛选规则待确认，请在“待确认规则建议”中处理/);
   assert.match(formatted.html, /由 PaperEcho 自动生成/);
   assert.doesNotMatch(formatted.html, /由 Paperflow(?: Stage5)? 自动生成/);

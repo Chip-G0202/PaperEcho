@@ -196,6 +196,7 @@ async function searchLibraryWithFallback(query, { mcpToolCall, idBase, diagnosti
   if (sanitized && !attempts.includes(sanitized)) attempts.push(sanitized);
   const fallback = tokenFallback(sanitized);
   if (fallback && !attempts.includes(fallback)) attempts.push(fallback);
+  let lastParseError = null;
   for (let i = 0; i < attempts.length; i += 1) {
     const q = attempts[i];
     if (!q) continue;
@@ -206,6 +207,7 @@ async function searchLibraryWithFallback(query, { mcpToolCall, idBase, diagnosti
       return Array.isArray(parsed?.results) ? parsed.results : Array.isArray(parsed) ? parsed : [];
     } catch (error) {
       if (!isMcpParseError(error)) throw error;
+      lastParseError = error;
       diagnostics.search_library_parse_error_count += 1;
       diagnostics.search_library_error_samples.push({
         error_code: "-32700",
@@ -217,6 +219,7 @@ async function searchLibraryWithFallback(query, { mcpToolCall, idBase, diagnosti
       });
     }
   }
+  if (lastParseError) throw lastParseError;
   return [];
 }
 
@@ -226,6 +229,8 @@ async function findBySearchLibrary(item, { mcpToolCall, idBase, diagnostics }) {
     { type: "doi", value: fp.doi },
     { type: "pmid", value: fp.pmid },
     { type: "pmcid", value: fp.pmcid },
+    { type: "arxiv", value: fp.arxiv },
+    { type: "openalex", value: fp.openalex },
     { type: "url", value: fp.url },
     { type: "title", value: fp.title && fp.title.length >= TITLE_SKIP_MIN_LENGTH ? item.title : "" },
   ].filter((entry) => entry.value);
@@ -239,13 +244,17 @@ async function findBySearchLibrary(item, { mcpToolCall, idBase, diagnostics }) {
         doi: hit.DOI || hit.doi,
         pmid: hit.pmid,
         pmcid: hit.pmcid,
-        url: hit.url,
+        arxiv: hit.arxiv,
+        openalex_id: hit.openalex_id,
+        url: hit.url || hit.URL,
         title: hit.title,
         extra: hit.extra,
       });
       if (query.type === "doi" && fp.doi && h.doi === fp.doi) return { itemKey: h.itemKey, reason: "doi", type: "doi", confidence: "strong", collection: "search_library" };
       if (query.type === "pmid" && fp.pmid && h.pmid === fp.pmid) return { itemKey: h.itemKey, reason: "pmid", type: "pmid", confidence: "strong", collection: "search_library" };
       if (query.type === "pmcid" && fp.pmcid && h.pmcid === fp.pmcid) return { itemKey: h.itemKey, reason: "pmcid", type: "pmcid", confidence: "strong", collection: "search_library" };
+      if (query.type === "arxiv" && fp.arxiv && h.arxiv === fp.arxiv) return { itemKey: h.itemKey, reason: "arxiv", type: "arxiv", confidence: "strong", collection: "search_library" };
+      if (query.type === "openalex" && fp.openalex && h.openalex === fp.openalex) return { itemKey: h.itemKey, reason: "openalex", type: "openalex", confidence: "strong", collection: "search_library" };
       if (query.type === "url" && fp.url && h.url === fp.url) return { itemKey: h.itemKey, reason: "url", type: "url", confidence: "strong", collection: "search_library" };
       if (query.type === "title" && fp.title && h.title === fp.title) return { itemKey: h.itemKey, reason: "title", type: "title", confidence: "weak", collection: "search_library" };
     }
@@ -311,10 +320,13 @@ function recordDuplicate(item, index, match, diagnostics) {
 }
 
 async function verifyLocalIndexMatch(item, match, { mcpToolCall, idBase }) {
-  if (!match?.itemKey || typeof mcpToolCall !== "function") return true;
+  if (!match?.itemKey || typeof mcpToolCall !== "function") return null;
   if (match.collection === "trash") return true;
   try {
-    const details = parseToolText(await mcpToolCall("get_item_details", { itemKey: match.itemKey, mode: "preview" }, idBase));
+    const payload = await mcpToolCall("get_item_details", { itemKey: match.itemKey, mode: "preview" }, idBase);
+    const details = payload?.content?.[0]?.text ? parseToolText(payload) : payload;
+    if (details?.missing === true || details?.data?.missing === true) return false;
+    if (!details || !(details?.key || details?.itemKey || details?.data?.key || details?.data?.itemKey)) return null;
     const data = details?.data || details || {};
     const live = getExistingDedupeFingerprints({
       key: match.itemKey,
@@ -335,14 +347,16 @@ async function verifyLocalIndexMatch(item, match, { mcpToolCall, idBase }) {
     if (match.type === "itemKey") return Boolean(live.itemKey);
     return Boolean(live.itemKey);
   } catch {
-    return false;
+    return null;
   }
 }
 
 function verifyDetailsAgainstCandidate(item, match, details) {
   if (!match?.itemKey) return true;
   if (match.collection === "trash") return true;
-  if (!details || details.missing) return false;
+  if (!details) return null;
+  if (details.missing || details?.data?.missing) return false;
+  if (!(details?.key || details?.itemKey || details?.data?.key || details?.data?.itemKey)) return null;
   const data = details?.data || details || {};
   const live = getExistingDedupeFingerprints({
     key: match.itemKey,
@@ -378,10 +392,15 @@ async function batchVerifyLocalIndexMatches(pending = [], { mcpToolCall, diagnos
     diagnostics.local_index_match_batch_request_count += 1;
     diagnostics.local_index_match_batch_item_count += keys.length;
     const payload = await mcpToolCall("get_items_details", { itemKeys: keys, mode: "preview" }, 825000);
-    const parsed = parseToolText(payload);
-    const byKey = new Map((Array.isArray(parsed) ? parsed : []).map((entry) => [String(entry.itemKey || entry.key || ""), entry]));
-    for (const entry of livePending) {
-      results.set(entry.index, verifyDetailsAgainstCandidate(entry.item, entry.match, byKey.get(String(entry.match.itemKey || ""))));
+    const parsed = payload?.content?.[0]?.text ? parseToolText(payload) : payload;
+    const details = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : [];
+    const byKey = new Map(details.map((entry) => [String(entry.itemKey || entry.key || entry?.data?.itemKey || entry?.data?.key || ""), entry]));
+    for (let i = 0; i < livePending.length; i += 1) {
+      const entry = livePending[i];
+      const detail = byKey.get(String(entry.match.itemKey || ""));
+      results.set(entry.index, detail
+        ? verifyDetailsAgainstCandidate(entry.item, entry.match, detail)
+        : await verifyLocalIndexMatch(entry.item, entry.match, { mcpToolCall, idBase: 825000 + i }));
     }
     return results;
   } catch {
@@ -446,10 +465,9 @@ export async function classifyPreLlmZoteroExistingDuplicates(candidates = [], { 
     const { item, match, index: i, error } = entry;
     if (error) {
       item.pre_llm_duplicate_check_failed = true;
+      item.pre_llm_skip_writeback = true;
       failed.push(item);
-      newCandidates.push(item);
       diagnostics.pre_llm_duplicate_check_failed_count += 1;
-      diagnostics.duplicate_check_failed_reviewed_count += 1;
       diagnostics.failed_records.push({
         candidate_id: candidateSafeId(item, i),
         title_hash: hashText(item.title || "").slice(0, 16),
@@ -461,8 +479,20 @@ export async function classifyPreLlmZoteroExistingDuplicates(candidates = [], { 
 
     if (match?.itemKey) {
       if (diagnostics.local_index_match_verification_enabled) {
-        const verified = localVerificationResults.get(i) === true;
-        if (!verified) {
+        const verified = localVerificationResults.get(i);
+        if (verified == null) {
+          item.pre_llm_duplicate_check_failed = true;
+          item.pre_llm_skip_writeback = true;
+          failed.push(item);
+          diagnostics.pre_llm_duplicate_check_failed_count += 1;
+          if (diagnostics.failed_records.length < 100) diagnostics.failed_records.push({
+            candidate_id: candidateSafeId(item, i),
+            title_hash: hashText(item.title || "").slice(0, 16),
+            reason: "local_index_verification_unavailable",
+          });
+          continue;
+        }
+        if (verified === false) {
           diagnostics.local_index_stale_match_count += 1;
           if (diagnostics.local_index_stale_match_records.length < 100) {
             diagnostics.local_index_stale_match_records.push({

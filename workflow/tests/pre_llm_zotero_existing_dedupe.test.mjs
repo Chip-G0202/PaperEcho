@@ -216,6 +216,31 @@ test("pre-LLM Zotero dedupe still skips verified live local-index matches", asyn
   }
 });
 
+test("pre-LLM dedupe holds an indexed candidate when live verification is unavailable", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pre-llm-unavailable-index-"));
+  const localIndexPath = path.join(dir, "current_library_index.json");
+  try {
+    await writeZoteroLibraryIndex(localIndexPath, {
+      schema_version: 1,
+      live_items: { EXIST1: { itemKey: "EXIST1", title: "Existing paper", url: "https://example.test/paper", collection_roles: ["source", "grade"] } },
+      tombstones: {},
+    });
+    const item = { id: "candidate", title: "Existing paper", url: "https://example.test/paper", grade: "C", rule_grade: "C" };
+    const result = await classifyPreLlmZoteroExistingDuplicates([item], {
+      localIndexPath,
+      verifyLocalIndexMatches: true,
+      mcpToolCall: async () => { throw new Error("backend unavailable"); },
+    });
+    assert.equal(result.diagnostics.local_index_stale_match_count, 0);
+    assert.equal(result.diagnostics.pre_llm_duplicate_check_failed_count, 1);
+    assert.equal(result.newCandidatesForLlmReview.length, 0);
+    assert.equal(result.duplicateCheckFailedCandidates.length, 1);
+    assert.equal(buildWritebackReadyItems([item]).length, 0);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("pre-LLM dedupe step uses local index even when connector is unavailable", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pre-llm-step-local-index-"));
   const localIndexPath = path.join(dir, "current_library_index.json");
@@ -252,7 +277,7 @@ test("pre-LLM dedupe step uses local index even when connector is unavailable", 
   }
 });
 
-test("pre-LLM Zotero dedupe keeps candidates for LLM when duplicate check setup fails", async () => {
+test("pre-LLM Zotero dedupe holds candidates when duplicate check setup fails", async () => {
   const candidates = [
     { id: "a", title: "A candidate", doi: "10.0000/example.001", grade: "B", rule_grade: "B" },
     { id: "b", title: "B candidate", doi: "10.0000/example.003", grade: "C", rule_grade: "C" },
@@ -263,10 +288,10 @@ test("pre-LLM Zotero dedupe keeps candidates for LLM when duplicate check setup 
 
   const result = await classifyPreLlmZoteroExistingDuplicates(candidates, { mcpToolCall, localIndexPath: MISSING_LOCAL_INDEX_PATH });
 
-  assert.deepEqual(result.newCandidatesForLlmReview.map((item) => item.id), ["a", "b"]);
+  assert.deepEqual(result.newCandidatesForLlmReview, []);
   assert.deepEqual(result.duplicateCheckFailedCandidates.map((item) => item.id), ["a", "b"]);
   assert.equal(result.diagnostics.pre_llm_duplicate_check_failed_count, 2);
-  assert.equal(result.diagnostics.duplicate_check_failed_reviewed_count, 2);
+  assert.equal(buildWritebackReadyItems(candidates).length, 0);
 });
 
 test("pre-LLM Zotero dedupe does not skip low-confidence short title-only matches", async () => {
@@ -284,7 +309,7 @@ test("pre-LLM Zotero dedupe does not skip low-confidence short title-only matche
   assert.equal(result.diagnostics.possible_duplicate_count, 0);
 });
 
-test("pre-LLM search_library parse errors do not skip candidates", async () => {
+test("pre-LLM search_library parse errors hold candidates instead of permitting writeback", async () => {
   const candidates = [
     { id: "parse", title: "IFN-β response title with enough length", grade: "B", rule_grade: "B" },
   ];
@@ -292,7 +317,9 @@ test("pre-LLM search_library parse errors do not skip candidates", async () => {
 
   const result = await classifyPreLlmZoteroExistingDuplicates(candidates, { mcpToolCall, localIndexPath: MISSING_LOCAL_INDEX_PATH });
 
-  assert.deepEqual(result.newCandidatesForLlmReview.map((item) => item.id), ["parse"]);
+  assert.deepEqual(result.newCandidatesForLlmReview, []);
+  assert.deepEqual(result.duplicateCheckFailedCandidates.map((item) => item.id), ["parse"]);
+  assert.equal(buildWritebackReadyItems(candidates).length, 0);
   assert.equal(result.diagnostics.search_library_parse_error_count > 0, true);
   assert.equal(result.diagnostics.pre_llm_existing_duplicate_count, 0);
 });

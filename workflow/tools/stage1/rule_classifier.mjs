@@ -330,14 +330,16 @@ function matchesAGrade(text) {
 function matchesBGrade(text) {
   const coreExposureTerms = TRIAGE_RULES.research_focus?.core_exposure_terms || [];
   const coreBiologyTerms = TRIAGE_RULES.research_focus?.core_biology_terms || [];
+  const mechanismTerms = TRIAGE_RULES.research_focus?.mechanism_terms || [];
   const preferredEvidence = TRIAGE_RULES.research_focus?.preferred_evidence || [];
 
   const exposureHits = countHits(text, coreExposureTerms);
   const biologyHits = countHits(text, coreBiologyTerms);
+  const mechanismHits = countHits(text, mechanismTerms);
   const evidenceHits = countHits(text, preferredEvidence);
 
-  // B-grade requires: (exposure OR biology) AND some evidence
-  return (exposureHits.length >= 1 || biologyHits.length >= 1) && evidenceHits.length >= 1;
+  // A broad biology term plus a study-design word does not establish topic fit.
+  return evidenceHits.length >= 1 && (exposureHits.length >= 1 || (biologyHits.length >= 1 && mechanismHits.length >= 1));
 }
 
 /**
@@ -345,16 +347,11 @@ function matchesBGrade(text) {
  * "与领域相关但不直接针对当前研究问题。"
  */
 function matchesCGrade(text) {
-  const relatedTerms = [
-    ...TRIAGE_RULES.research_focus?.core_exposure_terms || [],
-    ...TRIAGE_RULES.research_focus?.core_biology_terms || [],
-    ...TRIAGE_RULES.research_focus?.mechanism_terms || [],
-  ];
-
-  const relatedHits = countHits(text, relatedTerms);
-
-  // C-grade: has some related terms but not enough for A or B
-  return relatedHits.length >= 1;
+  const exposure = countHits(text, TRIAGE_RULES.research_focus?.core_exposure_terms || []).length > 0;
+  const biology = countHits(text, TRIAGE_RULES.research_focus?.core_biology_terms || []).length > 0;
+  const mechanism = countHits(text, TRIAGE_RULES.research_focus?.mechanism_terms || []).length > 0;
+  // A single generic keyword is retrieval evidence, not enough for admission.
+  return (exposure && (biology || mechanism)) || (biology && mechanism);
 }
 
 // ─── Main Classification Function ─────────────────────────────────────

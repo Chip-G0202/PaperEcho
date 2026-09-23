@@ -192,6 +192,40 @@ test("PubMed exhausts search pages and fetches complete details in chunks", asyn
   assert.equal(requested.filter((url) => url.pathname.endsWith("efetch.fcgi")).length, 2);
 });
 
+test("PubMed retries missing detail IDs and retains complete records without advancing an incomplete source", async () => {
+  const fetchImpl = async (rawUrl) => {
+    const url = new URL(rawUrl);
+    if (url.pathname.endsWith("esearch.fcgi")) {
+      const start = Number(url.searchParams.get("retstart"));
+      return jsonResponse({ esearchresult: { count: "3", idlist: start === 0 ? ["1", "2"] : ["3"] } });
+    }
+    const ids = url.searchParams.get("id");
+    if (ids === "1,2") return textResponse(pubmedSingleXml(1));
+    if (ids === "2") return textResponse("<PubmedArticleSet/>");
+    return textResponse(pubmedSingleXml(3));
+  };
+  const partial = await fetchNcbiDatabase("pubmed", ncbiConfig(), { stateRoot: "state", now: fixedNow, fetchImpl });
+  assert.deepEqual(partial.items.map((item) => item.pmid), ["1", "3"]);
+  assert.equal(partial.audit.complete, false);
+  assert.equal(partial.audit.detailBatchesCompleted, 1);
+  assert.match(partial.failed[0].error, /NCBI_DETAILS_INCOMPLETE_1/);
+  assert.equal(partial.stateUpdates[0].state.committed, null);
+
+  const recovered = await fetchNcbiDatabase("pubmed", ncbiConfig(), { now: fixedNow, fetchImpl: async (rawUrl) => {
+    const url = new URL(rawUrl);
+    if (url.pathname.endsWith("esearch.fcgi")) {
+      const start = Number(url.searchParams.get("retstart"));
+      return jsonResponse({ esearchresult: { count: "3", idlist: start === 0 ? ["1", "2"] : ["3"] } });
+    }
+    const ids = url.searchParams.get("id");
+    if (ids === "1,2") return textResponse(pubmedSingleXml(1));
+    return textResponse(pubmedSingleXml(Number(ids)));
+  } });
+  assert.deepEqual(recovered.items.map((item) => item.pmid), ["1", "2", "3"]);
+  assert.equal(recovered.audit.complete, true);
+  assert.equal(recovered.audit.detailBatchesCompleted, 2);
+});
+
 test("PMC detail normalization preserves PMID/PMCID/DOI identity fields", async () => {
   const items = parseNcbiDetails(await fixture("pmc-details.xml"), "pmc");
   assert.equal(items.length, 1);

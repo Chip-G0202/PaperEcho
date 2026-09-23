@@ -3,7 +3,7 @@
  *
  * Handles feedback item actions and writeback preparation.
  */
-import { buildWritebackReadyArtifact } from "../lib/pipeline_stage_support.mjs";
+import { buildWritebackReadyArtifact, isWritebackEligibleItem } from "../lib/pipeline_stage_support.mjs";
 import { buildStage1TriageSummary } from "./triage_summary.mjs";
 import { runFeedbackItemActionsStep } from "./feedback_item_actions_step.mjs";
 import { loadTranslationCache, getTranslationConfig } from "../lib/title_translation_support.mjs";
@@ -96,7 +96,7 @@ export async function runFeedbackActionsAndWriteback({
   report.steps.triage.triage_summary = updatedTriageSummary;
 
   const triaged = writebackReady;
-  const abcAllItems = noWriteback ? [] : triagedAll.filter((it) => it && it.grade && it.grade !== "D" && it.pre_llm_skip_writeback !== true);
+  const abcAllItems = noWriteback ? [] : triagedAll.filter(isWritebackEligibleItem);
   const translationConfig = getTranslationConfig();
 
   return {

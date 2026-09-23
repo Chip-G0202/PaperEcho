@@ -53,9 +53,15 @@ export function resolveVerifiedWritebackItems(writebackSummary) {
   return { ok: true, reason: "verified_execution_evidence", items, evidenceRequired: true, identitySetMatch: true, expected, actual };
 }
 
+export function isWritebackEligibleItem(item) {
+  return Boolean(item && item.grade && item.grade !== "D" && item.final_grade !== "D"
+    && item.pre_llm_skip_writeback !== true
+    && item.llm_review_grade !== "D");
+}
+
 export function buildWritebackReadyItems(triagedItems, { translationCache = null } = {}) {
   return (triagedItems || [])
-    .filter((item) => item && item.grade && item.grade !== "D" && item.pre_llm_skip_writeback !== true)
+    .filter(isWritebackEligibleItem)
     .map((item) => {
       const cached = resolveCachedTranslation(translationCache, item.title);
       const translated = isMeaningfulChineseTranslation(cached, item.title) ? cached : existingTranslatedTitle(item);

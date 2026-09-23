@@ -151,21 +151,19 @@ function fingerprintsMatch(candidate, liveItem, match) {
   if (match.type === "pmid") return Boolean(candidateFp.pmid && liveFp.pmid && candidateFp.pmid === liveFp.pmid);
   if (match.type === "pmcid") return Boolean(candidateFp.pmcid && liveFp.pmcid && candidateFp.pmcid === liveFp.pmcid);
   if (match.type === "arxiv") return Boolean(candidateFp.arxiv && liveFp.arxiv && candidateFp.arxiv === liveFp.arxiv);
+  if (match.type === "openalex") return Boolean(candidateFp.openalex && liveFp.openalex && candidateFp.openalex === liveFp.openalex);
+  if (match.type === "url") return Boolean(candidateFp.url && liveFp.url && candidateFp.url === liveFp.url);
   if (match.type === "title") return Boolean(candidateFp.title && liveFp.title && candidateFp.title === liveFp.title);
   return false;
 }
 
 export async function verifyCachedDuplicateMatch(candidate, match, { mcpToolCall, zoteroBackend = null, idBase, liveItemsByKey = null }) {
   if (!match?.itemKey || !match.fromCache || match.isTombstone) return Boolean(match?.itemKey);
-  try {
-    if (liveItemsByKey instanceof Map && liveItemsByKey.has(match.itemKey)) {
-      return fingerprintsMatch(candidate, liveItemsByKey.get(match.itemKey), match);
-    }
-    const { item } = await readPreviewItemWithCache(match.itemKey, { mcpToolCall, zoteroBackend, localIndex: null, cacheStats: null, id: idBase });
-    return fingerprintsMatch(candidate, item, match);
-  } catch {
-    return false;
+  if (liveItemsByKey instanceof Map && liveItemsByKey.has(match.itemKey)) {
+    return fingerprintsMatch(candidate, liveItemsByKey.get(match.itemKey), match);
   }
+  const { item } = await readPreviewItemWithCache(match.itemKey, { mcpToolCall, zoteroBackend, localIndex: null, cacheStats: null, id: idBase });
+  return fingerprintsMatch(candidate, item, match);
 }
 
 function normalizeSearchLibraryResult(raw) {
@@ -192,7 +190,7 @@ async function searchLibraryForExactDedupe(query, { mcpToolCall, zoteroBackend =
 }
 
 export async function findExistingByExactFields(item, { mcpToolCall, zoteroBackend = null, idBase }) {
-  const queries = [item.doi, item.pmid, item.pmcid, item.arxiv, item.title].filter(Boolean);
+  const queries = [item.doi, item.pmid, item.pmcid, item.arxiv, item.openalex_id, item.url, item.title].filter(Boolean);
   for (let qi = 0; qi < queries.length; qi++) {
     const q = String(queries[qi]).trim();
     if (!q) continue;
@@ -202,13 +200,19 @@ export async function findExistingByExactFields(item, { mcpToolCall, zoteroBacke
     for (const hit of result) {
       const hitFp = getFingerprints({
         doi: hit?.DOI || hit?.doi || "",
-        arxiv: String(hit?.extra || "").match(/arXiv:\s*([^\s]+)/i)?.[1] || "",
+        pmid: hit?.pmid || String(hit?.extra || "").match(/PMID:\s*([^\s]+)/i)?.[1] || "",
+        pmcid: hit?.pmcid || String(hit?.extra || "").match(/PMCID:\s*([^\s]+)/i)?.[1] || "",
+        arxiv: hit?.arxiv || String(hit?.extra || "").match(/arXiv:\s*([^\s]+)/i)?.[1] || "",
+        openalex_id: hit?.openalex_id || "",
+        url: hit?.url || hit?.URL || "",
         title: hit?.title || "",
       });
       if (target.doi && hitFp.doi && target.doi === hitFp.doi) return hit?.key || null;
       if (target.pmid && hitFp.pmid && target.pmid === hitFp.pmid) return hit?.key || null;
       if (target.pmcid && hitFp.pmcid && target.pmcid === hitFp.pmcid) return hit?.key || null;
       if (target.arxiv && hitFp.arxiv && target.arxiv === hitFp.arxiv) return hit?.key || null;
+      if (target.openalex && hitFp.openalex && target.openalex === hitFp.openalex) return hit?.key || null;
+      if (target.url && hitFp.url && target.url === hitFp.url) return hit?.key || null;
       if (target.title && hitFp.title && target.title === hitFp.title) return hit?.key || null;
     }
   }

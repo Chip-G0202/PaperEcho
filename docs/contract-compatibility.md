@@ -51,7 +51,7 @@
 - 仅处理 **B** 和 **C** 条目
 - **A** 条目不复审（已是最高等级）
 - **D** 条目不复审（包括 `flags.uncertain=true` 的条目）
-- C→D 语义降级**不自动采用**：`final_grade` 保持 C，`needs_human_review=true`
+- C→D 语义降级**不自动采用**：`final_grade` 保持 C，`needs_human_review=true`；所有语义建议 D 的 ABC 候选保留在 Stage1 审计，不自动写入 Zotero
 - 其他 1 级调整（C→B、B→A、B→C）自动采用
 - 2+ 级差异保持 `rule_grade` 并标记 `needs_human_review=true`
 

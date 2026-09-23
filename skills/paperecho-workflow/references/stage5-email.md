@@ -37,8 +37,8 @@ An explicit recipient with missing/invalid SMTP fails Stage5 clearly. It does no
 
 ## Attachments and state
 
-- Allowed manifest kinds are the explicit current-run `weekly_xlsx` and optional `monthly_docx` only.
-- At most two attachments and 20 MiB total; each must be a real file inside Run Summary `outputRoot` with the expected extension.
+- Weekly XLSX is no longer attached; its review takes place in the Control Center. Only the optional current-run `monthly_docx` may be attached.
+- At most one attachment and 20 MiB total; it must be a real file inside Run Summary `outputRoot` with the expected extension.
 - Stage5 never scans historical directories or guesses an attachment. A force resend after retained artifacts expire reports the missing/expired artifact.
 - State root is `<runtime-root>/runs/<runId>/stage5/`: `email_receipt.json`, its short-lived lock, and `literature_overview.json`.
 - Receipt schema v1 stores a recipient hash, not the address. A successful run ID plus recipient hash is idempotent unless `--force-resend` is supplied.

@@ -17,6 +17,7 @@ import { buildWritebackDedupeContext } from "../tools/stage2/writeback_dedupe_co
 import {
   buildPoolIndex,
   buildCollectionDuplicateIndex,
+  findExistingByExactFields,
   verifyCachedDuplicateMatch,
 } from "../tools/stage2/duplicate_scan.mjs";
 import { runWritebackExecution } from "../tools/stage2/writeback_execution.mjs";
@@ -152,13 +153,65 @@ test("verifyCachedDuplicateMatch rejects stale cached local-index matches", asyn
     { itemKey: "STALE1", type: "doi", fromCache: true },
     {
       idBase: 1,
-      mcpToolCall: async () => {
-        throw new Error("Item not found: STALE1");
-      },
+      liveItemsByKey: new Map([["STALE1", { itemKey: "STALE1", missing: true }]]),
     },
   );
 
   assert.equal(result, false);
+});
+
+test("cached URL matches are verified and read failures cannot authorize a duplicate create", async () => {
+  const candidate = { title: "Existing paper", url: "https://example.test/paper" };
+  const match = { itemKey: "EXIST1", type: "url", fromCache: true };
+  assert.equal(await verifyCachedDuplicateMatch(candidate, match, {
+    liveItemsByKey: new Map([["EXIST1", { itemKey: "EXIST1", title: "Existing paper", url: candidate.url }]]),
+  }), true);
+  await assert.rejects(() => verifyCachedDuplicateMatch(candidate, match, {
+    mcpToolCall: async () => { throw new Error("backend_unavailable"); },
+  }), /backend_unavailable/);
+});
+
+test("exact backend fallback recognizes URL, PMID and PMCID without a local index", async () => {
+  const hits = [{ key: "OLD1", title: "Renamed paper", url: "https://example.test/old", extra: "PMID: 123 PMCID: PMC456" }];
+  const queries = [];
+  const backend = { searchLibrary: async ({ q }) => { queries.push(q); return { items: hits, failed: [] }; } };
+  assert.equal(await findExistingByExactFields({ title: "New title", url: "https://example.test/old" }, { zoteroBackend: backend, idBase: 1 }), "OLD1");
+  assert.equal(await findExistingByExactFields({ title: "New title", pmid: "123" }, { zoteroBackend: backend, idBase: 1 }), "OLD1");
+  assert.equal(await findExistingByExactFields({ title: "New title", pmcid: "PMC456" }, { zoteroBackend: backend, idBase: 1 }), "OLD1");
+  assert.ok(queries.includes("https://example.test/old"));
+});
+
+test("concurrent writeback creates only one item when candidates share a URL", async () => {
+  const emptyIndex = () => ({
+    byDoi: new Map(), byPmid: new Map(), byPmcid: new Map(), byArxiv: new Map(),
+    byOpenalex: new Map(), byUrl: new Map(), byTitle: new Map(), meta: new Map(),
+  });
+  const counters = {
+    total: 2, created: 0, failed: 0, reused_existing: 0, skipped_historical_duplicate: 0,
+    skipped_duplicate_in_pool: 0, skipped_duplicate_in_trash: 0, skipped_duplicate_in_deleted_trash_index: 0, skipped_duplicate_in_worthy: 0,
+    by_source: { rss: 0 }, by_grade: { "C领域相关": 0 },
+  };
+  const writebackItems = [];
+  let creates = 0;
+  const createItem = async () => { creates += 1; await new Promise((resolve) => setImmediate(resolve)); return "NEW1"; };
+  createItem.createBatch = async () => { throw new Error("unsafe batch path"); };
+  const result = await runWritebackExecution({
+    items: [
+      { title: "First title", url: "https://example.test/shared", dedupe_key: "first", grade: "C", final_grade: "C", source_channel: "rss" },
+      { title: "Different title", url: "https://example.test/shared", dedupe_key: "second", grade: "C", final_grade: "C", source_channel: "rss" },
+    ],
+    root: { key: "POOL" }, sourceKeys: { "RSS订阅": "SRC" }, gradeKeys: { "C领域相关": "GRADE" },
+    sourceCollections: { rss: "RSS订阅" }, poolIndex: emptyIndex(), trashIndex: emptyIndex(), worthyIndex: emptyIndex(),
+    currentLiveItems: {}, counters, failures: [], localIndexStats: { skipped_duplicate_in_deleted_trash_index: 0 },
+    skippedDuplicatesInPool: [], skippedDuplicatesInTrash: [], duplicateRecords: [], writebackItems,
+    zoteroBackend: { backendType: "cli" }, mcpToolCall: async () => { throw new Error("unexpected backend call"); },
+    createItem, skipBackendExactDedupe: true,
+  });
+  assert.equal(creates, 1);
+  assert.equal(counters.created, 1);
+  assert.equal(counters.skipped_duplicate_in_pool, 1);
+  assert.equal(writebackItems.length, 1);
+  assert.equal(result.inFlightDedupeWaitCount, 1);
 });
 
 test("buildPoolIndex reads collection items and details through contract methods before compat fallback", async () => {
@@ -586,7 +639,7 @@ test("runWritebackExecution falls back to compat get_items_details when contract
   assert.deepEqual(calls[0].args.itemKeys, ["OLD1"]);
 });
 
-test("runWritebackExecution treats contract getItems partial failures as unverified cached duplicates", async () => {
+test("runWritebackExecution holds cached matches when contract getItems cannot verify them", async () => {
   const calls = [];
   const item = { title: "Missing cached-flow item", doi: "10.0000/example.017", grade: "A", final_grade: "A", source_channel: "rss" };
   const poolIndex = {
@@ -641,16 +694,17 @@ test("runWritebackExecution treats contract getItems partial failures as unverif
       calls.push({ name });
       throw new Error(`unexpected Zotero call: ${name}`);
     },
-    createItem: async () => "NEW1",
+    createItem: async () => { throw new Error("create must not run"); },
     skipBackendExactDedupe: true,
   });
 
   assert.equal(counters.skipped_duplicate_in_pool, 0);
-  assert.equal(counters.created, 1);
-  assert.equal(writebackItems[0].itemKey, "NEW1");
+  assert.equal(counters.created, 0);
+  assert.equal(counters.failed, 1);
+  assert.equal(writebackItems.length, 0);
   assert.equal(result.duplicateVerificationStats.duplicate_verification_batch_request_count, 1);
   assert.equal(result.duplicateVerificationStats.duplicate_verification_batch_fallback_count, 0);
-  assert.deepEqual(calls.map((call) => call.name), ["getItems"]);
+  assert.deepEqual(calls.map((call) => call.name), ["getItems", "get_item_details"]);
 });
 
 test("runWritebackExecution exact dedupe searches through backend wrapper before compat fallback", async () => {
@@ -708,8 +762,9 @@ test("runWritebackExecution exact dedupe searches through backend wrapper before
   });
 
   assert.equal(counters.failed, 0);
-  assert.equal(counters.created, 1);
-  assert.equal(writebackItems[0].itemKey, "OLD1");
+  assert.equal(counters.created, 0);
+  assert.equal(counters.skipped_historical_duplicate, 1);
+  assert.deepEqual(writebackItems, []);
   assert.deepEqual(calls.map((call) => call.name), ["searchLibrary"]);
   assert.deepEqual(calls[0].options, { q: "10.0000/example.010", limit: 8, mode: "preview", relevanceScoring: true, stage: "stage2_exact_dedupe" });
 });
@@ -764,8 +819,9 @@ test("runWritebackExecution exact dedupe falls back to compat search_library", a
   });
 
   assert.equal(counters.failed, 0);
-  assert.equal(counters.created, 1);
-  assert.equal(writebackItems[0].itemKey, "OLD1");
+  assert.equal(counters.created, 0);
+  assert.equal(counters.skipped_historical_duplicate, 1);
+  assert.deepEqual(writebackItems, []);
   assert.deepEqual(calls.map((call) => call.name), ["search_library"]);
   assert.deepEqual(calls[0].args, { q: "10.0000/example.010", limit: 8, mode: "preview", relevanceScoring: true });
 });

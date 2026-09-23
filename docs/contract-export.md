@@ -54,7 +54,7 @@
 
 ### 两个 Sheet
 
-- **需人工复核**：仅 `needs_human_review=true` 的条目（如 C→D 被策略阻止）
+- **需人工复核**：仅已写回且 `needs_human_review=true` 的条目；语义建议 D 的候选留在 Stage1 审计，不自动写回
 - **每日反馈**：当天写入的剩余 ABC 条目（排除已进入复核的）
 - 两个 sheet 合计 = 当天实际写入 Zotero 的全部 ABC 条目
 - `D无关` 条目不包含在周报中

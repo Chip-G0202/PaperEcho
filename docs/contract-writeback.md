@@ -37,13 +37,13 @@
 写回前执行去重检查：
 
 1. 读取/构建 `文献池`、`文献池/待删除`、`值得精读` 的重复索引
-2. 精确规范化匹配优先级：`DOI > PMID > PMCID > arXiv > 精确规范化标题`
+2. 精确规范化匹配优先级：`DOI > PMID > PMCID > arXiv > OpenAlex > URL > 精确规范化标题`；缓存命中需经实时读取核实，读取失败不得视为不存在
 3. 标题规范化覆盖：Unicode/标点/间距变体（NFKC/NFKD、引号/破折号统一、全角映射、组合标记移除、控制/零宽清理）
 4. 重复匹配处理：
    - 在 `文献池` 中重复：跳过创建，跳过所有 add-to-collection 操作
    - 在 `文献池/待删除` 中重复：同上
    - 在 `值得精读` 中重复：同上
-   - 不重复：先添加到根 pool，再添加到每日来源/等级集合
+   - 不重复：创建后仅添加到每日来源/等级集合，不强行添加到根 pool
 5. 记录 `skipped_duplicate_in_pool`、`skipped_duplicate_in_trash`、`skipped_duplicate_in_worthy` 和 created/add 计数器
 
 ## 星标迁移（Star Migration）

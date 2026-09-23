@@ -67,6 +67,24 @@ const pubmedConfig = {
 const emptyRss = async () => ({ items: [], failed: [], config: { warnings: [] }, audit: [], stateUpdates: [] });
 const emptyDb = async () => ({ items: [], failed: [], config: { databases: ["pubmed"], warnings: [] }, audit: [{ source: "pubmed", complete: true, itemCount: 0 }], stateUpdates: [] });
 
+test("an incomplete PubMed detail batch still contributes parsed records and reports degradation", async (t) => {
+  const root = await project(t, { domain: "biomedical", primary: ["pubmed_pmc"] });
+  const paper = { title: "Recovered PubMed record", doi: "10.1000/recovered", pmid: "123", source_platform: "pubmed", source_channel: "database" };
+  const result = await runSourceSelectionAndFetch({
+    root, pubmedPmcConfig: pubmedConfig, now: new Date("2026-01-02T00:00:00Z"),
+    fetchers: {
+      fetchRssAll: emptyRss,
+      fetchPubMed: async () => ({
+        items: [paper], failed: [{ source: "pubmed", stage: "details", error: "NCBI_DETAILS_INCOMPLETE_2" }],
+        config: pubmedConfig, audit: [{ source: "pubmed", complete: false, itemCount: 1, failureStage: "details" }], stateUpdates: [],
+      }),
+    },
+  });
+  assert.deepEqual(result.db.items, [paper]);
+  assert.equal(result.retrievalHealth.unionCandidateCount, 1);
+  assert.equal(result.retrievalHealth.perSource.find((entry) => entry.source === "pubmed")?.degraded, true);
+});
+
 test("general primary sources run independently and a healthy S2 result survives OpenAlex failure", async (t) => {
   const root = await project(t, { domain: "non_biomedical_stem", primary: ["openalex", "semantic_scholar"], retrieval: { diagnostics: { enabled: true, low_yield_threshold: 1, probe_budget: 3 } } });
   const result = await runSourceSelectionAndFetch({

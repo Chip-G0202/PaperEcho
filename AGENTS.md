@@ -227,7 +227,7 @@ The stable three-path architecture, Stage1-Stage5 contracts, Stage5 notification
      - 语义等级: semantic review suggested grade
      - 最终等级: system-adopted final grade
      - All three columns output only grade letters (A/B/C/D), no explanatory text like "C领域相关"
-   - `周报.xlsx` "需人工复核" sheet only contains items where `needs_human_review=true` (e.g. C→D blocked by policy)
+   - `周报.xlsx` "需人工复核" sheet only contains written-back items where `needs_human_review=true`; candidates with semantic grade D remain in Stage1 audit and are held before Zotero writeback
      - Auto-adopted adjustments (B→A, C→B, B→C) are visible in 每日反馈 via 规则等级/语义等级/最终等级 columns but do NOT enter 人工复核
      - Users fill "人工确认等级" column; rule/semantic grades are read-only evidence
      - Only one review sheet; no separate "语义捞回" or "语义降权提醒" sheets
@@ -264,7 +264,7 @@ The stable three-path architecture, Stage1-Stage5 contracts, Stage5 notification
      - every blocked mutation records `collection_scope_blocked_count` and `collection_scope_blocked_samples`
    - dedup policy before writeback:
      - read/build duplicate indexes for `文献池`, `文献池/待删除`, and `值得精读`
-     - exact normalized match priority: `DOI > PMID > PMCID > arXiv > exact normalized title`
+     - exact normalized match priority: `DOI > PMID > PMCID > arXiv > OpenAlex > URL > exact normalized title`
      - title normalization must cover Unicode/punctuation/spacing variants (NFKC/NFKD, quote/dash unification, fullwidth mapping, combining-mark removal, control/zero-width cleanup)
      - if duplicate in any of those collections: skip create and skip all add-to-collection operations for current-day routing
      - if not duplicate: create the item and add it to daily source/grade collections only; do not force-add new items to root pool
@@ -525,7 +525,7 @@ node workflow/tools/stage0/check_zotero_backend_ready.mjs
 - **D** items are not reviewed, including those with `flags.uncertain=true`.
 - The eligibility check is: `ruleGrade === "B" || ruleGrade === "C"`.
 - 周报 and human review still operate on all ABC items; D items are excluded from daily review as before.
-- C→D semantic downgrade does **not** auto-adopt: `final_grade` stays C, `needs_human_review=true`, `disagreement_type=semantic_downgrade_review`. Human must confirm or reject.
+- C→D semantic downgrade does **not** auto-adopt: `final_grade` stays C, `needs_human_review=true`, `disagreement_type=semantic_downgrade_review`. Any ABC candidate reviewed as D remains in Stage1 audit but is held from Zotero writeback and the writeback-derived Weekly review.
 - All other 1-level adjustments (C→B, B→A, B→C) auto-adopt. 2+ level differences keep `rule_grade` and flag `needs_human_review=true`.
 
 ## 脚本入口与验证约定
@@ -651,7 +651,7 @@ Desktop/Web run groups live at `review_results/文献评价/runs/<runId>/run_gro
 - Required SMTP: `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`. Optional: `SMTP_PORT` default 465; `SMTP_SECURE` inferred true only for 465 unless explicit; `SMTP_FROM` defaults to `SMTP_USER`.
 - PaperEcho provides no mail relay. Secrets remain environment-only and never enter logs, errors, summaries, receipts, timing, docs, or Git.
 - Stage5 counts/grades use current-run created literature. Overview uses all deduplicated current-run A/B/C titles, no abstracts/full text/D titles; normal input is one LLM call, oversized input is deterministic batches plus merge, and failure falls back deterministically.
-- Stage5 transport attachments are the explicit current-run XLSX and optional monthly DOCX, at most two and 20 MiB total. They are sent separately and the current formatter does not render an attachment body section.
+- Stage5 email omits the weekly XLSX because review happens in Control Center. The explicit current-run monthly DOCX remains optional; at most one attachment and 20 MiB total. The formatter does not render an attachment body section.
 - Receipt/overview live in the run's `stage5/` directory. Successful run ID plus recipient hash is idempotent; `--force-resend` reuses an unchanged overview input hash.
 - `PAPERFLOW_CLEANUP_ENABLED` defaults true. `PAPERFLOW_RETENTION_DAYS` defaults 30; `0` disables age deletion. Full scans run at most once per 24 hours unless forced and never change the business result.
 
