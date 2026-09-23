@@ -2,6 +2,14 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
+import { checkScreeningRulesChineseLanguage } from './screening_standards_rewrite_result.mjs';
+
+export function suggestionContentIssue(text) {
+  const value = String(text || '').trim();
+  if (!value || value.length > 4000 || /example topic term\s*\d+|\b(?:undefined|null)\b|\uFFFD|[\u0000-\u0008\u000b\u000c\u000e-\u001f]|```/i.test(value)) return 'invalid_content';
+  if (!/[\u3400-\u9fff]/.test(value) || !checkScreeningRulesChineseLanguage(value).ok) return 'chinese_required';
+  return null;
+}
 
 export const PENDING_SUGGESTION_STATUSES = new Set([
   "candidate",
@@ -241,11 +249,12 @@ export function generateUnifiedPendingRuleSuggestions({
   let mergedDuplicateCount = 0;
   let possibleDuplicateCount = 0;
   let rejectedDuplicateSkippedCount = 0;
+  let invalidContentCount = 0;
   const added = [];
 
   for (const candidate of rawCandidates) {
     const normalized = normalizePendingRuleSuggestionCandidate(candidate, { generatedAt, defaultStatus: "pending" });
-    if (!normalized.rule_text) continue;
+    if (suggestionContentIssue(normalized.rule_text)) { invalidContentCount += 1; continue; }
     const hardMatch = (normalized.hard_duplicate_keys || []).map((key) => existingByHardKey.get(key)).find(Boolean);
     if (hardMatch) {
       if (hardMatch.status === "rejected" && !normalized.previous_rejected_id && normalized.input_hash === hardMatch.input_hash) {
@@ -275,6 +284,7 @@ export function generateUnifiedPendingRuleSuggestions({
     log,
     added,
     added_count: addedCount,
+    invalid_content_count: invalidContentCount,
     merged_duplicate_count: mergedDuplicateCount,
     possible_duplicate_count: possibleDuplicateCount,
     rejected_duplicate_skipped_count: rejectedDuplicateSkippedCount,

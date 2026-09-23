@@ -88,7 +88,7 @@ test('UI renders untrusted content through text nodes and keeps credentials writ
 test('UI feedback and responsive contracts retain fail-closed messaging and accessible state', () => {
   assert.match(app, /aria-label', '文献评级任务'/);
   assert.match(app, /application_status === 'requires_manual_action'/);
-  assert.match(app, /尚未正式应用/);
+  assert.match(app, /正式规则尚未改变/);
   assert.match(app, /humanApproval: true/);
   assert.match(app, /aria-describedby/); assert.match(app, /aria-invalid/);
   assert.match(css, /--focus:/); assert.match(css, /:focus-visible/);

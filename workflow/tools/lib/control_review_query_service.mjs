@@ -120,7 +120,7 @@ export class ReviewQueryService {
     return {
       normal: visible.filter((item) => !item.needsReview && item.feedbackAllowed && !item.feedback).length,
       manual: visible.filter((item) => item.needsReview && item.feedbackAllowed && !item.manualGrade).length,
-      rules: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
+      rules: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status) && !entry.decision_receipt).length,
     };
   }
   async status() {
@@ -140,7 +140,7 @@ export class ReviewQueryService {
       sources: loadSourceSelectionConfig({ root: this.root }).enabled_sources,
       counts: summary?.counts || null, integrity: summary?.integrity || null,
       needsReview: weekly?.items.filter((item) => getWeeklyReviewEvidence(item).needsReview).length ?? null,
-      pendingSuggestions: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
+      pendingSuggestions: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status) && !entry.decision_receipt).length,
     };
   }
 }

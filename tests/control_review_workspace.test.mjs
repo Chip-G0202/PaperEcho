@@ -180,8 +180,8 @@ test('rule focused queue has no confirm; high risk receipt visible, edit mode su
   const app = ui(); const rows = [{ id: 'high', status: 'pending', risk_level: 'high', target: 'pubmed_pmc_search.json', rule_text: '高风险检索建议' }, { id: 'low', status: 'pending', risk_level: 'low', rule_text: '机制研究' }]; const calls = [];
   app.setApi(async (url, payload) => { if (!payload) return rows; calls.push(payload); return payload.id === 'high' ? { status: 'pending', application_status: 'requires_manual_action', explanation: '安全门禁未通过', next_action: '人工核对范围' } : { status: payload.decision }; });
   await app.suggestions(); assert.equal(app.main.querySelectorAll('article').length, 1);
-  await byText(app.main, '接受 1').click(); assert.equal(calls[0].humanApproval, true); assert.equal(rows[0].status, 'pending'); assert.match(app.main.textContent, /尚未正式应用.*安全门禁未通过.*人工核对范围/); assert.equal(currentTitle(app.main), rows[1].rule_text);
-  await key(work(app.main), 'ArrowUp'); assert.match(app.main.textContent, /正式状态仍为待处理/);
+  await byText(app.main, '接受 1').click(); assert.equal(calls[0].humanApproval, true); assert.equal(rows[0].status, 'pending'); assert.match(app.main.textContent, /已记录，待应用/); assert.equal(currentTitle(app.main), rows[1].rule_text);
+  await key(work(app.main), 'ArrowUp'); assert.match(app.main.textContent, /正式规则尚未改变/);
   await key(work(app.main), 'ArrowDown'); await key(work(app.main), '3');
   assert.ok(work(app.main).querySelector('textarea'));
   await key(work(app.main), '1'); await key(work(app.main), 'ArrowUp'); assert.equal(calls.length, 1); assert.equal(currentTitle(app.main), rows[1].rule_text);

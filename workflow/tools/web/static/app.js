@@ -117,7 +117,7 @@ function pendingPaperCounts(items = []) {
     manual: visible.filter((item) => item.needsReview && item.feedbackAllowed && !item.manualGrade).length,
   };
 }
-const pendingRuleCount = (rows = []) => rows.filter((entry) => ['pending', 'candidate'].includes(entry.status)).length;
+const pendingRuleCount = (rows = []) => rows.filter((entry) => ['pending', 'candidate'].includes(entry.status) && !entry.decision_receipt).length;
 async function loadPendingSummary() { return api('/api/pending-summary'); }
 function completionPlan(kind, counts = { normal: 0, manual: 0, rules: 0 }) {
   const values = { normal: Number(counts.normal || 0), manual: Number(counts.manual || 0), rules: Number(counts.rules || 0) };
@@ -353,11 +353,24 @@ async function research(showIntro = true) {
   main.append(workspaceColumns([form], [contextCard('提交后会发生什么', ['反馈会生成待确认建议，不直接修改正式规则。', '处理成功后可前往“规则建议”继续审阅。'])]));
 }
 async function suggestions(showIntro = true) {
-  if (showIntro) main.append(pageIntro('规则建议审阅', '点击即提交人工决策；接受不等于正式应用，安全校验始终生效。'));
+  if (showIntro) main.append(pageIntro('规则建议审阅', '接受、拒绝或修改后提交，自动保存并继续下一条。'));
   const rows = await api('/api/suggestions');
   if (!rows.length) { empty('目前没有规则建议', '可以先提交研究方向反馈，生成的建议会显示在这里。'); return; }
   const idOf = (item) => item.id || item.suggestion_id;
+  decisionReceipts.clear();
+  for (const item of rows) if (item.decision_receipt) decisionReceipts.set(idOf(item), item.decision_receipt);
   const pending = (item) => ['pending', 'candidate'].includes(item.status);
+  const ruleTitle = (item) => {
+    const raw = item.rule_text || item.suggested_rule || '';
+    const keyword = /^Add (required|optional|negative) search keyword: (.+)$/i.exec(raw);
+    if (keyword) return `添加${({ required: '必含', optional: '可选', negative: '排除' })[keyword[1].toLowerCase()]}检索词：${keyword[2]}`;
+    const negative = /^Add negative search keyword: (.+)$/i.exec(raw);
+    if (negative) return `添加排除检索词：${negative[1]}`;
+    const removed = /^Remove search keyword: (.+)$/i.exec(raw);
+    if (removed) return `移除检索词：${removed[1]}`;
+    return item.content_issue ? '这条旧建议内容不完整，请修改或拒绝。' : raw || '待确认变更';
+  };
+  const rationaleText = (item) => String(item.rationale || '').startsWith('Proposed ') ? '根据研究方向评价提出，待确认。' : item.rationale || '未提供';
   const queue = createReviewQueue(rows, (item) => !pending(item) || decisionReceipts.has(idOf(item)), pending);
   let editing = false; let draft = ''; let message = ''; let messageKind = 'success';
   const workspace = el('section', undefined, 'review-workspace page-content document-column'); workspace.tabIndex = -1; workspace.setAttribute('aria-label', '规则建议审阅工作区'); const context = el('div'); main.append(workspaceColumns([workspace], [context]));
@@ -365,22 +378,23 @@ async function suggestions(showIntro = true) {
     workspace.replaceChildren();
     const item = rows[queue.index]; const id = idOf(item); const receipt = decisionReceipts.get(id);
     context.replaceChildren(
-      contextCard('建议概览', [`待处理 ${rows.filter(pending).length} 条`, `当前风险：${riskLabels[item.risk_level] || '未知'}`, '低：偏好补充 · 中：规则调整 · 高：需额外人工操作']),
+      contextCard('建议概览', [`待确认 ${pendingRuleCount(rows)} 条`, `当前风险：${riskLabels[item.risk_level] || '待核对'}`, '你的选择会自动保存；生效情况可在详情查看。']),
       keyboardHelp('数字键快速处理', [['1', '接受当前建议'], ['2', '拒绝当前建议'], ['3', '修改当前建议'], ['↑', '返回上一条'], ['↓', '前往下一条']], '可使用主键盘或小键盘数字键；编辑建议时快捷键会自动暂停。'),
     );
-    workspace.append(el('p', `共 ${rows.length} 条 · 待确认 ${rows.filter(pending).length} · 本轮已提交决策 ${rows.filter((entry) => decisionReceipts.has(idOf(entry))).length} 条`, 'queue-progress'));
+    workspace.append(el('p', `共 ${rows.length} 条 · 待确认 ${pendingRuleCount(rows)} · 已记录选择 ${rows.filter((entry) => decisionReceipts.has(idOf(entry))).length} 条`, 'queue-progress'));
     if (message) { const state = el('p', message, `queue-receipt ${messageKind}`); state.setAttribute('role', 'status'); workspace.append(state); }
     const card = el('article', undefined, 'focused-card rule-card');
-    const badges = el('div', undefined, 'badge-row'); badges.append(el('span', statusLabels[item.status] || '状态未提供', 'badge'), el('span', `风险：${riskLabels[item.risk_level] || '未知'}`, item.risk_level === 'high' ? 'badge warning' : 'badge'));
-    card.append(badges, el('h3', item.rule_text || item.suggested_rule || '待确认变更'), el('p', `目标：${({ 'screening_standards.md': '长期筛选标准', 'pubmed_pmc_search.json': 'PubMed 检索条件', 'openalex_search.json': 'OpenAlex 检索条件' })[item.target] || '待核对配置'}`), el('p', `建议理由：${item.rationale === 'Proposed from screening_standards.docx evaluation area.' ? '根据研究方向评价提出。' : item.rationale || '未提供'}`));
+    const badges = el('div', undefined, 'badge-row'); badges.append(el('span', statusLabels[item.status] || '状态未提供', 'badge'), el('span', `风险：${riskLabels[item.risk_level] || '待核对'}`, item.risk_level === 'high' ? 'badge warning' : 'badge'));
+    card.append(badges, el('h3', ruleTitle(item)), el('p', `目标：${({ 'screening_standards.md': '长期筛选标准', 'pubmed_pmc_search.json': 'PubMed 检索条件', 'openalex_search.json': 'OpenAlex 检索条件' })[item.target] || '待核对配置'}`), el('p', `建议理由：${rationaleText(item)}`));
+    if (pending(item) && item.content_issue) card.append(el('p', '旧建议原文需要核对。请修改为清晰中文，或拒绝。', 'meta'));
     const details = el('details'); details.append(el('summary', '查看依据与技术详情'), el('p', item.evidence_text_excerpt || (item.evidence_titles || []).join('；') || '没有附加证据。'), el('p', `编号：${id} · 目标：${item.target || 'screening_standards.md'} · 变更类型：${item.change_type || 'add_rule'}`, 'meta')); card.append(details);
     if (receipt?.application_status === 'requires_manual_action') {
-      const manual = el('section', undefined, 'manual-action'); manual.append(el('strong', '本次已接受 · 尚未正式应用'), el('p', '正式状态仍为待处理；接受操作不能解除安全限制。'), el('p', `原因：${receipt.explanation}`), el('p', `下一步：${receipt.next_action}`)); card.append(manual);
-    } else if (item.risk_level === 'high') card.append(el('p', '高风险变更可能需要人工处理；网页接受不会解除安全限制。下一步：核对目标、依据及范围后选择接受或拒绝。', 'manual-action'));
-    else card.append(el('p', pending(item) ? `下一步：${item.next_step || '核对建议及依据，选择接受、拒绝或修改后接受。'}` : '该决策已记录；无需重复处理。', 'meta'));
+      card.append(el('p', '已记录，待应用。无需重复提交。', 'meta'));
+      details.append(el('p', '这次选择已保存，正式规则尚未改变。'), el('p', receipt.explanation), el('p', receipt.next_action));
+    } else card.append(el('p', pending(item) ? '选择后自动保存。' : '已记录。', 'meta'));
     const actions = el('div', undefined, 'actions feedback-actions');
     for (const [action, text] of [['accepted', '接受 1'], ['rejected', '拒绝 2'], ['edit', '修改后接受 3']]) {
-      const control = button(text, () => choose(action)); control.disabled = queue.busy || !pending(item) || editing; control.setAttribute('aria-pressed', String((receipt?.requested_decision || item.status) === (action === 'edit' ? 'revised' : action))); actions.append(control);
+      const control = button(text, () => choose(action)); control.disabled = queue.busy || !pending(item) || editing || (action === 'accepted' && Boolean(item.content_issue)); control.setAttribute('aria-pressed', String((receipt?.requested_decision || item.status) === (action === 'edit' ? 'revised' : action))); actions.append(control);
     }
     card.append(actions);
     if (editing) {
@@ -395,24 +409,25 @@ async function suggestions(showIntro = true) {
   };
   const choose = async (action) => {
     const item = rows[queue.index]; if (queue.busy || !pending(item)) return;
-    if (action === 'edit') { editing = true; draft = item.rule_text || item.suggested_rule || ''; draw(true); return; }
+    if (action === 'accepted' && item.content_issue) { message = '这条建议内容异常，请修改为中文或拒绝。'; messageKind = 'error'; draw(true); return; }
+    if (action === 'edit') { editing = true; draft = item.content_issue ? (ruleTitle(item).startsWith('这条旧建议') ? '' : ruleTitle(item)) : item.rule_text || item.suggested_rule || ''; draw(true); return; }
     if (action === 'revised' && !draft.trim()) { message = '请填写修改后的建议内容。'; messageKind = 'error'; draw(true); return; }
     const pendingBefore = rows.filter((entry) => pending(entry) && !decisionReceipts.has(idOf(entry))).length;
     const work = queue.submit(action + (action === 'revised' ? ':' + draft : ''),
       (entry) => api('/api/decision', { id: idOf(entry), decision: action, revisedRule: action === 'revised' ? draft : '', humanApproval: true }),
-      (entry, result) => { entry.status = result.status; if (action === 'revised') entry.rule_text = draft; decisionReceipts.set(idOf(entry), { ...result, requested_decision: action }); });
+      (entry, result) => { entry.status = result.status; if (action === 'revised') entry.rule_text = draft; if (result.application_status === 'requires_manual_action') entry.decision_receipt = result; decisionReceipts.set(idOf(entry), { ...result, requested_decision: action }); });
     draw();
     let saved = null;
     try {
       saved = await work;
       if (saved) {
         editing = false;
-        messageKind = saved.result.application_status === 'requires_manual_action' ? 'warning' : 'success';
-        message = messageKind === 'warning'
-          ? `本次已接受 · 尚未正式应用：${saved.item.rule_text || saved.item.suggested_rule || idOf(saved.item)}（目标：${saved.result.target || saved.item.target}，风险：${riskLabels[saved.result.risk || saved.item.risk_level] || '未知'}）。原因：${saved.result.explanation} 下一步：${saved.result.next_action}`
-          : `已记录：${statusLabels[action]}。`;
+        messageKind = 'success';
+        message = saved.result.application_status === 'requires_manual_action'
+          ? '已记录，待应用。'
+          : action === 'rejected' ? '已记录：拒绝。' : '已记录，已生效。';
       }
-    } catch (error) { message = error.message + ' 当前建议未前进，请重试。'; messageKind = 'error'; }
+    } catch (error) { message = error.message === 'SUGGESTION_CONTENT_INVALID' ? '建议内容需使用清晰中文，请修改后再提交。' : error.message + ' 当前建议未前进，请重试。'; messageKind = 'error'; }
     draw(true);
     const pendingAfter = rows.filter((entry) => pending(entry) && !decisionReceipts.has(idOf(entry))).length;
     if (saved && pendingBefore > 0 && pendingAfter === 0) showCompletionModal(completionPlan('rules', await loadPendingSummary()));

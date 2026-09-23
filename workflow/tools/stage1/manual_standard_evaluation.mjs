@@ -179,10 +179,10 @@ function buildManualEvaluationSuggestionCandidates(output = {}, { evaluationText
       target: "screening_standards.md",
       change_type: "add_rule",
       rule_text: rule,
-      rationale: "Proposed from screening_standards.docx evaluation area.",
+      rationale: "根据研究方向评价提出，待确认。",
       evidence_text_excerpt: textExcerpt(evaluationText),
       confidence: "low",
-      risk: "Manual evaluation text requires confirmation before changing formal rules.",
+      risk: "修改正式规则前需人工确认。",
       risk_level: "medium",
       created_at: generatedAt,
     });
@@ -193,41 +193,42 @@ function buildManualEvaluationSuggestionCandidates(output = {}, { evaluationText
       target: "screening_standards.md",
       change_type: "delete_rule",
       rule_text: rule,
-      rationale: "Proposed deletion from screening_standards.docx evaluation area.",
+      rationale: "根据研究方向评价提出删除，待确认。",
       evidence_text_excerpt: textExcerpt(evaluationText),
       confidence: "low",
-      risk: "Rule deletion is high risk and requires confirmation.",
+      risk: "删除规则风险较高，需人工核对。",
       risk_level: "high",
       created_at: generatedAt,
     });
   }
   for (const rule of Array.isArray(output.rules_changed) ? output.rules_changed : []) {
-    const ruleText = typeof rule === "string" ? rule : `${rule.before || ""} -> ${rule.after || ""}`.trim();
+    const ruleText = typeof rule === "string" ? rule : `将“${rule.before || ""}”修改为“${rule.after || ""}”`;
     candidates.push({
       source: "docx_manual_evaluation",
       target: "screening_standards.md",
       change_type: "revise_rule",
       rule_text: ruleText,
-      rationale: "Proposed revision from screening_standards.docx evaluation area.",
+      rationale: "根据研究方向评价提出修改，待确认。",
       evidence_text_excerpt: textExcerpt(evaluationText),
       confidence: "low",
-      risk: "Rule revision requires confirmation.",
+      risk: "修改正式规则前需人工确认。",
       risk_level: "medium",
       created_at: generatedAt,
     });
   }
   const keywordsAdded = output.keywords_added || {};
+  const keywordGroups = { required: "必含", optional: "可选", negative: "排除" };
   for (const [group, values] of Object.entries(keywordsAdded)) {
     for (const value of Array.isArray(values) ? values.flat() : []) {
       candidates.push({
         source: "docx_manual_evaluation",
         target: "pubmed_pmc_search.json",
         change_type: "add_keyword",
-        rule_text: `Add ${group} search keyword: ${value}`,
-        rationale: "Proposed search keyword change from screening_standards.docx evaluation area.",
+        rule_text: `添加${keywordGroups[group] || "其他"}检索词：${value}`,
+        rationale: "根据研究方向评价提出检索词调整，待确认。",
         evidence_text_excerpt: textExcerpt(evaluationText),
         confidence: "low",
-        risk: "Search configuration changes can alter retrieval scope.",
+        risk: "检索词变更会影响检索范围。",
         risk_level: "high",
         created_at: generatedAt,
       });
@@ -238,11 +239,11 @@ function buildManualEvaluationSuggestionCandidates(output = {}, { evaluationText
       source: "docx_manual_evaluation",
       target: "pubmed_pmc_search.json",
       change_type: "remove_keyword",
-      rule_text: `Remove search keyword: ${value}`,
-      rationale: "Proposed search keyword removal from screening_standards.docx evaluation area.",
+      rule_text: `移除检索词：${value}`,
+      rationale: "根据研究方向评价提出移除检索词，待确认。",
       evidence_text_excerpt: textExcerpt(evaluationText),
       confidence: "low",
-      risk: "Search configuration changes can alter retrieval scope.",
+      risk: "检索词变更会影响检索范围。",
       risk_level: "high",
       created_at: generatedAt,
     });
@@ -252,11 +253,11 @@ function buildManualEvaluationSuggestionCandidates(output = {}, { evaluationText
       source: "docx_manual_evaluation",
       target: "pubmed_pmc_search.json",
       change_type: "add_keyword",
-      rule_text: `Add negative search keyword: ${value}`,
-      rationale: "Proposed negative search keyword from screening_standards.docx evaluation area.",
+      rule_text: `添加排除检索词：${value}`,
+      rationale: "根据研究方向评价提出添加排除词，待确认。",
       evidence_text_excerpt: textExcerpt(evaluationText),
       confidence: "low",
-      risk: "Search configuration changes can alter retrieval scope.",
+      risk: "检索词变更会影响检索范围。",
       risk_level: "high",
       created_at: generatedAt,
     });

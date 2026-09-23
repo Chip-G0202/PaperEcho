@@ -54,6 +54,7 @@ function buildPrompt(rows) {
     "约束：不得直接生成正式规则修改；不得直接写 Pending Rule Suggestions log；drop/downgrade 不等于主题不感兴趣，必须区分原因类型。",
     "原因类型只能是 topic_preference、scope_mismatch、grading_error、quality_issue、duplicate、availability_issue、unclear。",
     "只有适合影响规则的原因才生成 suggestion_candidates；如果用户评价不足以说明原因，不要过度归纳。",
+    "规则正文、主题、理由和风险说明统一使用简洁中文，保留必要专业缩写。不得输出示例占位符、乱码、无依据或重复建议；没有明确证据时返回空列表。",
     "official_screening_standards 约束归纳边界；search_context 只帮助理解术语和检索范围。",
     "输出 schema: {\"preference_summary\":{},\"preference_themes\":[{\"theme\":\"\",\"polarity\":\"positive|negative|upgrade_pattern|downgrade_pattern\",\"inferred_reason_type\":\"topic_preference|scope_mismatch|grading_error|quality_issue|duplicate|availability_issue|unclear\",\"should_affect_rules\":true,\"evidence_feedback_types\":[],\"evidence_titles\":[],\"confidence\":\"low|medium|high\",\"risk\":\"\"}],\"suggestion_candidates\":[{\"id\":\"\",\"source\":\"llm_preference_learning\",\"target\":\"screening_standards.md|review-workflow-rules.json|pubmed_pmc_search.json|unknown\",\"change_type\":\"add_rule|revise_rule|delete_rule|add_keyword|remove_keyword|add_downgrade_signal|other\",\"rule_text\":\"\",\"rationale\":\"\",\"evidence_feedback_types\":[],\"evidence_titles\":[],\"confidence\":\"low|medium|high\",\"risk\":\"\",\"requires_human_approval\":true}],\"warnings\":[]}",
     "",

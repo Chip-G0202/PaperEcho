@@ -105,15 +105,15 @@ export function generateRuleSuggestionsFromFeedback({ feedbackSignals = [], feed
   const positiveSignals = feedbackSignals.filter((s) => s.feedback === "keep" || s.feedback === "upgrade");
 
   const topicPatterns = [
-    { tag: "animal study", pattern: /\banimal\b|mouse|mice|rat\b|rats\b|zebrafish|小鼠|大鼠|斑马鱼/i },
-    { tag: "example topic term 038", pattern: /\bexample topic term 038\b|cell line|细胞/i },
-    { tag: "mechanism", pattern: /\bmechanis|pathway|signaling|通路|机制/i },
-    { tag: "clinical outcome", pattern: /\bpatient|clinical outcome|人群|临床结局/i },
-    { tag: "omics", pattern: /\bomics\b|transcriptom|proteom|metabolom|单细胞|组学/i },
-    { tag: "plant", pattern: /\bplant\b|植物/i },
-    { tag: "non-mammal", pattern: /\binsect\b|nematode|线虫|昆虫|酵母|果蝇/i },
-    { tag: "engineering", pattern: /\bengineering\b|材料科学|电子|机械/i },
-    { tag: "AI/algorithm", pattern: /\bartificial intelligence\b|\bAI\b|algorithm|算法/i },
+    { tag: "动物实验", pattern: /\banimal\b|mouse|mice|rat\b|rats\b|zebrafish|小鼠|大鼠|斑马鱼/i },
+    { tag: "体外细胞实验", pattern: /\bin vitro\b|cell line|细胞实验|细胞系/i },
+    { tag: "机制", pattern: /\bmechanis|pathway|signaling|通路|机制/i },
+    { tag: "临床结局", pattern: /\bpatient|clinical outcome|人群|临床结局/i },
+    { tag: "组学", pattern: /\bomics\b|transcriptom|proteom|metabolom|单细胞|组学/i },
+    { tag: "植物", pattern: /\bplant\b|植物/i },
+    { tag: "非哺乳动物", pattern: /\binsect\b|nematode|线虫|昆虫|酵母|果蝇/i },
+    { tag: "工程技术", pattern: /\bengineering\b|材料科学|电子|机械/i },
+    { tag: "人工智能算法", pattern: /\bartificial intelligence\b|\bAI\b|algorithm|算法/i },
   ];
 
   function matchTopics(text) {
@@ -122,6 +122,7 @@ export function generateRuleSuggestionsFromFeedback({ feedbackSignals = [], feed
   }
 
   const negTagCounts = {};
+  const negTagSamples = {};
   const negTagTitles = {};
   for (const s of negativeSignals) {
     const text = `${s.title_context || ""} ${s.english_title || ""} ${s.comment || ""}`;
@@ -129,13 +130,15 @@ export function generateRuleSuggestionsFromFeedback({ feedbackSignals = [], feed
     const weight = feedbackWeight(s.feedback);
     for (const tag of tags) {
       negTagCounts[tag] = (negTagCounts[tag] || 0) + weight;
+      negTagSamples[tag] = (negTagSamples[tag] || 0) + 1;
       negTagTitles[tag] = negTagTitles[tag] || [];
       if (negTagTitles[tag].length < 3 && s.english_title) negTagTitles[tag].push(s.english_title);
     }
   }
+  const conflictingTags = new Set(positiveSignals.flatMap((s) => matchTopics(`${s.title_context || ""} ${s.english_title || ""} ${s.comment || ""}`)));
 
   for (const [tag, count] of Object.entries(negTagCounts)) {
-    if (count < 1.5) continue;
+    if (count < 1.5 || negTagSamples[tag] < 2 || conflictingTags.has(tag)) continue;
     const normalizedTag = normalizeRuleForDedup(tag);
     if (existingRuleTexts.some((r) => r.includes(normalizedTag))) continue;
     const confidence = count >= 4 ? "medium" : "low";
@@ -151,17 +154,17 @@ export function generateRuleSuggestionsFromFeedback({ feedbackSignals = [], feed
       status: "pending",
       revised_rule: "",
       requires_manual_review: false,
-      reason: `基于${count.toFixed(1)} 份 drop/downgrade 加权反馈的聚合`,
+      reason: `综合 ${negTagSamples[tag]} 条负面反馈（加权分 ${count.toFixed(1)}）`,
       suggestion_hash: ruleHash(ruleText),
       generated_at: generatedAt,
       feedback_source: feedbackSource,
     });
   }
 
-  const hardExcludeStrongTags = new Set(["engineering", "AI/algorithm", "plant", "non-mammal"]);
+  const hardExcludeStrongTags = new Set(["工程技术", "人工智能算法", "植物", "非哺乳动物"]);
   const exclusionWords = /排除|exclude|irrelevant|无关|与课题无关|完全不相关|不应纳入|不应该/i;
   for (const [tag, count] of Object.entries(negTagCounts)) {
-    if (count < 2.5) continue;
+    if (count < 2.5 || negTagSamples[tag] < 2 || conflictingTags.has(tag)) continue;
     const normalizedTag = normalizeRuleForDedup(tag);
     if (existingRuleTexts.some((r) => r.includes(normalizedTag))) continue;
     const isStrongExclusionTag = hardExcludeStrongTags.has(tag);
@@ -179,7 +182,7 @@ export function generateRuleSuggestionsFromFeedback({ feedbackSignals = [], feed
       status: "pending",
       revised_rule: "",
       requires_manual_review: true,
-      reason: `基于${count.toFixed(1)} 份 drop/downgrade 加权反馈聚合，建议严格排除；需人工确认`,
+      reason: `综合 ${negTagSamples[tag]} 条负面反馈（加权分 ${count.toFixed(1)}），建议核对排除范围`,
       suggestion_hash: ruleHash(ruleText),
       generated_at: generatedAt,
       feedback_source: feedbackSource,
@@ -200,7 +203,7 @@ export function generateRuleSuggestionsFromFeedback({ feedbackSignals = [], feed
   }
 
   for (const [tag, count] of Object.entries(posTagCounts)) {
-    if (count < 2) continue;
+    if (count < 2 || negTagCounts[tag]) continue;
     const normalizedTag = normalizeRuleForDedup(tag);
     if (existingRuleTexts.some((r) => r.includes(normalizedTag))) continue;
     const ruleText = `优先关注${tag}相关研究`;
@@ -215,7 +218,7 @@ export function generateRuleSuggestionsFromFeedback({ feedbackSignals = [], feed
       status: "pending",
       revised_rule: "",
       requires_manual_review: false,
-      reason: `基于${count.toFixed(1)} 份 keep/upgrade 加权反馈的聚合`,
+      reason: `综合正面反馈（加权分 ${count.toFixed(1)}）`,
       suggestion_hash: ruleHash(ruleText),
       generated_at: generatedAt,
       feedback_source: feedbackSource,

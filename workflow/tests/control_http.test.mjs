@@ -139,6 +139,9 @@ test('credential HTTP replace/clear and high-risk decisions give explicit unappl
   assert.equal(await fs.readFile(path.join(app.reviewRoot, 'screening_standards.md'), 'utf8'), before);
   assert.equal(await fs.readFile(path.join(app.root, 'config', 'pubmed_pmc_search.json'), 'utf8'), search);
   assert.equal(JSON.parse(await fs.readFile(log, 'utf8')).suggestions[0].status, 'pending');
+  const savedHigh = (await app.get('/api/suggestions')).json.find((entry) => entry.id === 'high');
+  assert.equal(savedHigh.decision_receipt.requested_decision, 'revised');
+  assert.equal(savedHigh.decision_receipt.application_status, 'requires_manual_action');
   const low = await app.post('/api/decision', { id: 'low', decision: 'accepted', humanApproval: true });
   assert.equal(low.json.status, 'accepted'); assert.equal(low.json.formal_rules_modified, true);
   assert.equal(low.json.application_status, undefined);

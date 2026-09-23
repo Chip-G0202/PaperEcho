@@ -88,11 +88,11 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 ## 当前能力边界
 
 - 查询覆盖正式 resolver 选定的 Desktop/Web runtime roots 和 Local output root。未注册历史输出不自动扫描或迁移；不会混入仓库默认根中其他实例的数据。
-- 下一次调度只有在可可靠读取时才应显示；当前显示未知。Weekly 间隔只读，不重写正式 scheduler state。
+- 下一次调度只有在可可靠读取时才应显示；当前显示未知。Weekly 间隔只读，不重写正式 scheduler state。每天只触发 Radar 不会在第七天自动运行 Weekly；未来设置每日调度时，须由调度器按既有间隔门槛调用 Weekly，非周报日调用 Radar。同日决策和 Weekly 合并去重仍由原 owner 负责。
 - 等级复审和 literature overview 使用现有 preference learning 模型配置，不增加第二套模型 owner。
 - 缺少 owner JSON 时设置只显示未初始化；按原配置指南初始化后再使用网页。
 - ConfigService 不提供 arbitrary JSON/path API。PubMed keyword groups 更新由现有 query builder 生成检索式；已有 keyword groups 时直接 query 编辑被拒绝。
-- 安全 apply 当前仅支持正文追加及修订后追加。高风险、删除、已有规则替换、搜索关键词 suggestion、其他 target mutation 保持 pending；Control Center 返回 `application_status: requires_manual_action`、target、risk、未应用原因和人工处理说明。这是预期安全行为，不表示按钮失效或正式规则已应用。可以拒绝建议，或通过现有规则/检索配置维护流程人工核对范围、验证和备份；网页确认不能解除 guard。
+- 安全 apply 当前仅支持正文追加及修订后追加。高风险、删除、已有规则替换、搜索关键词 suggestion、其他 target mutation 保持 pending；网页的接受或修改选择原子记录在原建议日志的 `decision_receipt`，刷新后仍可看到“已记录，待应用”，不重复计入待确认数。正式规则尚未改变；可以拒绝建议，或通过现有规则/检索配置维护流程人工核对范围、验证和备份。旧建议原文若含占位符、乱码或英文长句，须修改为清晰中文或拒绝；新建议在入队前过滤这些内容。
 - Credentials 支持 configured/not configured、Replace、Clear；覆盖 TITLE_TRANSLATION_API_KEY、PREFERENCE_LEARNING_API_KEY、EASYSCHOLAR_SECRET_KEY、SMTP_PASS、ZOTERO_API_KEY。Configured 不等于连接有效。没有可复用的安全连接测试 owner，因此 Test 未开放。不提供 raw secret GET，不创建 credential vault。
 - 低风险规则正文变更先保存固定 `.backup`，再原子替换正文；日志写入失败时恢复正文。进程在正文提交后中断、决策日志提交前中断时，pending 保留，重试经已有 duplicate guard 不重复追加。
 

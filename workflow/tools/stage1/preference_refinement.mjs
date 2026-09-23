@@ -29,14 +29,14 @@ const STUDY_PATTERNS = [
   { tag: "guideline", label: "guideline", pattern: /guideline|consensus|指南|共识/i },
   { tag: "case_report", label: "case report", pattern: /case report|病例/i },
   { tag: "animal_study", label: "animal study", pattern: /animal|mouse|mice|rat|rats|zebrafish|小鼠|大鼠|斑马鱼/i },
-  { tag: "in_vitro", label: "example topic term 038", pattern: /example topic term 038|cell line|细胞/i },
+  { tag: "in_vitro", label: "体外细胞实验", pattern: /in vitro|cell line|细胞实验|细胞系/i },
   { tag: "mechanistic_study", label: "mechanistic study", pattern: /mechanis|pathway|signaling|通路|机制/i },
   { tag: "human_outcome", label: "human clinical outcome", pattern: /patient|human|clinical outcome|hard endpoint|人群|临床结局|硬终点/i },
 ];
 
 const EXCLUSION_PATTERNS = [
   { tag: "animal_only", label: "animal-only", pattern: /仅动物|animal only|animal study|动物实验|动物研究|动物|mouse|mice|rat|rats|zebrafish|小鼠|大鼠|斑马鱼/i },
-  { tag: "in_vitro_only", label: "in-vitro only", pattern: /example topic term 038|cell line|细胞/i },
+  { tag: "in_vitro_only", label: "in-vitro only", pattern: /in vitro|cell line|细胞实验|细胞系/i },
   { tag: "basic_mechanism_only", label: "basic mechanism only", pattern: /基础机制|mechanis|pathway|signaling|通路|机制/i },
   { tag: "irrelevant_disease_context", label: "irrelevant disease context", pattern: /无关|不相关|irrelevant/i },
   { tag: "low_evidence", label: "low evidence", pattern: /low evidence|证据弱|证据不足/i },

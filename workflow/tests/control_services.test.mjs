@@ -10,6 +10,7 @@ import { ConfigService } from '../tools/lib/control_config_service.mjs';
 import { getTranslationConfig } from '../tools/lib/title_translation_support.mjs';
 import { getPreferenceLearningConfig } from '../tools/lib/preference_learning_support.mjs';
 import { RuleSuggestionService } from '../tools/lib/control_rule_suggestion_service.mjs';
+import { generateRuleSuggestionsFromFeedback } from '../tools/lib/screening_standards_rule_suggestions.mjs';
 import { SecretService } from '../tools/lib/control_credentials_service.mjs';
 import { processResearchEvaluation, processManualStandardEvaluation } from '../tools/stage1/manual_standard_evaluation.mjs';
 import { syncScreeningStandardsDocx, processUserSuggestionDecisions } from '../tools/stage1/screening_standards_docx.mjs';
@@ -26,6 +27,55 @@ async function fixture(t) {
   return root;
 }
 const paper = { doi: '10.1234/example', title: '中文 & 特殊字符 <script> — 文献' };
+
+test('deferred rule decisions persist once across reload without changing formal rules', async (t) => {
+  const root = await fixture(t);
+  const service = new RuleSuggestionService({ reviewRoot: root });
+  const file = ruleSuggestionsLogPath(root);
+  await fs.writeFile(file, JSON.stringify({ suggestions: [{ id: 'high', status: 'pending', target: 'pubmed_pmc_search.json', risk_level: 'high', rule_text: '删除检索词' }] }));
+  const before = await fs.readFile(path.join(root, 'screening_standards.md'), 'utf8');
+  const input = { id: 'high', decision: 'accepted', humanApproval: true };
+  await service.decideWithReceipt(input); await service.decideWithReceipt(input);
+  const [item] = await new RuleSuggestionService({ reviewRoot: root }).list();
+  assert.equal(item.status, 'pending'); assert.equal(item.decision_history.length, 1);
+  assert.equal(item.decision_receipt.requested_decision, 'accepted');
+  assert.equal(await fs.readFile(path.join(root, 'screening_standards.md'), 'utf8'), before);
+  await service.decideWithReceipt({ ...input, decision: 'rejected' });
+  assert.equal((await service.list())[0].decision_receipt, undefined);
+});
+
+test('suggestion quality rejects placeholders and English prose, retains Chinese technical rules', async () => {
+  const { generateUnifiedPendingRuleSuggestions } = await import('../tools/lib/unified_pending_rule_suggestions.mjs');
+  const rules = ['优先关注example topic term 038相关研究', '优先关注\uFFFD研究', 'Prefer animal studies with strong mechanism evidence', '优先关注 EGFR 机制研究'];
+  const result = generateUnifiedPendingRuleSuggestions({ legacySuggestions: rules.map((rule_text) => ({ rule_text })) });
+  assert.equal(result.invalid_content_count, 3); assert.equal(result.added_count, 1);
+  assert.equal(result.added[0].rule_text, rules[3]);
+});
+test('feedback rule proposals need repeated, non-conflicting evidence and use Chinese topic labels', () => {
+  const drop = (title) => ({ feedback: 'drop', english_title: title });
+  const upgrade = (title) => ({ feedback: 'upgrade', english_title: title });
+  const generate = (feedbackSignals) => generateRuleSuggestionsFromFeedback({ feedbackSignals, generatedAt: '2026-09-22T00:00:00Z' }).suggestions;
+  assert.equal(generate([drop('Cell line study')]).length, 0);
+  assert.equal(generate([drop('Cell line study'), upgrade('Cell line comparison')]).length, 0);
+  const repeated = generate([drop('Cell line study A'), drop('Cell line study B')]);
+  assert.equal(repeated.length, 1);
+  assert.match(repeated[0].suggested_rule, /降权体外细胞实验相关研究/);
+  assert.doesNotMatch(repeated[0].suggested_rule, /example topic term|cell line/i);
+});
+test('malformed historical suggestion cannot be accepted but can be revised or rejected', async (t) => {
+  const root = await fixture(t);
+  const file = ruleSuggestionsLogPath(root);
+  await fs.writeFile(file, JSON.stringify({ suggestions: [
+    { id: 'bad', status: 'pending', target: 'screening_standards.md', rule_text: '优先关注example topic term 038相关研究' },
+    { id: 'other', status: 'pending', target: 'screening_standards.md', rule_text: 'Prefer animal studies with strong evidence' },
+  ] }));
+  const service = new RuleSuggestionService({ reviewRoot: root });
+  await assert.rejects(service.decideWithReceipt({ id: 'bad', decision: 'accepted', humanApproval: true }), /SUGGESTION_CONTENT_INVALID/);
+  assert.equal((await service.list()).find((entry) => entry.id === 'bad').decision_receipt, undefined);
+  await service.decide({ id: 'bad', decision: 'revised', revisedRule: '优先关注体外细胞实验研究', humanApproval: true });
+  await service.decide({ id: 'other', decision: 'rejected', humanApproval: true });
+  assert.match(await fs.readFile(path.join(root, 'screening_standards.md'), 'utf8'), /优先关注体外细胞实验研究/);
+});
 const input = (requestId, value = 'relevant') => ({ kind: 'paper_feedback', paper, requestId, value });
 test('paper feedback history/current, duplicate, conflict, identity and atomic failure', async (t) => {
   const root = await fixture(t);
@@ -203,7 +253,7 @@ test('text and DOCX evaluation share proposal core, text never changes DOCX', as
   await syncScreeningStandardsDocx(root, { pubmedConfigPath, evaluationText: text });
   const docxPath = path.join(root, 'screening_standards.docx');
   const before = await fs.readFile(docxPath);
-  const llmClient = async () => ({ rules_added: ['优先关注机制研究'], rules_deleted: [], rules_changed: [], keywords_added: { required: [], optional: [], negative: [] }, keywords_removed: [], negative_keywords_added: [], unmapped_feedback: [] });
+  const llmClient = async () => ({ rules_added: ['优先关注机制研究'], rules_deleted: [], rules_changed: [], keywords_added: { required: ['EGFR'], optional: [], negative: [] }, keywords_removed: [], negative_keywords_added: [], unmapped_feedback: [] });
   const options = { reviewRoot: root, pubmedConfigPath, llmClient };
   const direct = await processResearchEvaluation(text, options);
   assert.equal(direct.evaluation_processed, true);
@@ -212,6 +262,7 @@ test('text and DOCX evaluation share proposal core, text never changes DOCX', as
   const legacy = await processManualStandardEvaluation(options);
   assert.equal(legacy.evaluation_text_hash, direct.evaluation_text_hash);
   assert.deepEqual(legacy.rules_added, direct.rules_added);
+  assert.ok((await fs.readFile(ruleSuggestionsLogPath(root), 'utf8')).includes('添加必含检索词：EGFR'));
 });
 test('secret status never returns raw values and redaction removes supplied secrets', async () => {
   const service = new SecretService({ env: { SMTP_PASS: 'unique-test-secret' } });
