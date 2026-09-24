@@ -24,6 +24,18 @@ test('sidebar owns L1 and L2 navigation while workspace owns L3 tabs', () => {
   assert.doesNotMatch(app, /className = 'settings-nav'/);
 });
 
+test('sidebar footer offers one accessible GitHub Star link without API or tracking', () => {
+  assert.match(html, /<div class="sidebar-footer">[\s\S]*<div class="sidebar-star">[\s\S]*仅本机访问[\s\S]*PaperEcho v2\.4/);
+  assert.match(html, /<a href="https:\/\/github\.com\/Chip-G0202\/PaperEcho" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 打开 PaperEcho 仓库">/);
+  assert.match(html, /<svg[^>]*aria-hidden="true"[^>]*><path fill="currentColor"/);
+  assert.match(html, /<span>GitHub Star<\/span><span aria-hidden="true">★<\/span>/);
+  assert.equal((html.match(/href="https:\/\/github\.com\/Chip-G0202\/PaperEcho"/g) || []).length, 1);
+  assert.doesNotMatch(app + html, /api\.github\.com|\/api\/github|github\.com\/Chip-G0202\/PaperEcho\/(?:stargazers|issues|releases)/);
+  assert.doesNotMatch(app, /GitHub|github/);
+  assert.match(css, /\.sidebar-star a:hover/); assert.match(css, /\.sidebar-star a:active/); assert.match(css, /:focus-visible\{outline:3px solid var\(--focus\)/);
+  assert.match(css, /@media\(max-width:760px\)[^\n]*\.sidebar-footer\{padding-top:12px\}/);
+});
+
 test('Overview keeps read-only schedule facts while Automation has only actionable tabs', () => {
   assert.match(app, /automation: \[\['radar', 'Daily Radar'[^\n]*\['weekly', '周报'/);
   assert.doesNotMatch(app, /\['plan', '每日计划'|每日计划运行|Weekly 周报|运行机制|外部 Agent|Control Center 无需保持打开/);

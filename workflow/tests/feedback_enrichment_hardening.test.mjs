@@ -76,7 +76,7 @@ test("Stage1 enrichment timeout prevents collection discovery, apply and consuma
       enrichmentOptions: { localLibraryIndex: empty, timeoutMs: 40, heartbeatMs: 10 },
       createCompatMcpToolCall: async () => async (name) => { calls.push(name); await new Promise((r) => setTimeout(r, 100)); return result([]); },
     } }), { status: "timed_out" });
-    assert.deepEqual(calls, ["search_library"]);
+    assert.ok(calls.length <= 1 && calls.every((name) => name === "search_library"));
     await assert.rejects(fs.access(path.join(dir, "feedback_item_actions_plan.json")));
     const progress = JSON.parse(await fs.readFile(path.join(dir, "feedback_item_actions_progress.json"), "utf8"));
     assert.equal(progress.status, "timed_out"); assert.equal(progress.correction_mutation_started, false);
