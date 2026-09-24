@@ -2,9 +2,7 @@
 
 一个面向多学科研究的文献工作流：持续发现、筛选和整理新文献，并按需交付到 Zotero 或本地报告。
 
-[快速开始](#快速开始) | [V2.3 更新](#更新内容) | [目录结构](#目录结构) | [English](#english-version)
-
-开发者导航：[Repository map 与测试定位](docs/repository-map.md) · [文档索引](docs/README.md) · [Config map](config/README.md) · [执行约束 AGENTS.md](AGENTS.md)。
+[快速开始](#快速开始) | [v2.4 更新](#更新内容) | [目录结构](#目录结构) | [English](#english-version)
 
 ## 这是什么
 
@@ -20,32 +18,19 @@ PaperEcho 不替代研究者作出判断。它负责整理不断传来的文献�
 
 ## 更新内容
 
-### Unified Control Center（v2.4 开发版）
+**PaperEcho v2.4** 新增本地 Control Center，让文献发现、人工审阅和常用设置在同一个工作台衔接。Windows 双击 `PaperEcho.exe`，macOS 双击 `PaperEcho.app`；启动后会在默认浏览器打开当前工作区。源码使用仍需 Node.js 18+ 和项目依赖。
 
-推荐通过本地 **PaperEcho Control Center** 浏览最近 Weekly、提交论文反馈和研究评价、处理规则建议与管理常用设置。Windows 在项目目录双击 **PaperEcho.exe**；macOS 双击 **PaperEcho.app**。启动器等待服务就绪后打开默认浏览器，再次双击复用同一工作区实例。仍需已安装 Node.js 18+ 和项目依赖；macOS 包装当前仅通过静态检查，Finder 实机验证待完成。诊断入口及关闭方法见 [启动说明](docs/control-center.md#启动与使用)。
+![PaperEcho v2.4 Control Center 概览页面，使用模拟状态的界面示意](docs/control-center-v2.4.png)
 
-XLSX、`screening_standards.docx` 和直接配置编辑继续作为兼容入口。Credentials 支持本地凭据状态、替换和清除；规则建议只有在正式文件写入成功后才显示为已接受，无法安全定位的变更仍待确认。使用范围与升级边界见 [Control Center 使用与兼容说明](docs/control-center.md)。
+_工作台界面示意，图中状态为模拟数据；正式页面只读取当前工作区。_
 
-### v2.3 稳定基线
+- **从概览走向具体任务。** 概览显示今日任务、最近周报和待办；文献页只浏览实际运行结果中的 A/B/C 文献，反馈页集中处理常规评级、人工复核、研究方向反馈与规则建议。
+- **反馈真正进入后续工作流。** 文献评级保存为正式反馈，供下次运行读取，但点击反馈不会立即修改 Zotero。规则建议只有在正式规则或检索配置安全写入并核验后才显示为已接受。
+- **有分歧的评级先交给人。** 完整周报中规则与语义评级不一致、或缺少语义评级的候选先进入人工复核，不会未经确认就写回 Zotero。
+- **常用设置更集中。** 工作台按组保存设置，提供 Desktop、Web、Local 互斥运行路径；凭据只显示配置状态，不回显原值。原有 XLSX、`screening_standards.docx` 和直接配置编辑仍可使用。
+- **Radar 与周报按计划分工。** 外部调度器调用 Desktop 或 Web 路径的 `--scheduled-daily` 入口后，由 PaperEcho 根据计划时隙选择当日运行 Daily Radar 还是周报；本版本不自动注册系统定时任务，Local 路径不支持该入口。
 
-**PaperEcho V2.3** 让文献追踪从“每周整理一次”，变成更持续、更可靠的研究工作流：平时发现值得关注的新线索，每周统一整理入库，同时关注已收藏文献的撤稿、勘误等重要变化。
-
-- **每日 Radar，更早发现值得关注的新研究。** 每天轻量扫描，筛出值得及时关注的新文献；正式整理和 Zotero 入库仍由周度流程统一完成，避免日常提醒打乱已有文献库。
-- **每周整理更完整，也更可靠。** 每日发现、周度检索和历史待处理结果在正式入库前统一去重、筛选和整理。长流程中断后保留已确认进度，恢复时核对实际状态，尽量避免重复写入或重复整理。
-- **持续关注撤稿、勘误和重要状态变化。** 对已经进入文献库的研究，继续检查公开的结构化更新信息；发现重要变化时保守标记和整理，保留用户已有文献和附件，不直接删除。
-- **多源检索，降低单一数据库漏召回的影响。** 根据研究领域采用合适的检索方式，组合 OpenAlex、Semantic Scholar、PubMed、Europe PMC、Crossref 等来源补充结果并统一去重。复杂检索不会仅因某个来源返回零条结果，就被当成“没有文献”。
-- **长时间任务更可观察、更可控。** Desktop 处理大量历史反馈时持续显示进度，为耗时查询设置安全边界；超时或中断会明确报告未完成并停止后续操作，保留已确认结果，避免把未完成任务误报为成功。
-
-每日 Radar 和文献状态监测可按需启用。PaperEcho 不包含 PDF 下载、全文阅读或内容总结。
-
-### V2.2
-
-**PaperEcho V2.2** 让三条使用路径更轻快，也让日常更新更省心。
-
-- **Web 路径更高效。** PaperEcho 会减少与 Zotero 之间不必要的重复通信。处理较多文献时等待更少，原有的筛选结果和写入规则保持不变。
-- **Local 路径更流畅。** 本地导入、去重和重复运行时的处理效率得到改善，适合长期积累文献的项目。Desktop 路径继续以稳定为先，不为追求数字改变现有体验。
-- **面对服务波动更从容。** 当文献来源、AI 服务或 Zotero 暂时繁忙时，PaperEcho 会自动放慢请求；服务恢复后再逐步提速，减少频繁失败和手动重试。
-- **更新版本更安心。** 新增 `paperecho-update`，可以检查并安装官方稳定版本。更新前会保护本地配置、运行记录和已有报告；发现文件被修改或任务仍在运行时会主动停止，更新失败也会尽量恢复原来的可用版本。
+详细使用与边界见 [Control Center 说明](docs/control-center.md)。PaperEcho 仍不提供 PDF 下载、全文阅读或内容总结。
 
 ## 核心特色
 
@@ -177,8 +162,6 @@ node skills/paperecho-local/scripts/run.mjs --check --config config/paperecho.co
 
 检查通过后，将所选命令中的 `--check` 改为 `--run`。
 
-未来配置每日系统调度时，每天北京时间 15:00 只调用一个选定路径的计划入口，例如 `node skills/paperecho-zotero-desktop/scripts/run.mjs --run --scheduled-daily --config config/paperecho.config.json`（Web 路径使用对应 Web launcher）。入口按最近一次成功 Weekly 的计划时隙选择 Weekly 或 Radar：首次有效时隙运行 Weekly，之后第 1～6 天运行 Radar，第 7 天起再次运行 Weekly；漏跑不补历史 Radar。15:00 前调用不占用当天时隙。Weekly 的 `standard` / `complete` 配置只决定到期时所用模式。仅在 Stage4 正式导出成功后推进 Weekly 周期；邮件失败由既有 receipt/recovery 流程处理。失败且同日已占位时，入口优先识别原 runId；状态不确定会明确要求恢复，不另起业务运行。本版本不注册 Windows/macOS 系统定时任务。
-
 检查官方 stable 更新可使用 `$paperecho-update`，或运行：
 
 ```powershell
@@ -251,24 +234,15 @@ PaperEcho does not make research judgments for you. It handles the recurring org
 
 ## Update
 
-**PaperEcho V2.3** makes literature tracking a more continuous workflow: lightweight daily discovery, reliable weekly organization, ongoing status monitoring for saved papers, and broader multi-source discovery.
+**PaperEcho v2.4** brings literature discovery, human review, and everyday settings together in a local Control Center. Open `PaperEcho.exe` on Windows or `PaperEcho.app` on macOS to launch the current workspace in your default browser. Source installations still require Node.js 18+ and project dependencies.
 
-- **Daily Radar for timely discoveries.** Lightweight scans surface research worth noticing between weekly runs. Formal organization and Zotero imports remain part of the weekly workflow, so daily alerts do not disrupt your library.
-- **More reliable weekly organization and recovery.** Daily discoveries, weekly search results, and pending items are deduplicated and screened together before import. Interrupted work retains confirmed progress; recovery checks the actual state to reduce duplicate imports and repeated work.
-- **Status monitoring for saved literature.** PaperEcho checks public structured updates for retractions, corrections, and other important changes. It flags and organizes affected papers conservatively while preserving your existing items and attachments.
-- **Stronger multi-source discovery.** Search methods are tailored to the field and source, combining appropriate results from OpenAlex, Semantic Scholar, PubMed, Europe PMC, Crossref, and RSS. Results are deduplicated across sources, and a zero result from one database is not treated as proof that no relevant literature exists.
-- **Better visibility during long Desktop tasks.** Large historical-feedback jobs show progress and place time limits on slow lookups. A timeout or interruption is clearly reported as unfinished work and stops subsequent operations, while retaining confirmed results.
+- **A focused workspace.** Overview shows today's task and recent results; Literature displays actual A/B/C papers; Feedback brings article ratings, manual review, research feedback, and rule suggestions together.
+- **Feedback that carries forward.** Article ratings are saved for later workflow runs, not applied directly to Zotero on click. Rule suggestions show as accepted only after the formal rule or search configuration is safely written and verified.
+- **Human review before writeback.** Candidates with conflicting rule and semantic grades, or a missing semantic grade, are held for review instead of being written to Zotero without confirmation.
+- **Simpler settings.** Related options save as groups, Desktop/Web/Local runtime paths are mutually exclusive, and stored credentials are never displayed in raw form. Existing XLSX, `screening_standards.docx`, and direct configuration remain available.
+- **One scheduled entry.** An external scheduler can call `--scheduled-daily` for Desktop or Web; PaperEcho selects Daily Radar or the weekly report according to the planned slot. This version does not register an OS scheduler, and Local does not support this entry.
 
-Daily Radar and literature status monitoring can be enabled as needed. PaperEcho does not download PDFs, read full texts, or summarize their contents.
-
-### V2.2
-
-**PaperEcho V2.2** makes all three ways of using PaperEcho feel lighter and makes future updates safer.
-
-- **A more efficient Web path:** PaperEcho avoids unnecessary back-and-forth with Zotero, reducing wait time when handling larger batches without changing screening or writeback behavior.
-- **A smoother Local path:** local imports, deduplication, and repeat runs now handle growing libraries more efficiently. Desktop continues to prioritize stability and keeps its familiar workflow.
-- **More graceful recovery from busy services:** when a literature source, AI service, or Zotero is temporarily overloaded, PaperEcho slows down automatically and picks up speed gradually when the service recovers.
-- **Safer product updates:** the new `paperecho-update` skill checks and installs official stable releases while protecting local configuration, run history, and existing reports. It stops when local changes or an active task make updating unsafe, and can restore the previous working version if an update fails.
+See the [Control Center guide](docs/control-center.md). PaperEcho does not download PDFs, read full texts, or summarize their contents.
 
 ## Quick Start
 
