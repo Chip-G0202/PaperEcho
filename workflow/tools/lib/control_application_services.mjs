@@ -14,9 +14,9 @@ import { ControlScheduleStatusService } from './control_schedule_status_service.
 
 export function createControlServices({ root, reviewRoot, env = process.env, llmClient = null, context = buildRuntimeConfig({ cwd: root, env, argv: [] }) } = {}) {
   reviewRoot ||= context.reviewRoot;
-  env = context.env || env;
+  env = { ...(context.env || env), PAPERECHO_APPLICATION_CONFIG: context.configPath || path.join(root, 'config', 'paperecho.config.json') };
   const secrets = new SecretService({ root, env });
-  const rules = new RuleSuggestionService({ reviewRoot, root });
+  const rules = new RuleSuggestionService({ reviewRoot, root, env, configPath: context.configPath });
   const config = new ConfigService({ root, env, configPath: context.configPath, runtimeMode: context.mode });
   const feedback = new FeedbackService({
     reviewRoot,
@@ -35,9 +35,9 @@ export function createControlServices({ root, reviewRoot, env = process.env, llm
         if (receipt?.status === 'processed') return publicReceipt(receipt);
         receipt = { requestId, digest, text: secrets.redact(text), status: 'accepted', receivedAt: new Date().toISOString() };
         await writeAtomicJson(receiptPath, receipt);
-        const llmRuntime = getPreferenceLearningConfig({ env: { ...env, PREFERENCE_LEARNING_CONFIG_PATH: path.join(root, 'config', 'preference_learning.config.json') } });
+        const llmRuntime = getPreferenceLearningConfig({ env });
         try {
-          const result = await processResearchEvaluation(receipt.text, { reviewRoot, pubmedConfigPath: path.join(root, 'config', 'pubmed_pmc_search.json'), llmClient, llmRuntime });
+          const result = await processResearchEvaluation(receipt.text, { reviewRoot, pubmedConfigPath: path.join(root, 'config', 'pubmed_pmc_search.json'), llmClient, llmRuntime, configEnv: env });
           receipt.status = result.evaluation_processed ? 'processed' : 'blocked';
           receipt.suggestions = result.suggestions_appended || 0;
           // Only known short blocker codes cross the application boundary.

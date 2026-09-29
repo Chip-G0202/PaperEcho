@@ -29,7 +29,7 @@ export class ControlScheduleStatusService {
       result.radarEnabled = owner.common?.radar?.enabled === true;
       if (result.runtimePath === 'local') { result.status = 'unsupported'; return result; }
       if (!['desktop', 'web'].includes(result.runtimePath)) throw new Error('SCHEDULE_MODE_UNSUPPORTED');
-      const intervalDays = Number(this.context.env?.review_results_RUN_INTERVAL_DAYS || 7);
+      const intervalDays = Number(owner.weekly?.intervalDays || this.context.env?.review_results_RUN_INTERVAL_DAYS || 7);
       const weeklyMode = owner.profile || 'standard';
       const state = await readScheduledRuntimeState(path.join(this.context.researchRoot, 'runtime_state.json'), this.fsApi);
       // Preview no earlier than the planned slot. A Weekly may finish later that day.

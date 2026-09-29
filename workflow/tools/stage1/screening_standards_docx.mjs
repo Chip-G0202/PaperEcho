@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readDomainConfig } from '../lib/application_config.mjs';
 import {
   buildPubMedQueryFromKeywordGroups,
   loadPubMedKeywordGroupsFromConfig,
@@ -65,7 +66,9 @@ function standardSummaryToLines(summary = {}) {
   ].map((line) => String(line || "").trim()).filter(Boolean);
 }
 
-export function readJsonIfExists(filePath) {
+export function readJsonIfExists(filePath, { env = process.env } = {}) {
+  const loaded = readDomainConfig(filePath, { env });
+  if (loaded.canonical) return loaded.value || {};
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch {

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { resolveCapabilityInput } from './application_config.mjs';
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -124,10 +125,13 @@ function normalizeCompletionsEndpoint(value) {
 }
 
 export function getPreferenceLearningConfig({ env = process.env } = {}) {
-  const configPath = env.PREFERENCE_LEARNING_CONFIG_PATH
+  const legacyPath = env.PREFERENCE_LEARNING_CONFIG_PATH
     ? path.resolve(env.PREFERENCE_LEARNING_CONFIG_PATH)
     : DEFAULT_CONFIG_PATH;
-  const fileConfig = readJsonFile(configPath) || {};
+  const input = resolveCapabilityInput('preference', { env, legacyPath });
+  env = input.env;
+  const configPath = input.configPath;
+  const fileConfig = input.value || {};
   const promptFile = env.PREFERENCE_LEARNING_PROMPT_FILE
     || fileConfig.prompt_file
     || DEFAULT_CONFIG.prompt_file;

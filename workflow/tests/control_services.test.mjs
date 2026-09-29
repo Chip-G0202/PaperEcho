@@ -317,7 +317,7 @@ test('text and DOCX evaluation share proposal core, text never changes DOCX', as
   const docxPath = path.join(root, 'screening_standards.docx');
   const before = await fs.readFile(docxPath);
   const llmClient = async () => ({ rules_added: ['优先关注机制研究'], rules_deleted: [], rules_changed: [], keywords_added: { required: ['EGFR'], optional: [], negative: [] }, keywords_removed: [], negative_keywords_added: [], unmapped_feedback: [] });
-  const options = { reviewRoot: root, pubmedConfigPath, llmClient };
+  const options = { reviewRoot: root, pubmedConfigPath, llmClient, llmRuntime: { model: 'fixture', endpoint: 'https://fixture.invalid/v1/chat/completions', max_retries: 0 } };
   const direct = await processResearchEvaluation(text, options);
   assert.equal(direct.evaluation_processed, true);
   assert.equal(direct.applied, false);

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { MODES, PROFILES, RUNNER_SCHEMA_VERSION, SUPPORTED_RUNNER_CONFIG_SCHEMAS } from "./constants.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
+import { DOMAIN_SECTIONS, validateApplicationSections } from '../lib/application_config.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const DEFAULT_CONFIG_PATH = path.join(REPO_ROOT, "config", "paperecho.config.json");
@@ -52,7 +53,7 @@ function has(object, key) {
 function validateKeys(value, section, schemaVersion = 1) {
   if (value == null) return {};
   if (!isObject(value)) fail("CONFIG_SECTION_INVALID", `${section} must be an object`, { section });
-  const allowed = section === "common" && schemaVersion === 2 ? new Set([...SECTION_KEYS.common, ...V2_COMMON_KEYS]) : SECTION_KEYS[section];
+  const allowed = section === "common" && schemaVersion >= 2 ? new Set([...SECTION_KEYS.common, ...V2_COMMON_KEYS]) : SECTION_KEYS[section];
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) fail("CONFIG_FIELD_UNKNOWN", `${section}.${key} is not supported`, { section, field: key });
   }
@@ -117,7 +118,7 @@ function validateCommon(common, schemaVersion = 1) {
   let failure = {};
   let health = {};
   let receiptStore = {};
-  if (schemaVersion === 2) {
+  if (schemaVersion >= 2) {
     sourceState = validateKeys(value.sourceState, "sourceState");
     optionalString(sourceState.root, "common.sourceState.root");
     notifications = validateKeys(value.notifications, "notifications");
@@ -204,22 +205,27 @@ async function loadConfigFile({ requestedPath, source, fsApi, cwd }) {
   }
   let config;
   try { config = JSON.parse(raw); }
-  catch (error) { fail("CONFIG_JSON_INVALID", `PaperEcho config JSON is invalid: ${error.message}`, { path: safeConfigPath(requestedPath, cwd) }); }
+  catch { fail("CONFIG_JSON_INVALID", "PaperEcho config JSON is invalid", { path: safeConfigPath(requestedPath, cwd) }); }
   validateRunnerConfigObject(config);
   return { config, configPath: requestedPath, source };
 }
 
 export function validateRunnerConfigObject(config) {
   if (!isObject(config)) fail("CONFIG_ROOT_INVALID", "PaperEcho config root must be an object");
-  if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1 or 2", { schemaVersion: config.schemaVersion ?? null });
+  if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1, 2 or 3", { schemaVersion: config.schemaVersion ?? null });
   for (const key of Object.keys(config)) {
-    if (!new Set(["schemaVersion", "mode", "profile", "common", "desktop", "web", "local"]).has(key)) fail("CONFIG_FIELD_UNKNOWN", `top-level field ${key} is not supported`, { field: key });
+    if (!new Set(["schemaVersion", "mode", "profile", "common", "desktop", "web", "local", ...(config.schemaVersion === 3 ? [...Object.values(DOMAIN_SECTIONS), 'weekly', 'migration'] : [])]).has(key)) fail("CONFIG_FIELD_UNKNOWN", `top-level field ${key} is not supported`, { field: key });
   }
   optionalString(config.mode, "mode");
   if (config.mode != null && !MODES.has(config.mode)) fail("CONFIG_MODE_INVALID", `mode must be desktop, web, local, or null`, { mode: config.mode });
   optionalString(config.profile, "profile");
   if (config.profile != null && !PROFILES.has(config.profile)) fail("CONFIG_PROFILE_INVALID", "profile must be standard, complete, or radar", { profile: config.profile });
   validateEnabledSections(config);
+  if (config.schemaVersion === 3) {
+    validateApplicationSections(config);
+    validateCommon(config.common, 3);
+    for (const mode of MODES) validatePathSection(mode, config[mode]);
+  }
   return config;
 }
 
@@ -271,6 +277,12 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   const pathSection = validatePathSection(mode, config?.[mode]);
   const configDir = loaded.configPath ? path.dirname(loaded.configPath) : cwd;
   const effectiveEnv = { ...env };
+  if (configSchemaVersion === 3) {
+    effectiveEnv.PAPERECHO_APPLICATION_CONFIG = loaded.configPath;
+    effectiveEnv.review_results_RUN_INTERVAL_DAYS = String(config.weekly?.intervalDays || 7);
+  }
+  if (cliOptions.preferenceConfig) effectiveEnv.PAPERECHO_INVOCATION_PREFERENCE_CONFIG = cliOptions.preferenceConfig;
+  if (cliOptions.translationConfig) effectiveEnv.PAPERECHO_INVOCATION_TRANSLATION_CONFIG = cliOptions.translationConfig;
   const secretStatus = {};
   effectiveEnv.PAPERECHO_CONFIG_SCHEMA_VERSION = String(configSchemaVersion);
   for (const name of ["PAPERECHO_FAILURE_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_DEGRADATION_THRESHOLD", "PAPERECHO_NOTIFICATION_RECEIPT_ROOT", "PAPERECHO_NOTIFICATION_HEALTH_ROOT", "PAPERECHO_NOTIFICATION_RETRY_FAILED", "PAPERECHO_NOTIFICATION_UNKNOWN_POLICY", "PAPERECHO_SOURCE_STATE_ROOT", "PAPERECHO_INTEGRITY_ENABLED", "PAPERECHO_INTEGRITY_BOOTSTRAP_BATCH_SIZE", "PAPERECHO_INTEGRITY_CROSSREF_CONCURRENCY", "PAPERECHO_INTEGRITY_PUBMED_BATCH_SIZE", "PAPERECHO_INTEGRITY_CACHE_TTL_DAYS"]) delete effectiveEnv[name];
@@ -278,7 +290,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   if (has(common.value, "projectRoot") && common.value.projectRoot) effectiveEnv.ZOTERO_PROJECT_ROOT = resolveRelative(common.value.projectRoot, configDir);
   if (has(common.cleanup, "enabled")) setEnvValue(effectiveEnv, "PAPERFLOW_CLEANUP_ENABLED", common.cleanup.enabled);
   if (has(common.cleanup, "retentionDays")) setEnvValue(effectiveEnv, "PAPERFLOW_RETENTION_DAYS", common.cleanup.retentionDays);
-  if (configSchemaVersion === 2) {
+  if (configSchemaVersion >= 2) {
     setEnvValue(effectiveEnv, "PAPERECHO_FAILURE_NOTIFIER_ENABLED", common.failure.enabled === true);
     setEnvValue(effectiveEnv, "PAPERECHO_HEALTH_NOTIFIER_ENABLED", common.health.enabled === true);
     setEnvValue(effectiveEnv, "PAPERECHO_HEALTH_DEGRADATION_THRESHOLD", common.health.consecutiveThreshold ?? 2);
@@ -328,7 +340,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
 
   const provided = cliOptions.provided || {};
   const profile = provided.profile ? cliOptions.profile : (config?.profile || cliOptions.profile || "standard");
-  if (profile === "radar" && configSchemaVersion !== 2) fail("CONFIG_RADAR_REQUIRES_SCHEMA_V2", "Radar profile requires schemaVersion 2", { profile });
+  if (profile === "radar" && configSchemaVersion < 2) fail("CONFIG_RADAR_REQUIRES_SCHEMA_V2", "Radar profile requires schemaVersion 2 or later", { profile });
   if (profile === "radar" && common.value.radar?.enabled !== true) fail("CONFIG_RADAR_NOT_ENABLED", "Radar profile requires common.radar.enabled=true", { profile });
   const configRequireLlm = common.llm.requireRealModel === true;
   const requireLlm = Boolean(cliOptions.requireLlm || configRequireLlm);

@@ -2,27 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export function parseEnvFile(text) {
-  const out = {};
-  const lines = String(text || "").split(/\r?\n/);
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const idx = line.indexOf("=");
-    if (idx < 0) continue;
-    const key = line.slice(0, idx).trim();
-    if (!key) continue;
-    let value = line.slice(idx + 1);
-    const trimmed = value.trim();
-    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-      value = trimmed.slice(1, -1);
-    } else {
-      value = value.replace(/\s+#.*$/, "").trimEnd();
-    }
-    out[key] = value;
-  }
-  return out;
-}
+import { parseEnvFile } from './env_file_parser.mjs';
+export { parseEnvFile } from './env_file_parser.mjs';
 
 export function resolveDotEnvPath() {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -31,6 +12,7 @@ export function resolveDotEnvPath() {
 }
 
 function loadDotEnv() {
+  if (process.env.PAPERECHO_SKIP_DOTENV === '1') return;
   const envPath = resolveDotEnvPath();
   if (!fs.existsSync(envPath)) return;
 

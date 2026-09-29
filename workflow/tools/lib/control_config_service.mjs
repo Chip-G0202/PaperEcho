@@ -3,6 +3,7 @@ import path from 'node:path';
 import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { buildPubMedQueryFromKeywordGroups } from './literature_config.mjs';
+import { readApplicationConfig, applicationConfigPath, DOMAIN_SECTIONS } from './application_config.mjs';
 
 const INITIAL_OWNER_VALUES = Object.freeze({
   'title_translation.config.json': { enabled: true },
@@ -121,6 +122,8 @@ export class ConfigService {
   }
   async readOwner(file) {
     // Fixed registry owns paths; callers cannot choose arbitrary files.
+    const canonical = readApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath });
+    if (canonical) return file === 'paperecho.config.json' ? canonical : structuredClone(canonical[DOMAIN_SECTIONS[file]] || {});
     return JSON.parse(await fs.readFile(this.ownerPath(file), 'utf8'));
   }
   async readOwnerOrTemplate(file) {
@@ -134,12 +137,14 @@ export class ConfigService {
   }
   async list() {
     const result = [];
+    const owners = new Map();
     for (const definition of CONFIG_REGISTRY) {
       let value = null;
       let available = true;
       let ownerPresent = true;
       try {
-        const owner = await this.readOwnerOrTemplate(definition.file);
+        if (!owners.has(definition.file)) owners.set(definition.file, await this.readOwnerOrTemplate(definition.file));
+        const owner = owners.get(definition.file);
         value = get(owner.value, definition.key) ?? (definition.id === 'translation.enabled' ? true : null);
         ownerPresent = owner.present;
       }
@@ -147,7 +152,7 @@ export class ConfigService {
       const { file, key, ...publicDefinition } = definition;
       result.push({ ...publicDefinition, value, available, ownerPresent, effectiveValue: definition.id === 'runtime.mode' ? this.runtimeMode || value : undefined });
     }
-    result.push({ id: 'weekly.interval', category: 'Weekly', type: 'integer', value: Number(this.env.review_results_RUN_INTERVAL_DAYS || 7), default: 7, available: true, readOnly: true, description: '默认 7 天；环境覆盖与调度器仍由既有 owner 管理', validation: { min: 1 }, secret: false, advanced: true, reload: 'scheduler' });
+    result.push({ id: 'weekly.interval', category: 'Weekly', type: 'integer', value: Number(owners.get('paperecho.config.json')?.value?.weekly?.intervalDays || this.env.review_results_RUN_INTERVAL_DAYS || 7), default: 7, available: true, readOnly: true, description: '默认 7 天；由调度配置管理', validation: { min: 1 }, secret: false, advanced: true, reload: 'scheduler' });
     return result;
   }
   async update(id, value) {
@@ -164,6 +169,29 @@ export class ConfigService {
       return { id, value, definition };
     });
     const ownerFiles = [...new Set(resolved.map((entry) => entry.definition.file))].sort();
+    if (readApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath })) {
+      const target = applicationConfigPath({ root: this.root, env: this.env, configPath: this.configPath });
+      return withAtomicJsonLock(target, async () => {
+        const candidate = readApplicationConfig({ root: this.root, env: this.env, configPath: target });
+        for (const { id, value, definition } of resolved) {
+          const section = DOMAIN_SECTIONS[definition.file];
+          const owner = section ? (candidate[section] ||= {}) : candidate;
+          if (id === 'pubmed.query' && owner.keyword_groups) throw new Error('SEARCH_KEYWORD_OWNER_REQUIRED');
+          put(owner, definition.key, value);
+          if (definition.key.startsWith('keyword_groups.')) owner.query = buildPubMedQueryFromKeywordGroups(owner.keyword_groups);
+          await this.verify(owner, definition);
+        }
+        validateRunnerConfigObject(candidate);
+        await writeAtomicJson(target, candidate, { ...this.atomicOptions, validateTemporary: async (temporary) => {
+          const readback = JSON.parse(await fs.readFile(temporary, 'utf8'));
+          validateRunnerConfigObject(readback);
+          if (JSON.stringify(readback) !== JSON.stringify(candidate)) throw new Error('SETTING_VERIFY_FAILED');
+          for (const { definition } of resolved) await this.verify(DOMAIN_SECTIONS[definition.file] ? readback[DOMAIN_SECTIONS[definition.file]] : readback, definition);
+          await this.atomicOptions?.validateTemporary?.(temporary);
+        } });
+        return { saved: true, results: resolved.map(({ id, definition }) => ({ id, saved: true, reload: definition.reload })) };
+      });
+    }
     const withLocks = (index, operation) => index >= ownerFiles.length
       ? operation()
       : withAtomicJsonLock(this.ownerPath(ownerFiles[index]), () => withLocks(index + 1, operation));

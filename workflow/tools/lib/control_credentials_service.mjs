@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { parseEnvFile } from './env_file_bootstrap.mjs';
+import { parseEnvFile } from './env_file_parser.mjs';
 import { writeAtomicText, withAtomicJsonLock } from './atomic_json.mjs';
 
 export const CONTROL_SECRET_NAMES = Object.freeze([

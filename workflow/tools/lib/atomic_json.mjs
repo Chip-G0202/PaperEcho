@@ -32,6 +32,7 @@ export async function writeAtomicText(filePath, value, {
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   renameAttempts = 4,
   renameBackoffMs = 10,
+  validateTemporary = async () => {},
 } = {}) {
   await fsApi.mkdir(path.dirname(filePath), { recursive: true });
   const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
@@ -42,6 +43,7 @@ export async function writeAtomicText(filePath, value, {
     if (typeof handle.sync === "function") await handle.sync();
     await handle.close();
     handle = null;
+    await validateTemporary(temporary);
     await renameWithTransientRetry(temporary, filePath, {
       renameImpl,
       sleep,

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { resolveCapabilityInput } from './application_config.mjs';
 import { fileURLToPath } from "node:url";
 import { createServiceConcurrencyController, parseServerDelayMs } from "./adaptive_concurrency.mjs";
 import { registerEphemeral } from "./ephemeral_registry.mjs";
@@ -190,10 +191,13 @@ function loadConfigFile(configPath) {
 }
 
 function resolveTranslationConfig({ env = process.env } = {}) {
-  const configPath = env.TITLE_TRANSLATION_CONFIG_PATH
+  const legacyPath = env.TITLE_TRANSLATION_CONFIG_PATH
     ? path.resolve(env.TITLE_TRANSLATION_CONFIG_PATH)
     : resolveConfigPath();
-  const fileConfig = loadConfigFile(configPath);
+  const input = resolveCapabilityInput('translation', { env, legacyPath });
+  env = input.env;
+  const configPath = input.configPath;
+  const fileConfig = input.value || {};
   const rateLimit = fileConfig.rate_limit || {};
   const promptFile = env.TITLE_TRANSLATION_PROMPT_FILE
     || fileConfig.prompt_file

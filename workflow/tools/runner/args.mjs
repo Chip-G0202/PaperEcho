@@ -3,7 +3,7 @@ import path from "node:path";
 import { MODES, PROFILES } from "./constants.mjs";
 import { validateRecoveryRunId } from "../recovery/operation_ledger.mjs";
 
-const VALUE_ARGS = new Set(["mode", "profile", "email", "input", "output-root", "feedback", "llm-mode", "config", "resume"]);
+const VALUE_ARGS = new Set(["mode", "profile", "email", "input", "output-root", "feedback", "llm-mode", "config", "resume", "preference-config", "translation-config"]);
 const BOOLEAN_ARGS = new Set(["check", "run", "force-resend", "require-llm", "fixed-mode", "scheduled-daily"]);
 
 export function parseRunnerArgs(argv = process.argv.slice(2), { cwd = process.cwd(), allowUnresolvedMode = false } = {}) {
@@ -52,6 +52,8 @@ export function parseRunnerArgs(argv = process.argv.slice(2), { cwd = process.cw
     outputRoot: resolveOptional("output-root"),
     feedback: resolveOptional("feedback"),
     configPath: resolveOptional("config"),
+    preferenceConfig: resolveOptional('preference-config'),
+    translationConfig: resolveOptional('translation-config'),
     resume: values.resume ? validateRecoveryRunId(values.resume) : "",
     llmMode: flags.has("require-llm") ? "real" : (values["llm-mode"] || ""),
     forceResend: flags.has("force-resend"),

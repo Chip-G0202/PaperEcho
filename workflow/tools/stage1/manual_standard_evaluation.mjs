@@ -306,10 +306,11 @@ async function processResearchEvaluationInput({
   llmRuntime = null,
   manualStandardEvaluationConfig = {},
   evaluationText = null,
+  configEnv = process.env,
 } = {}) {
   const mdPath = screeningStandardsPath(reviewRoot);
   const docxPath = screeningStandardsDocxPath(reviewRoot);
-  let pubmedConfig = readJsonIfExists(pubmedConfigPath);
+  let pubmedConfig = readJsonIfExists(pubmedConfigPath, { env: configEnv });
   const pubmedQueryBefore = String(pubmedConfig.query || buildPubMedQueryFromKeywordGroups(loadPubMedKeywordGroupsFromConfig(pubmedConfig)));
   const llmConfig = llmRuntime || getPreferenceLearningConfig();
   const audit = emptyAudit({ auditPath, llmConfig, pubmedQueryBefore, pubmedQueryAfter: pubmedQueryBefore });
@@ -513,7 +514,7 @@ async function processResearchEvaluationInput({
     const afterMd = applyRuleModifications(beforeMd, output);
     await fs.promises.writeFile(mdPath, afterMd, "utf8");
     audit.formal_rules_modified = afterMd !== beforeMd;
-    queryUpdate = updatePubMedPmcKeywordGroups(pubmedConfigPath, output);
+    queryUpdate = await updatePubMedPmcKeywordGroups(pubmedConfigPath, output);
     audit.pubmed_config_modified = true;
     await syncScreeningStandardsDocx(reviewRoot, {
       pubmedConfigPath,

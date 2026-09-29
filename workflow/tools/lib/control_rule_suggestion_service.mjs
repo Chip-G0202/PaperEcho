@@ -1,5 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { readApplicationConfig, applicationConfigPath } from './application_config.mjs';
+import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { writeAtomicJson, writeAtomicText, withAtomicJsonLock } from './atomic_json.mjs';
 import { ruleSuggestionsLogPath, screeningStandardsPath } from './screening_standards_paths.mjs';
 import { normalizeRuleForDedup, syncSuggestionsToScreeningStandardsMd } from './screening_standards_rule_suggestions.mjs';
@@ -74,8 +76,8 @@ function planKeywordConfig(content, item, rule) {
 // A successful accept means the formal owner was changed and verified.
 // Unsupported mutation types remain pending and return an explicit error.
 export class RuleSuggestionService {
-  constructor({ reviewRoot, root, pubmedConfigPath, noFormalRuleApply = false, atomicOptions } = {}) {
-    Object.assign(this, { reviewRoot, root, pubmedConfigPath, noFormalRuleApply, atomicOptions });
+  constructor({ reviewRoot, root, pubmedConfigPath, noFormalRuleApply = false, atomicOptions, env = process.env, configPath } = {}) {
+    Object.assign(this, { reviewRoot, root, pubmedConfigPath, noFormalRuleApply, atomicOptions, env, configPath });
   }
   async readLog() {
     try {
@@ -105,18 +107,27 @@ export class RuleSuggestionService {
         if (!applicable(suggestion)) throw new Error('FORMAL_MUTATION_OWNER_UNVERIFIED');
         if (typeof rule !== 'string' || !rule.trim() || rule.length > 4000 || /[\r\n\u0000]/.test(rule)) throw new Error('SUGGESTION_RULE_INVALID');
       }
-      const formalPath = decision === 'rejected' ? null : targetOf(suggestion) === 'screening_standards.md'
+      let formalPath = decision === 'rejected' ? null : targetOf(suggestion) === 'screening_standards.md'
         ? screeningStandardsPath(this.reviewRoot)
         : this.pubmedConfigPath || (this.root ? path.join(this.root, 'config', 'pubmed_pmc_search.json') : null);
+      const configRoot = formalPath ? path.dirname(path.dirname(formalPath)) : this.root;
+      const configOptions = { root: configRoot, env: this.env, configPath: this.configPath };
+      const canonicalPubmed = formalPath && targetOf(suggestion) === 'pubmed_pmc_search.json' && readApplicationConfig(configOptions);
+      if (canonicalPubmed) formalPath = applicationConfigPath(configOptions);
       if (decision !== 'rejected' && !formalPath) throw new Error('FORMAL_MUTATION_OWNER_UNVERIFIED');
       const apply = async () => {
         let before;
         let changed = false;
         if (formalPath) {
           before = await fs.readFile(formalPath, 'utf8');
-          const plan = targetOf(suggestion) === 'screening_standards.md'
+          let plan = targetOf(suggestion) === 'screening_standards.md'
             ? planMarkdown(before, suggestion, rule, decision)
-            : planKeywordConfig(before, suggestion, rule);
+            : planKeywordConfig(canonicalPubmed ? JSON.stringify(JSON.parse(before).pubmed || {}) : before, suggestion, rule);
+          if (canonicalPubmed) {
+            const candidate = { ...JSON.parse(before), pubmed: JSON.parse(plan) };
+            validateRunnerConfigObject(candidate);
+            plan = JSON.stringify(candidate, null, 2) + '\n';
+          }
           if (plan !== before) {
             await writeAtomicText(`${formalPath}.backup`, before);
             await writeAtomicText(formalPath, plan, this.atomicOptions);
