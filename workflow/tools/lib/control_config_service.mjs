@@ -4,7 +4,7 @@ import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { buildPubMedQueryFromKeywordGroups } from './literature_config.mjs';
 import { readApplicationConfig, applicationConfigPath, DOMAIN_SECTIONS } from './application_config.mjs';
-import { migrateApplicationConfig, upgradeNotificationConfig, upgradeNotificationChannelsConfig } from './application_config_migration.mjs';
+import { migrateApplicationConfig, upgradeNotificationConfig, upgradeNotificationChannelsConfig, upgradeOutboundChannelsConfig } from './application_config_migration.mjs';
 import { isValidSmtpHost } from '../stage5/email_sender.mjs';
 
 const INITIAL_OWNER_VALUES = Object.freeze({
@@ -57,6 +57,8 @@ for (const [id, category, key, type, description, validation] of [
   ['qq.appId', 'Notifications', 'common.notifications.channels.qq.appId', 'string', '机器人 AppID', { maxLength: 200 }],
   ['qq.targetType', 'Notifications', 'common.notifications.channels.qq.targetType', 'enum', '发送目标类型', { values: ['user', 'group'] }],
   ['qq.targetId', 'Notifications', 'common.notifications.channels.qq.targetId', 'string', '目标 OpenID', { maxLength: 200 }],
+  ['wechat.enabled', 'Notifications', 'common.notifications.channels.wechat.enabled', 'boolean', '启用微信通知'],
+  ['wechat.uid', 'Notifications', 'common.notifications.channels.wechat.uid', 'string', 'WxPusher 接收用户 UID（留空不变）', { maxLength: 132, pattern: '^UID_[A-Za-z0-9]+$' }],
   ['email.recipient', 'Notifications', 'common.email.recipient', 'email', '收件人'],
   ['smtp.host', 'Notifications', 'common.email.smtp.host', 'string', 'SMTP 主机', { maxLength: 253 }],
   ['smtp.port', 'Notifications', 'common.email.smtp.port', 'integer', 'SMTP 端口', { min: 1, max: 65535 }],
@@ -159,12 +161,12 @@ export class ConfigService {
         if (definition.id === 'smtp.port' && value == null) value = 465;
         if (definition.id === 'smtp.secure' && value == null) value = Number(owner.value.common?.email?.smtp?.port ?? 465) === 465;
         if (definition.id === 'email.enabled' && value == null) value = true;
-        if (definition.id === 'qq.enabled' && value == null) value = false;
+        if (['qq.enabled','wechat.enabled'].includes(definition.id) && value == null) value = false;
         ownerPresent = owner.present;
       }
       catch (error) { if (error.code !== 'ENOENT') throw error; available = false; }
       const { file, key, ...publicDefinition } = definition;
-      result.push({ ...publicDefinition, value, available, ownerPresent, effectiveValue: definition.id === 'runtime.mode' ? this.runtimeMode || value : undefined });
+      result.push({ ...publicDefinition, value: definition.id === 'wechat.uid' ? null : value, ...(definition.id === 'wechat.uid' ? { configured: Boolean(value) } : {}), available, ownerPresent, effectiveValue: definition.id === 'runtime.mode' ? this.runtimeMode || value : undefined });
     }
     result.push({ id: 'weekly.interval', category: 'Weekly', type: 'integer', value: Number(owners.get('paperecho.config.json')?.value?.weekly?.intervalDays || this.env.review_results_RUN_INTERVAL_DAYS || 7), default: 7, available: true, readOnly: true, description: '默认 7 天；由调度配置管理', validation: { min: 1 }, secret: false, advanced: true, reload: 'scheduler' });
     return result;
@@ -187,7 +189,8 @@ export class ConfigService {
     });
     if (new Set(resolved.map((entry) => entry.id)).size !== resolved.length) throw new Error('SETTING_BATCH_INVALID');
     const ownerFiles = [...new Set(resolved.map((entry) => entry.definition.file))].sort();
-    const notificationEdit = resolved.some(({ id }) => /^(email\.|smtp\.|notification\.|qq\.)/.test(id));
+    const notificationEdit = resolved.some(({ id }) => /^(email\.|smtp\.|notification\.|qq\.|wechat\.|feishu\.|wecom\.)/.test(id));
+    const outboundEdit = resolved.some(({ id }) => /^(wechat\.|feishu\.|wecom\.)/.test(id));
     const qqEdit = resolved.some(({ id }) => id.startsWith('qq.'));
     if (notificationEdit && !readApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath })) {
       await migrateApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath, atomicOptions: this.atomicOptions });
@@ -196,7 +199,7 @@ export class ConfigService {
       const target = applicationConfigPath({ root: this.root, env: this.env, configPath: this.configPath });
       return withAtomicJsonLock(target, async () => {
         const current = readApplicationConfig({ root: this.root, env: this.env, configPath: target });
-        const candidate = qqEdit ? upgradeNotificationChannelsConfig(current) : notificationEdit ? upgradeNotificationConfig(current) : current;
+        const candidate = outboundEdit ? upgradeOutboundChannelsConfig(current) : qqEdit ? upgradeNotificationChannelsConfig(current) : notificationEdit ? upgradeNotificationConfig(current) : current;
         for (const { id, value, definition } of resolved) {
           const section = DOMAIN_SECTIONS[definition.file];
           const owner = section ? (candidate[section] ||= {}) : candidate;

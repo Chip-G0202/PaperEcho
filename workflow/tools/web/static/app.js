@@ -31,7 +31,7 @@ const settingViews = {
   review: [['translation', '标题翻译', ['Models']], ['preference', '偏好学习', ['Models', 'Ranking / Review']]],
   runtime: [['path', '运行路径', ['Runtime']]],
   automation: [['radar', 'Daily Radar', ['Radar']], ['weekly', '周报', ['Weekly', 'Integrity']]],
-  connections: [['notifications', '通知偏好', ['Notifications']], ['email', '邮箱', ['Notifications']], ['qq', 'QQ', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
+  connections: [['notifications', '通知偏好', ['Notifications']], ['email', '邮箱', ['Notifications']], ['qq', 'QQ', ['Notifications']], ['wechat', '微信', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
 };
 function el(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; }
 function button(text, action) { const node = el('button', text); node.type = 'button'; node.addEventListener('click', async () => {
@@ -512,6 +512,7 @@ function visibleSetting(setting) {
   return setting.category !== 'Advanced';
 }
 function currentSettingText(setting) {
+  if (setting.id === 'wechat.uid') return setting.configured || setting.value ? '已配置（接收标识已隐藏）' : '未配置';
   if (setting.value === null || setting.value === undefined || setting.value === '') return '未配置';
   const prefix = setting.ownerPresent === false ? '默认值 · ' : '';
   if (setting.type === 'url') { try { return `${prefix || '已配置 · '}${new URL(setting.value).hostname}`; } catch { return prefix ? `${prefix}已提供` : '已配置'; } }
@@ -557,7 +558,7 @@ function settingValue(setting, input) {
 }
 function appendCredentialEditor(section, item, onStatusChange = () => {}) {
   if (!item) return null;
-  const names = { TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key', QQ_BOT_APP_SECRET: 'QQ 机器人 AppSecret' };
+  const names = { TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key', QQ_BOT_APP_SECRET: 'QQ 机器人 AppSecret', WXPUSHER_APP_TOKEN: 'WxPusher appToken' };
   const row = el('div', undefined, 'setting'); const status = el('p');
   let configure; let clear;
   const zoteroKey = item.id === 'ZOTERO_API_KEY';
@@ -740,7 +741,7 @@ async function settings(group = settingsGroup, view = settingsView) {
     sync();
     const actions = el('div', undefined, 'actions group-save section-actions'); save = button('', async () => { const selected = options.value; if (!selected) throw new Error('请先选择一种运行路径。'); const selectedRecords = records.filter((entry) => entry.pathName === selected || entry.pathName === 'shared' && selected !== 'local'); const updates = [{ id: 'runtime.mode', value: selected }]; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); if (record.required && value === undefined && !String(record.entry.value || '').trim()) throw new Error(`请先填写${record.entry.description}，原设置未改变。`); if (record.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); if (value !== undefined) updates.push({ id: record.entry.id, value }); } await api('/api/settings', { updates }); mode.value = selected; mode.ownerPresent = true; current.textContent = `当前运行路径：${runtimePaths[selected].title}`; current.className = 'runtime-current'; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); record.entry.ownerPresent = true; if (value !== undefined) { record.entry.value = value; if (record.input.dataset?.replacement === 'true') record.input.value = ''; } if (record.currentValue) record.currentValue.textContent = `当前：${currentSettingText(record.entry)}`; } panels[selected].querySelector('.runtime-readiness').textContent = readinessFor[selected](); notice.textContent = selected === 'web' ? 'Zotero Web 配置已保存；下次运行生效。连接状态仍由运行前检测确认。' : '“运行路径”已保存，下次运行生效；连接与路径可用性仍由运行前检查确认。'; }); save.className = 'primary'; actions.append(save); section.append(actions); sync(); body.append(section); return;
   }
-  if (settingsGroup === 'connections' && ['notifications', 'email', 'qq'].includes(settingsView)) {
+  if (settingsGroup === 'connections' && ['notifications', 'email', 'qq', 'wechat'].includes(settingsView)) {
     const channelSettings = await api('/api/notifications');
     for (const channel of channelSettings.channels.filter(entry => settingsView === 'notifications' || entry.id === settingsView)) {
     const name = channel.displayName || (channel.id === 'email' ? '邮箱' : 'QQ');
@@ -753,7 +754,7 @@ async function settings(group = settingsGroup, view = settingsView) {
     syncStatus();
     const emailSection = el('section', undefined, 'settings-section section channel-card');
     emailSection.append(el('h3', name, 'section-header'), channelStatus, el('p', '关闭后保留配置和凭据，Radar 与周报仍正常运行。', 'meta'), recent);
-    const emailEntries = data.filter((entry) => entry.category === 'Notifications' && (channel.id === 'email' ? entry.id.startsWith('email.') || entry.id.startsWith('smtp.') : entry.id.startsWith('qq.')));
+    const emailEntries = data.filter((entry) => entry.category === 'Notifications' && (channel.id === 'email' ? entry.id.startsWith('email.') || entry.id.startsWith('smtp.') : entry.id.startsWith(`${channel.id}.`)));
     if (settingsView === 'notifications') {
       appendSettingsControls(emailSection, emailEntries.filter((entry) => entry.id === toggleId), `${name}渠道`, `保存${name}开关`, [toggleId], { refresh });
       emailSection.append(button(`${name}配置与测试`, () => navigate(`settings/connections/${channel.id}`))); body.append(emailSection);
@@ -764,11 +765,12 @@ async function settings(group = settingsGroup, view = settingsView) {
       let requestId = crypto.randomUUID();
       const test = button('发送测试通知', async () => {
         test.textContent = '发送中…'; testState.textContent = '正在发送测试通知…';
-        try { const result = await api('/api/notifications/test', { channel: channel.id, requestId }); testState.textContent = emailErrorLabels[result.error] || emailResultLabels[result.status] || '暂时无法发送'; notice.textContent = testState.textContent; await refresh(); if (result.status === 'success') requestId = crypto.randomUUID(); }
+        try { const result = await api('/api/notifications/test', { channel: channel.id, requestId }); testState.textContent = result.status === 'success' && channel.id === 'wechat' ? 'WxPusher API 已接受消息；不代表微信 ClawBot 已送达。' : emailErrorLabels[result.error] || emailResultLabels[result.status] || '暂时无法发送'; notice.textContent = testState.textContent; await refresh(); if (result.status === 'success') requestId = crypto.randomUUID(); }
         finally { test.textContent = '发送测试通知'; }
       }); testPanel.append(test, testState, el('p', '测试使用已保存的设置；修改参数后请先保存。', 'meta'));
       if (channel.id === 'qq') emailSection.append(el('p', '使用 QQ 开放平台机器人 AppID / AppSecret；目标填写该机器人对应的用户或群 OpenID，不是 QQ 号码。', 'meta'));
-      appendSettingsControls(emailSection, emailEntries, `${name}配置`, `保存${name}配置`, [toggleId], { statusText: emailStatus, credentials: [credential], refresh, extraContent: testPanel, allowDisabledEditing: true, diagnosticLabel: `配置与测试${name}（不启用通知）` }); body.append(emailSection);
+      if (channel.id === 'wechat') testPanel.append(el('p', '微信 ClawBot · WxPusher。用户需在 WxPusher 客户端绑定并保持渠道激活；当前每次激活后 24 小时内最多 10 条，到期或用完需在微信会话回复任意消息。具体时效/次数以 WxPusher 当前规则为准。配置完整不代表已绑定、激活或送达。', 'meta'));
+      appendSettingsControls(emailSection, emailEntries, `${name}配置`, `保存${name}配置`, [toggleId], { statusText: emailStatus, credentials: channel.credentials || [credential], refresh, extraContent: testPanel, allowDisabledEditing: true, diagnosticLabel: `配置与测试${name}（不启用通知）` }); body.append(emailSection);
     }
     }
     if (settingsView === 'notifications') {

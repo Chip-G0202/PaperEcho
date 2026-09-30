@@ -7,17 +7,15 @@ import { formatRadarReport } from "../stage5/radar_report.mjs";
 import { deliverReliableNotification } from "../notification/delivery.mjs";
 import { completeLedgerNotification } from "../notification/ledger_bridge.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
-import { renderQqNotification } from '../notification/qq_renderer.mjs';
-import { createQqTransport } from '../notification/qq_transport.mjs';
-import { qqChannelConfiguration, channelDeliveryPolicy } from '../notification/policy.mjs';
-import { qqRecipient } from '../notification/channel_delivery.mjs';
+import { channelDeliveryPolicy } from '../notification/policy.mjs';
+import { CHANNEL_IDS, channelConfiguration, channelRecipient, createChannelTransport, renderChannelNotification } from '../notification/channels.mjs';
 
 // Called only after the formal resume owner validates the run, lease and artifact.
 export async function resumeCompletedBusinessNotification(options = {}) {
   const operations = options.store.ledger.operations.filter(item => item.type === 'notification');
   const channels = operations.map(item => item.intent?.channel || 'email');
-  if (operations.length <= 1 && channels[0] !== 'qq') return resumeOneNotification(options);
-  if (new Set(channels).size !== channels.length || channels.some(channel => !['email', 'qq'].includes(channel))) return { status: 'blocked', reason: 'notification_operation_ambiguous', notificationOnly: true };
+  if (operations.length <= 1 && (channels[0] || 'email') === 'email') return resumeOneNotification(options);
+  if (new Set(channels).size !== channels.length || channels.some(channel => !CHANNEL_IDS.includes(channel))) return { status: 'blocked', reason: 'notification_operation_ambiguous', notificationOnly: true };
   const results = [];
   for (const operation of operations) {
     const channel = operation.intent?.channel || 'email';
@@ -34,7 +32,7 @@ export async function resumeCompletedBusinessNotification(options = {}) {
     channels: results, outcomes: results.flatMap(result => result.outcomes || []), ...(!completed ? { reason: 'channel_delivery_incomplete' } : {}) };
 }
 
-async function resumeOneNotification({ store, recipient = "", transport, qqTransport, recordRadarOutcome, env = process.env, fsApi = fs, operation: selectedOperation } = {}) {
+async function resumeOneNotification({ store, recipient = "", transport, qqTransport, channelTransports = {}, recordRadarOutcome, env = process.env, fsApi = fs, operation: selectedOperation } = {}) {
   const { ledger } = store;
   const operations = ledger.operations.filter((item) => item.type === "notification");
   if (!operations.length || ledger.operations.some((item) => item.type !== "notification" && item.status !== "verified")) return null;
@@ -46,11 +44,11 @@ async function resumeOneNotification({ store, recipient = "", transport, qqTrans
   if ((!selectedOperation && operations.length !== 1) || (selectedOperation || operations[0]).status === "conflict") return blocked("notification_operation_ambiguous");
   const operation = selectedOperation || operations[0];
   const channel = operation.intent?.channel || 'email';
-  if (!['email', 'qq'].includes(channel)) return blocked('notification_operation_ambiguous');
-  if (channel === 'qq') {
-    const qq = qqChannelConfiguration({ env });
-    recipient = qqRecipient(qq);
-    transport = qqTransport || createQqTransport({ ...qq, clientSecret: env.QQ_BOT_APP_SECRET || '' });
+  if (!CHANNEL_IDS.includes(channel)) return blocked('notification_operation_ambiguous');
+  if (channel !== 'email') {
+    const configuration = channelConfiguration(channel, { env });
+    recipient = channelRecipient(channel, configuration);
+    transport = channelTransports[channel] || (channel === 'qq' ? qqTransport : null) || createChannelTransport(channel, configuration, env);
   }
   const expectedType = ledger.profile === "radar" ? "radar_business" : "run_summary";
   if (operation.intent?.notificationType !== expectedType || operation.intent?.eventEpoch !== ledger.runId) return blocked("notification_event_mismatch");
@@ -69,13 +67,13 @@ async function resumeOneNotification({ store, recipient = "", transport, qqTrans
   if (operation.intent.radarCompletionHash && (!Array.isArray(radarSelection) || canonicalQueryHash(radarSelection) !== operation.intent.radarCompletionHash || typeof recordRadarOutcome !== "function")) return blocked("radar_notification_completion_unverified");
   let delivered = { status: "accepted", receipt, receiptPath, attempted: false };
   if (receipt.status !== "accepted") {
-    if (channel === 'qq' && !channelDeliveryPolicy(channel, ledger.profile === 'radar' ? 'radar' : 'weekly', { env }).required) return blocked('notification_channel_disabled');
+    if (channel !== 'email' && !channelDeliveryPolicy(channel, ledger.profile === 'radar' ? 'radar' : 'weekly', { env }).required) return blocked('notification_channel_disabled');
     const data = receipt.recoveryData;
     const eventType = ledger.profile === "radar" ? "radar_completed" : "weekly_completed";
     if (!data || data.content?.eventType !== eventType || data.content.runId !== ledger.runId || !Array.isArray(data.attachments) || !Array.isArray(data.attachmentHashes)) return blocked("notification_recovery_content_missing");
     let payload;
     try {
-      payload = channel === 'qq' ? renderQqNotification(data.content) : { ...(eventType === "radar_completed" ? formatRadarReport(data.content) : renderWeeklyReport(data.content)), attachments: data.attachments };
+      payload = channel !== 'email' ? renderChannelNotification(channel, data.content) : { ...(eventType === "radar_completed" ? formatRadarReport(data.content) : renderWeeklyReport(data.content)), attachments: data.attachments };
       const identity = notificationIdentity({ notificationType: receipt.notificationType, businessSubject: receipt.businessSubject, eventEpoch: receipt.eventEpoch, payload, channel });
       if (["payloadHash", "dedupeKey", "receiptId", "messageId"].some((key) => identity[key] !== receipt[key])) return blocked("notification_payload_changed");
       if (data.attachments.length !== data.attachmentHashes.length) return blocked("notification_attachment_changed");

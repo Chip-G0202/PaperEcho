@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { renameWithTransientRetry } from "../lib/atomic_json.mjs";
 import { registerEphemeral } from "../lib/ephemeral_registry.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
+import { CHANNEL_IDS } from '../notification/channels.mjs';
 
 export const NOTIFICATION_RECEIPT_SCHEMA_VERSION = 2;
 export const NOTIFICATION_RECEIPT_STATUSES = new Set(["pending", "accepted", "unknown", "failed"]);
@@ -12,7 +13,7 @@ export function recipientHash(recipient, channel = 'email') { return createHash(
 export function receiptPathFor(outputRoot) { return path.join(path.resolve(outputRoot), "stage5", "email_receipt.json"); }
 export function testNotificationReceiptPathFor(storeRoot, requestId, channel = 'email') {
   if (!/^[a-zA-Z0-9_-]{1,80}$/.test(requestId || '')) throw new Error('NOTIFICATION_TEST_REQUEST_INVALID');
-  if (!['email', 'qq'].includes(channel)) throw new Error('NOTIFICATION_CHANNEL_INVALID');
+  if (!CHANNEL_IDS.includes(channel)) throw new Error('NOTIFICATION_CHANNEL_INVALID');
   return path.join(path.resolve(storeRoot), 'tests', ...(channel === 'email' ? [] : [channel]), `${requestId}.json`);
 }
 export function notificationReceiptPathFor(storeRoot, receiptId) {
@@ -62,7 +63,8 @@ export function createNotificationReceipt({ notificationType, runId, businessSub
 }
 
 export function validateNotificationReceipt(receipt) {
-  if (receipt?.channel != null && !['email', 'qq'].includes(receipt.channel)) throw new Error('NOTIFICATION_CHANNEL_INVALID');
+  if (receipt?.channel != null && !CHANNEL_IDS.includes(receipt.channel)) throw new Error('NOTIFICATION_CHANNEL_INVALID');
+  if (receipt?.parts !== undefined && (!Array.isArray(receipt.parts) || receipt.parts.length < 1 || receipt.parts.length > 10 || receipt.parts.some((part, index) => part.index !== index || !['pending','started','accepted','failed','unknown'].includes(part.status)))) throw new Error('NOTIFICATION_PARTS_INVALID');
   if (receipt?.schemaVersion !== NOTIFICATION_RECEIPT_SCHEMA_VERSION) throw new Error(`NOTIFICATION_RECEIPT_SCHEMA_UNSUPPORTED_${receipt?.schemaVersion ?? "missing"}`);
   if (!/^nr-[a-f0-9]{32}$/.test(String(receipt.receiptId || ""))) throw new Error("NOTIFICATION_RECEIPT_ID_INVALID");
   for (const field of ["dedupeKey", "payloadHash", "recipientHash"]) {

@@ -21,8 +21,11 @@ const SECTION_KEYS = Object.freeze({
   local: new Set(["enabled", "input", "outputRoot", "feedback"]),
   sourceState: new Set(["root"]),
   notifications: new Set(["failure", "health", "receiptStore"]),
-  channels: new Set(['qq']),
+  channels: new Set(['qq', 'wechat', 'feishu', 'wecom']),
   qq: new Set(['enabled', 'appId', 'targetType', 'targetId']),
+  wechat: new Set(['enabled', 'uid']),
+  feishu: new Set(['enabled']),
+  wecom: new Set(['enabled']),
   failure: new Set(["enabled"]),
   health: new Set(["enabled", "consecutiveThreshold"]),
   receiptStore: new Set(["root", "retryFailed", "unknownPolicy"]),
@@ -126,6 +129,13 @@ function validateCommon(common, schemaVersion = 1) {
     notifications = validateKeys(value.notifications, "notifications", schemaVersion);
     if (schemaVersion >= 5) {
       const channels = validateKeys(notifications.channels, 'channels');
+      for (const channel of ['wechat', 'feishu', 'wecom']) {
+        if (channels[channel] === undefined) continue;
+        if (schemaVersion < 6) fail('CONFIG_FIELD_UNKNOWN', 'additional channels require schema 6', { field: channel });
+        const value = validateKeys(channels[channel], channel);
+        optionalBoolean(value.enabled, `${channel}.enabled`);
+        if (channel === 'wechat' && value.uid !== undefined && (typeof value.uid !== 'string' || !/^UID_[A-Za-z0-9]{1,128}$/.test(value.uid))) fail('CONFIG_VALUE_INVALID', 'invalid recipient identifier', { field: 'wechat.uid' });
+      }
       const qq = validateKeys(channels.qq, 'qq');
       optionalBoolean(qq.enabled, 'common.notifications.channels.qq.enabled');
       for (const field of ['appId', 'targetId', 'targetType']) optionalString(qq[field], `common.notifications.channels.qq.${field}`);
@@ -226,7 +236,7 @@ async function loadConfigFile({ requestedPath, source, fsApi, cwd }) {
 
 export function validateRunnerConfigObject(config) {
   if (!isObject(config)) fail("CONFIG_ROOT_INVALID", "PaperEcho config root must be an object");
-  if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1, 2, 3, 4 or 5", { schemaVersion: config.schemaVersion ?? null });
+  if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1, 2, 3, 4, 5 or 6", { schemaVersion: config.schemaVersion ?? null });
   for (const key of Object.keys(config)) {
     if (!new Set(["schemaVersion", "mode", "profile", "common", "desktop", "web", "local", ...(config.schemaVersion >= 3 ? [...Object.values(DOMAIN_SECTIONS), 'weekly', 'migration'] : [])]).has(key)) fail("CONFIG_FIELD_UNKNOWN", `top-level field ${key} is not supported`, { field: key });
   }
@@ -303,6 +313,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   setEnvValue(effectiveEnv, "PAPERECHO_NOTIFY_RADAR", common.notifications.radar?.enabled !== false);
   setEnvValue(effectiveEnv, "PAPERECHO_NOTIFY_WEEKLY", common.notifications.weekly?.enabled !== false);
   effectiveEnv.PAPERECHO_QQ_CHANNEL = JSON.stringify(config?.schemaVersion >= 5 ? common.notifications.channels?.qq || { enabled: false } : { enabled: false });
+  for (const channel of ['wechat', 'feishu', 'wecom']) effectiveEnv[`PAPERECHO_${channel.toUpperCase()}_CHANNEL`] = JSON.stringify(configSchemaVersion >= 6 ? common.notifications.channels?.[channel] || { enabled: false } : { enabled: false });
   for (const name of ["PAPERECHO_FAILURE_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_DEGRADATION_THRESHOLD", "PAPERECHO_NOTIFICATION_RECEIPT_ROOT", "PAPERECHO_NOTIFICATION_HEALTH_ROOT", "PAPERECHO_NOTIFICATION_RETRY_FAILED", "PAPERECHO_NOTIFICATION_UNKNOWN_POLICY", "PAPERECHO_SOURCE_STATE_ROOT", "PAPERECHO_INTEGRITY_ENABLED", "PAPERECHO_INTEGRITY_BOOTSTRAP_BATCH_SIZE", "PAPERECHO_INTEGRITY_CROSSREF_CONCURRENCY", "PAPERECHO_INTEGRITY_PUBMED_BATCH_SIZE", "PAPERECHO_INTEGRITY_CACHE_TTL_DAYS"]) delete effectiveEnv[name];
 
   if (has(common.value, "projectRoot") && common.value.projectRoot) effectiveEnv.ZOTERO_PROJECT_ROOT = resolveRelative(common.value.projectRoot, configDir);

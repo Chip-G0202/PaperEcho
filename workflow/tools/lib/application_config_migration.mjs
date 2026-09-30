@@ -34,14 +34,23 @@ export function upgradeNotificationChannelsConfig(config, now = () => new Date()
   next.migration = { fromSchema: config.schemaVersion, toSchema: 5, success: true, timestamp: now().toISOString() };
   return next;
 }
+export function upgradeOutboundChannelsConfig(config, now = () => new Date()) {
+  const next = upgradeNotificationChannelsConfig(config, now);
+  if (next.schemaVersion !== 5) return next;
+  next.common ||= {}; next.common.notifications ||= {}; next.common.notifications.channels ||= {};
+  for (const id of ['wechat','feishu','wecom']) next.common.notifications.channels[id] = { enabled: false };
+  next.schemaVersion = 6;
+  next.migration = { fromSchema: config.schemaVersion, toSchema: 6, success: true, timestamp: now().toISOString() };
+  return next;
+}
 export async function migrateApplicationConfig({ root, env = {}, configPath, atomicOptions = {}, now = () => new Date() } = {}) {
   const target = applicationConfigPath({ root, env: {}, configPath });
   return withAtomicJsonLock(target, async () => {
     const old = await read(target);
     if (old) validateRunnerConfigObject(old);
-    if (old?.schemaVersion === 5) return { migrated: false, schemaVersion: 5 };
-    if ([3, 4].includes(old?.schemaVersion)) {
-      const candidate = upgradeNotificationChannelsConfig(old, now);
+    if (old?.schemaVersion === 6) return { migrated: false, schemaVersion: 6 };
+    if ([3, 4, 5].includes(old?.schemaVersion)) {
+      const candidate = upgradeOutboundChannelsConfig(old, now);
       validateRunnerConfigObject(candidate);
       const backup = `${target}.v${old.schemaVersion}-backup`;
       const existing = await read(backup);
@@ -53,7 +62,7 @@ export async function migrateApplicationConfig({ root, env = {}, configPath, ato
         if (JSON.stringify(reloaded) !== JSON.stringify(candidate)) throw new Error('CONFIG_MIGRATION_READBACK_FAILED');
         await atomicOptions.validateTemporary?.(temporary);
       } });
-      return { migrated: true, schemaVersion: 5, metadata: candidate.migration };
+      return { migrated: true, schemaVersion: 6, metadata: candidate.migration };
     }
     let localEnv = {};
     try { localEnv = parseEnvFile(await fs.readFile(path.join(root, '.env'), 'utf8')); }
@@ -113,12 +122,12 @@ export async function migrateApplicationConfig({ root, env = {}, configPath, ato
       if (candidate.common.cleanup.enabled == null && env.PAPERFLOW_CLEANUP_ENABLED) candidate.common.cleanup.enabled = !/^(false|0|no|off)$/i.test(env.PAPERFLOW_CLEANUP_ENABLED);
       if (candidate.common.cleanup.retentionDays == null && env.PAPERFLOW_RETENTION_DAYS) candidate.common.cleanup.retentionDays = Number(env.PAPERFLOW_RETENTION_DAYS);
     }
-    candidate.schemaVersion = 5;
+    candidate.schemaVersion = 6;
     candidate.common.notifications ||= {};
     candidate.common.notifications.radar = { enabled: true };
     candidate.common.notifications.weekly = { enabled: true };
-    candidate.common.notifications.channels = { qq: { enabled: false } };
-    candidate.migration = { fromSchema: old?.schemaVersion || 0, toSchema: 5, success: true, sourceKinds: sources, timestamp: now().toISOString() };
+    candidate.common.notifications.channels = Object.fromEntries(['qq','wechat','feishu','wecom'].map(id => [id, { enabled: false }]));
+    candidate.migration = { fromSchema: old?.schemaVersion || 0, toSchema: 6, success: true, sourceKinds: sources, timestamp: now().toISOString() };
     validateRunnerConfigObject(candidate);
     // The original unified config is retained separately; domain files are never rewritten.
     if (old) {
@@ -133,6 +142,6 @@ export async function migrateApplicationConfig({ root, env = {}, configPath, ato
       if (JSON.stringify(reloaded) !== JSON.stringify(candidate)) throw new Error('CONFIG_MIGRATION_READBACK_FAILED');
       await atomicOptions.validateTemporary?.(temporary);
     } });
-    return { migrated: true, schemaVersion: 5, metadata: candidate.migration };
+    return { migrated: true, schemaVersion: 6, metadata: candidate.migration };
   });
 }

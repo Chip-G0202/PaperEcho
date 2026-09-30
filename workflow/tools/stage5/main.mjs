@@ -9,6 +9,7 @@ import { deliverReliableNotification } from "../notification/delivery.mjs";
 import { emailDeliveryPolicy } from '../notification/policy.mjs';
 import { channelDeliveryPolicy } from '../notification/policy.mjs';
 import { deliverBusinessChannels } from '../notification/channel_delivery.mjs';
+import { CHANNEL_IDS } from '../notification/channels.mjs';
 
 const MAX_ATTACHMENTS = 1;
 const MAX_TOTAL_BYTES = 20 * 1024 * 1024;
@@ -53,11 +54,11 @@ export async function runStage5Notification({ runSummary, literatureItems = [], 
   if (Number((config.env || process.env).PAPERECHO_CONFIG_SCHEMA_VERSION) >= 5 || channelDeliveryPolicy('qq', 'weekly', { env: config.env || process.env }).required) {
     const fsApi = config.fsApi || fs;
     const stateRoot = path.resolve(config.runStateRoot || runSummary.outputRoot);
-    const active = ['email', 'qq'].some(channel => channelDeliveryPolicy(channel, 'weekly', { env: config.env || process.env }).required);
+    const active = CHANNEL_IDS.some(channel => channelDeliveryPolicy(channel, 'weekly', { env: config.env || process.env }).required);
     const overview = active ? await generateLiteratureOverview({ runSummary, literatureItems, llmClient: config.llmClient || null, runtime: config.llmRuntime || null, fsApi, stateRoot, legacyStateRoot: runSummary.outputRoot }) : { overview: '' };
     const content = buildWeeklyNotificationContent(runSummary, { overview: overview.overview, literatureItems });
     return deliverBusinessChannels({ content, env: config.env || process.env, runStateRoot: stateRoot, recoveryCoordinator: config.recoveryCoordinator,
-      qqTransport: config.qqTransport, fsApi, clock: config.clock,
+      qqTransport: config.qqTransport, channelTransports: config.channelTransports, fsApi, clock: config.clock,
       emailDelivery: () => runEmailStage5Notification({ runSummary, literatureItems, recipient, forceResend, transport, config: { ...config, content } }) });
   }
   return runEmailStage5Notification({ runSummary, literatureItems, recipient, forceResend, transport, config });

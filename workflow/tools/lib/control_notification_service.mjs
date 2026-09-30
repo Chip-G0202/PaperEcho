@@ -9,6 +9,8 @@ import { deliverReliableNotification } from '../notification/delivery.mjs';
 import { renderQqNotification } from '../notification/qq_renderer.mjs';
 import { createQqTransport } from '../notification/qq_transport.mjs';
 import { qqRecipient } from '../notification/channel_delivery.mjs';
+import { CHANNEL_IDS, CHANNEL_CREDENTIALS, channelRecipient, renderChannelNotification, createChannelTransport } from '../notification/channels.mjs';
+import { validWxUid } from '../notification/wxpusher_transport.mjs';
 
 export function publicEmailDelivery(receipt) {
   if (!receipt) return { status: 'none', at: null, kind: null, error: null };
@@ -25,8 +27,8 @@ export function publicEmailDelivery(receipt) {
 // Email is the first real channel. Configuration, secrets and delivery keep their owners.
 export class NotificationChannelService {
   #testing = false;
-  constructor({ config, secrets, review, context, env = {}, transport, qqTransport, clock = () => new Date() }) {
-    Object.assign(this, { config, secrets, review, context, env, transport, qqTransport, clock });
+  constructor({ config, secrets, review, context, env = {}, transport, qqTransport, channelTransports = {}, clock = () => new Date() }) {
+    Object.assign(this, { config, secrets, review, context, env, transport, qqTransport, channelTransports, clock });
   }
   async configuration() {
     const owner = (await this.config.readOwnerOrTemplate('paperecho.config.json')).value;
@@ -40,6 +42,14 @@ export class NotificationChannelService {
     const receiptRoot = configuredRoot ? path.resolve(path.dirname(this.config.ownerPath('paperecho.config.json')), configuredRoot)
       : this.env.PAPERECHO_NOTIFICATION_RECEIPT_ROOT || path.join(path.dirname(this.review.runRoot), 'notification_receipts');
     return { owner, email, qq: owner.common?.notifications?.channels?.qq || { enabled: false }, receiptRoot };
+  }
+  async platformReadiness(channel, value) {
+    const credentials = (await this.secrets.list()).filter(entry => CHANNEL_CREDENTIALS[channel].includes(entry.id));
+    const credential = credentials[0]; const missing = [];
+    if (!credential?.configured) missing.push(`${channel}.secret`);
+    if (channel === 'wechat' && !value.uid) missing.push('wechat.uid');
+    const valid = channel === 'wechat' ? (!value.uid || validWxUid(value.uid)) && await this.secrets.withCredential('WXPUSHER_APP_TOKEN', token => !token || /^AT_[A-Za-z0-9]{1,200}$/.test(token)) : false;
+    return { readiness: !valid ? 'invalid' : missing.length ? 'incomplete' : 'configured', missing, credential, credentials };
   }
   async qqReadiness(qq) {
     const credential = (await this.secrets.list()).find(entry => entry.id === 'QQ_BOT_APP_SECRET');
@@ -81,7 +91,7 @@ export class NotificationChannelService {
     };
     await flat(receiptRoot, /^nr-[a-f0-9]{32}\.json$/);
     await flat(path.join(receiptRoot, 'tests'), /^[a-zA-Z0-9_-]{1,80}\.json$/);
-    await flat(path.join(receiptRoot, 'tests', 'qq'), /^[a-zA-Z0-9_-]{1,80}\.json$/);
+    if (channel !== 'email') await flat(path.join(receiptRoot, 'tests', channel), /^[a-zA-Z0-9_-]{1,80}\.json$/);
     for (const run of await this.review.runs()) {
       if (!/^[a-zA-Z0-9_-]{1,120}$/.test(run.runId)) continue;
       const root = path.join(this.review.runRoot, run.runId);
@@ -95,31 +105,41 @@ export class NotificationChannelService {
     const { owner, email, qq, receiptRoot } = await this.configuration();
     const readiness = await this.readiness(email);
     const qqReadiness = await this.qqReadiness(qq);
-    return { channels: [{ id: 'email', displayName: '邮箱', availability: 'available', enabled: email.enabled !== false,
+    const channels = [{ id: 'email', displayName: '邮箱', availability: 'available', enabled: email.enabled !== false,
       ...readiness, testAvailable: readiness.readiness === 'configured', lastDelivery: await this.latestDelivery(receiptRoot) },
     { id: 'qq', displayName: 'QQ', availability: 'available', enabled: qq.enabled === true,
-      ...qqReadiness, testAvailable: qqReadiness.readiness === 'configured', lastDelivery: await this.latestDelivery(receiptRoot, 'qq') }],
+      ...qqReadiness, testAvailable: qqReadiness.readiness === 'configured', lastDelivery: await this.latestDelivery(receiptRoot, 'qq') }];
+    for (const id of CHANNEL_IDS.filter(id => !['email','qq'].includes(id))) {
+      const value = owner.common?.notifications?.channels?.[id] || { enabled: false }; const state = await this.platformReadiness(id, value);
+      channels.push({ id, displayName: { wechat: '微信' }[id], availability: 'available', enabled: value.enabled === true, ...state, testAvailable: state.readiness === 'configured', lastDelivery: await this.latestDelivery(receiptRoot, id) });
+    }
+    return { channels,
     preferences: { radar: owner.common?.notifications?.radar?.enabled !== false, weekly: owner.common?.notifications?.weekly?.enabled !== false,
       failure: owner.common?.notifications?.failure?.enabled === true, health: owner.common?.notifications?.health?.enabled === true } };
   }
   async test(input) {
-    if (!input || !['email', 'qq'].includes(input.channel) || Object.keys(input).some((key) => !['channel', 'requestId'].includes(key))) throw new Error('NOTIFICATION_TEST_REQUEST_INVALID');
+    if (!input || !CHANNEL_IDS.includes(input.channel) || Object.keys(input).some((key) => !['channel', 'requestId'].includes(key))) throw new Error('NOTIFICATION_TEST_REQUEST_INVALID');
     // Validate before using the fixed receipt owner path; no caller-supplied file/recipient.
     testNotificationReceiptPathFor('.', input.requestId);
     if (this.#testing) return { status: 'busy', error: 'test_in_progress' };
     this.#testing = true;
     try {
-      const { email, qq, receiptRoot } = await this.configuration();
-      const { readiness } = input.channel === 'qq' ? await this.qqReadiness(qq) : await this.readiness(email);
+      const { owner, email, qq, receiptRoot } = await this.configuration();
+      const value = owner.common?.notifications?.channels?.[input.channel] || {};
+      const { readiness } = input.channel === 'qq' ? await this.qqReadiness(qq) : input.channel === 'email' ? await this.readiness(email) : await this.platformReadiness(input.channel, value);
       if (readiness !== 'configured') return { status: 'blocked', error: readiness === 'invalid' ? 'configuration_invalid' : 'configuration_incomplete' };
       const receiptPath = testNotificationReceiptPathFor(receiptRoot, input.requestId, input.channel);
       const previous = await readNotificationReceipt(receiptPath);
       if (previous && ((previous.channel || 'email') !== input.channel || previous.notificationType !== 'channel_test' || previous.businessSubject !== input.requestId || !previous.recoveryData?.content)) return { status: 'blocked', error: 'temporarily_unavailable' };
       const content = previous?.recoveryData?.content || buildTestNotificationContent({ generatedAt: this.clock().toISOString() });
-      const payload = input.channel === 'qq' ? renderQqNotification(content) : { ...renderTestNotification(content), attachments: [] };
+      const payload = input.channel !== 'email' ? renderChannelNotification(input.channel, content) : { ...renderTestNotification(content), attachments: [] };
       const deliver = (env, transport, recipient) => deliverReliableNotification({ receiptPath, notificationType: 'channel_test', runId: '', businessSubject: input.requestId, eventEpoch: input.requestId,
         payload, recipient, recoveryData: { content }, env, transport, clock: this.clock, channel: input.channel });
-      const delivered = input.channel === 'qq' ? await this.secrets.withCredential('QQ_BOT_APP_SECRET', secret => deliver({}, this.qqTransport || createQqTransport({ ...qq, clientSecret: secret }), qqRecipient(qq))) : await this.secrets.withSmtpEnvironment(email.smtp, async (env) => {
+      const platformDelivery = async () => {
+        const credentials = {}; for (const name of CHANNEL_CREDENTIALS[input.channel]) await this.secrets.withCredential(name, secret => { credentials[name] = secret; });
+        return deliver({}, this.channelTransports[input.channel] || createChannelTransport(input.channel, value, credentials), channelRecipient(input.channel, value));
+      };
+      const delivered = input.channel !== 'email' && input.channel !== 'qq' ? await platformDelivery() : input.channel === 'qq' ? await this.secrets.withCredential('QQ_BOT_APP_SECRET', secret => deliver({}, this.qqTransport || createQqTransport({ ...qq, clientSecret: secret }), qqRecipient(qq))) : await this.secrets.withSmtpEnvironment(email.smtp, async (env) => {
         if (!emailTransportConfig(env).configured) return null;
         return deliver(env, this.transport, email.recipient);
       });

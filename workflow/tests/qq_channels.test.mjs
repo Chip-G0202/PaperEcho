@@ -38,11 +38,11 @@ test('v4 to v5 migration preserves preferences/email, initializes disabled QQ, i
   await assert.rejects(migrateApplicationConfig({ root: f.root, atomicOptions: { validateTemporary: async () => { throw new Error('injected failure'); } } }));
   assert.deepEqual(await f.read(), old);
   const result = await migrateApplicationConfig({ root: f.root });
-  assert.equal(result.schemaVersion, 5);
+  assert.equal(result.schemaVersion, 6);
   const after = await f.read();
   assert.deepEqual(after.common.email, old.common.email);
   for (const event of ['radar', 'weekly']) assert.deepEqual(after.common.notifications[event], old.common.notifications[event]);
-  assert.deepEqual(after.common.notifications.channels, { qq: { enabled: false } });
+  assert.deepEqual(after.common.notifications.channels, Object.fromEntries(['qq','wechat','feishu','wecom'].map(id => [id, { enabled: false }])));
   assert.deepEqual(JSON.parse(await fs.readFile(f.configPath + '.v4-backup', 'utf8')), old);
   assert.equal((await migrateApplicationConfig({ root: f.root })).migrated, false);
   assert.deepEqual(await f.read(), after);

@@ -24,7 +24,7 @@ export async function sendRadarAggregateNotification(options = {}) {
   if (Number((options.env || process.env).PAPERECHO_CONFIG_SCHEMA_VERSION) >= 5 || options.urgentItems?.length && channelDeliveryPolicy('qq', 'radar', { env: options.env || process.env }).required) {
     const content = buildRadarNotificationContent(options.urgentItems, { runId: options.runId, audit: options.audit });
     return deliverBusinessChannels({ content, env: options.env || process.env, runStateRoot: options.runStateRoot,
-      recoveryCoordinator: options.recoveryCoordinator, qqTransport: options.qqTransport, fsApi: options.fsApi, clock: options.clock,
+      recoveryCoordinator: options.recoveryCoordinator, qqTransport: options.qqTransport, channelTransports: options.channelTransports, fsApi: options.fsApi, clock: options.clock,
       radarSelection: options.notificationSelection || [], radarCompletionHash: canonicalQueryHash(options.notificationSelection || []),
       emailDelivery: () => sendEmailRadarAggregateNotification(options) });
   }
