@@ -113,6 +113,7 @@ export function buildExecutionPlan(options, { env = process.env, repoRoot = REPO
   if (!options.resume && options.forceResend) args.push("--force-resend");
   if (options.resume) args.push("--resume", options.resume);
   const childEnv = { ...env };
+  if (options.resume && options.email) childEnv.PAPERFLOW_REPORT_TO = options.email;
   if (options.mode === "desktop") {
     childEnv.ZOTERO_BACKEND = "cli";
     for (const name of ["ZOTERO_API_KEY", "ZOTERO_USER_ID", "ZOTERO_GROUP_ID", "ZOTERO_LIBRARY_TYPE", "ZOTERO_API_BASE"]) delete childEnv[name];

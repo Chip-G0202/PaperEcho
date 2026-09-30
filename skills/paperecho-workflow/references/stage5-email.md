@@ -21,7 +21,8 @@ An explicit recipient with missing/invalid SMTP fails Stage5 clearly. It does no
 
 - Run Summary schema v1 is built by `workflow/tools/lib/run_summary.mjs` for `desktop`, `web`, or `local`.
 - Counts and grades are from literature created in the current run, not cumulative repository totals.
-- HTML and plain text share `buildStage5ViewModel` in `report_summary.mjs`.
+- `notification_content.mjs` owns Radar/Weekly content projection. `report_summary.mjs` retains its public formatter/view-model exports; `radar_report.mjs` renders Radar. Both HTML and plain text consume the same content, and `email_layout.mjs` owns the shared branded frame and escaping.
+- Radar shows the existing selected recommendations, final grade, available translation/metadata and recommendation reason; D is excluded. Sending remains urgent-selection-only and silent for no urgent items. Rendering does not fetch, translate or regrade.
 - Current body order is: created count -> A/B/C/D grades -> literature overview -> warnings -> footer.
 - Attachments are carried by the mail transport but are intentionally not rendered as a body section.
 - The body omits updated, feedback, translated, duration, deduped, SMTP, recipient, cache/internal state, absolute paths, and exact finish time.
@@ -41,7 +42,15 @@ An explicit recipient with missing/invalid SMTP fails Stage5 clearly. It does no
 - At most one attachment and 20 MiB total; it must be a real file inside Run Summary `outputRoot` with the expected extension.
 - Stage5 never scans historical directories or guesses an attachment. A force resend after retained artifacts expire reports the missing/expired artifact.
 - State root is `<runtime-root>/runs/<runId>/stage5/`: `email_receipt.json`, its short-lived lock, and `literature_overview.json`.
-- Receipt schema v1 stores a recipient hash, not the address. A successful run ID plus recipient hash is idempotent unless `--force-resend` is supplied.
+- Receipt schema v2 stores a recipient hash, not the address; v1 remains readable on the existing compatibility paths. Accepted/unknown receipts keep their existing no-repeat semantics.
+
+## Notification-only resume
+
+- `recovery/notification_recovery.mjs` is called by the existing formal `--resume` owner after lease, config and business artifact validation, before business reconcilers. Business stages must be verified (Radar write/export stages skipped); conflicting or incomplete evidence does not authorize mail retry.
+- New business-email receipts optionally retain the shared content model and attachment hashes. No second receipt or ledger is created. No SMTP credentials or recipient address enter that replay data.
+- Recovery renders the saved content with the shared renderer and verifies the original payload hash, deterministic message identity, ledger operation and recipient hash. Unchanged attachments are reused; retrieval, grading, LLM calls, Zotero writes and export are not rerun.
+- `notification/delivery.mjs` remains the retry/lock owner and `stage5/email_sender.mjs` remains SMTP-only. Accepted receipts are adopted without sending; unknown or interrupted-after-attempt receipts are held. Missing replay content, changed payload/recipient/attachments and mismatched evidence fail closed, including old failed receipts without replay content.
+- Successful recovery updates the existing ledger, Stage5 status and run manifest; Radar also records the existing selected fingerprints through its state owner. Repeated resume does not produce another effective send. A notification failure leaves completed business stages and their outputs intact; it keeps the delivery/run recovery status pending or failed until resolved.
 
 ## Required tests
 

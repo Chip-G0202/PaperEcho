@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { formatStage5Report } from "./report_summary.mjs";
+import { renderWeeklyReport } from "./report_summary.mjs";
+import { buildWeeklyNotificationContent } from "./notification_content.mjs";
 import { emailTransportConfig, sendStage5Email } from "./email_sender.mjs";
-import { readNotificationReceipt, receiptPathFor, recipientHash, writeNotificationReceipt } from "./email_receipt.mjs";
+import { readNotificationReceipt, receiptPathFor, recipientHash, writeNotificationReceipt, notificationRecoveryData } from "./email_receipt.mjs";
 import { generateLiteratureOverview } from "./literature_overview.mjs";
 import { deliverReliableNotification } from "../notification/delivery.mjs";
 
@@ -70,7 +71,8 @@ export async function runStage5Notification({ runSummary, literatureItems = [], 
       if (!mailConfig.configured) throw Object.assign(new Error(mailConfig.error), { category: mailConfig.missing.length ? "transport_not_configured" : "smtp_config_invalid" });
     }
     const overview = await generateLiteratureOverview({ runSummary, literatureItems, llmClient: config.llmClient || null, runtime: config.llmRuntime || null, fsApi, stateRoot, legacyStateRoot: runSummary.outputRoot });
-    const report = formatStage5Report(runSummary, { overview: overview.overview });
+    const content = buildWeeklyNotificationContent(runSummary, { overview: overview.overview });
+    const report = renderWeeklyReport(content);
     const delivery = await deliverReliableNotification({
       receiptPath,
       legacyReceiptPath,
@@ -79,6 +81,7 @@ export async function runStage5Notification({ runSummary, literatureItems = [], 
       businessSubject: runSummary.runId,
       eventEpoch: runSummary.runId,
       payload: { ...report, attachments },
+      recoveryData: await notificationRecoveryData(content, attachments, { fsApi }),
       recipient: normalizedRecipient,
       ledgerOperationId: config.ledgerOperationId || "",
       retryFailed: true,

@@ -34,6 +34,9 @@ Control Center application boundary：
 | feedback learning | `workflow/tools/lib/feedback_learning_support.mjs` | 无 | 独立 lib 模块 |
 | runtime config | `workflow/tools/lib/runtime_config.mjs` | 无 | 独立 lib 模块 |
 | schedule / interval gate | `workflow/tools/lib/schedule_support.mjs` | 无 | 独立 lib 模块 |
+| notification content | `workflow/tools/stage5/notification_content.mjs` | 无 | 从现有 Radar/Weekly 业务结果构建内容，不检索、不重新评级 |
+| email rendering | `stage5/radar_report.mjs`、`stage5/report_summary.mjs` | 无 | 共用 `stage5/email_layout.mjs` 的品牌布局与 HTML escaping；HTML/text 使用同一内容模型 |
+| notification delivery / recovery | `notification/delivery.mjs`、`stage5/email_receipt.mjs`、`recovery/notification_recovery.mjs`（均在 `workflow/tools/`） | 原 Runner `--resume` | SMTP 仍归 `stage5/email_sender.mjs`；已成功业务不重跑，原回执和 ledger 完成恢复 |
 | triage policy | `workflow/tools/stage1/rule_classifier.mjs` | `workflow/tools/stage1/main.mjs` | Stage1-local rule classifier；旧 `workflow_classifier.mjs` / `triage_policy.mjs` 兼容入口已删除 |
 
 ---

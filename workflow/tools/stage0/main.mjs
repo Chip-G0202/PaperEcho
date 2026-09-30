@@ -529,11 +529,11 @@ export async function runZoteroLiteratureFilter({
     const selectedItems = notificationSelection.selected.map((entry) => entry.item);
     const stage5Request = resolveStage5Request(argv, env);
     const stage5StateRoot = runStateRoot(runRoot, runId);
-    const receiptPath = radarNotificationReceiptPath(stage5StateRoot, runId, selectedItems);
+    const receiptPath = radarNotificationReceiptPath(stage5StateRoot, runId, selectedItems, radarResult.audit);
     const notificationOperation = recoveryCoordinator && selectedItems.length && stage5Request.recipient
-      ? await recoveryCoordinator.prepareFileOperation({ type: "notification", targetId: "radar_business", targetPath: receiptPath, input: { fingerprints: notificationSelection.selected.map((entry) => entry.fingerprint) }, retryable: false, intent: { notificationType: "radar_business", eventEpoch: runId } })
+      ? await recoveryCoordinator.prepareFileOperation({ type: "notification", targetId: "radar_business", targetPath: receiptPath, input: { fingerprints: notificationSelection.selected.map((entry) => entry.fingerprint) }, retryable: false, intent: { notificationType: "radar_business", eventEpoch: runId, radarCompletionHash: canonicalQueryHash(notificationSelection.selected) } })
       : null;
-    const stage5Notification = await radarStage5Runner({ runId, urgentItems: selectedItems, recipient: stage5Request.recipient, runStateRoot: stage5StateRoot, env, ledgerOperationId: notificationOperation?.idempotencyKey || "" });
+    const stage5Notification = await radarStage5Runner({ runId, urgentItems: selectedItems, audit: radarResult.audit, notificationSelection: notificationSelection.selected, recipient: stage5Request.recipient, runStateRoot: stage5StateRoot, env, ledgerOperationId: notificationOperation?.idempotencyKey || "" });
     await recordRadarNotificationOutcome(indexPath, notificationSelection.selected, stage5Notification, { generatedAt: iso(clock()) });
     if (notificationOperation && stage5Notification.status === "accepted") {
       await recoveryCoordinator.completeNotification(notificationOperation, { ...stage5Notification, receiptStatus: "accepted", messageId: stage5Notification.receipt?.messageId || "" });
@@ -897,6 +897,7 @@ async function main() {
         profile,
         configHash,
         inputHash: "",
+        notification: { recipient: resolveStage5Request(process.argv.slice(2), process.env).recipient, env: process.env, recordRadarOutcome: (selected, outcome) => recordRadarNotificationOutcome(getDefaultZoteroLibraryIndexPath(config.projectRoot), selected, outcome) },
         beforeReconcile: async ({ store, artifact }) => {
           const items = Array.isArray(artifact) ? artifact : [];
           const hasRadarClaimIntent = items.some((item) => item?.weekly_radar_queue_claim_intent || item?.weekly_radar_queue_claim);

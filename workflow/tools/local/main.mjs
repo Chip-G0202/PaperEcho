@@ -368,6 +368,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
       profile,
       configHash,
       inputHash: "",
+      notification: { recipient: options.recipient, env: process.env, transport: dependencies.notificationTransport },
       buildReconcilers: async ({ store, artifact }) => buildLocalRecoveryReconcilers({
         store,
         artifact,

@@ -28,6 +28,13 @@ export function notificationIdentity({ notificationType, businessSubject, eventE
   };
 }
 
+// Optional replay input in the existing receipt, never SMTP config or recipient.
+export async function notificationRecoveryData(content, attachments = [], { fsApi = fs } = {}) {
+  const attachmentHashes = [];
+  for (const item of attachments) attachmentHashes.push(createHash("sha256").update(await fsApi.readFile(item.path)).digest("hex"));
+  return { content, attachments, attachmentHashes };
+}
+
 export function createNotificationReceipt({ notificationType, runId, businessSubject, eventEpoch, payload, ledgerOperationId = "", recipient, clock } = {}) {
   const identity = notificationIdentity({ notificationType, businessSubject, eventEpoch, payload });
   const now = timestamp(clock);

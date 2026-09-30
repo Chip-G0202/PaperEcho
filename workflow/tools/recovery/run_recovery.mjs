@@ -13,6 +13,7 @@ import {
 } from "./operation_ledger.mjs";
 import { reconcileOperationLedger } from "./reconciliation.mjs";
 import { transitionRadarQueueItem } from "../radar/state.mjs";
+import { resumeCompletedBusinessNotification } from "./notification_recovery.mjs";
 
 export function literatureIdentity(item = {}) {
   return getLiteratureIdentityKeys(item)[0] || `title:${normalizeTitleForExistingDedupe(item.title || "")}`;
@@ -375,7 +376,7 @@ export class RunRecoveryCoordinator {
   }
 }
 
-export async function resumeRunFromLedger({ runRoot, runId, mode, profile, configHash, inputHash = "", buildReconcilers, beforeReconcile = null, context = {} }, dependencies = {}) {
+export async function resumeRunFromLedger({ runRoot, runId, mode, profile, configHash, inputHash = "", buildReconcilers, beforeReconcile = null, context = {}, notification = {} }, dependencies = {}) {
   const safeRunId = validateRecoveryRunId(runId);
   const lease = await acquireRunLease({ runRoot, runId: safeRunId, ttlMs: dependencies.ttlMs || 60_000 }, dependencies);
   if (!lease.acquired) return { runId: safeRunId, run_id: safeRunId, resume: true, status: "blocked", reason: lease.reason || "active_lease" };
@@ -402,6 +403,11 @@ export async function resumeRunFromLedger({ runRoot, runId, mode, profile, confi
     if (actualArtifactHash !== store.ledger.artifact.hash) throw new Error("RECOVERY_ARTIFACT_HASH_MISMATCH");
     if (store.ledger.inputHash !== actualArtifactHash) throw new Error("RECOVERY_INPUT_ARTIFACT_HASH_MISMATCH");
     let artifact = JSON.parse(await fsApi.readFile(store.ledger.artifact.path, "utf8"));
+    const notificationRecovery = await resumeCompletedBusinessNotification({ store, ...notification, fsApi });
+    if (notificationRecovery) {
+      if (notificationRecovery.status === "completed") await finishRunGroup({ manifestPath: runGroupPath(runRoot, safeRunId), status: "completed", notificationRecovered: true, finishedAt: new Date().toISOString(), fsApi });
+      return { runId: safeRunId, run_id: safeRunId, resume: true, ...notificationRecovery };
+    }
     if (typeof beforeReconcile === "function") {
       const prepared = await beforeReconcile({ store, artifact, context });
       if (prepared?.artifact) artifact = prepared.artifact;

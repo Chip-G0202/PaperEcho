@@ -74,8 +74,10 @@ export async function deliverReliableNotification({
   fsApi = fs,
   clock = () => new Date(),
   hooks = {},
+  recoveryData = null,
 } = {}) {
   const planned = createNotificationReceipt({ notificationType, runId, businessSubject, eventEpoch, payload, ledgerOperationId, recipient, clock });
+  if (recoveryData) planned.recoveryData = structuredClone(recoveryData);
   const locked = await withReceiptLock(receiptPath, async () => {
     let previous = await readNotificationReceipt(receiptPath, { fsApi, allowLegacy: true })
       || (legacyReceiptPath && legacyReceiptPath !== receiptPath ? await readNotificationReceipt(legacyReceiptPath, { fsApi, allowLegacy: true }) : null);
