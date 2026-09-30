@@ -33,15 +33,14 @@ export function renderQqNotification(content) {
     summary = value.created == null ? '文献流程完成' : `本次新增：${value.created} 篇`;
     if (value.gradesAvailable) summary += ' · ' + ['A', 'B', 'C', 'D'].filter(grade => value.grades?.[grade] != null).map(grade => `${grade}：${value.grades[grade]}`).join(' / ');
     const sections = content.sections || {};
-    entries = [sections.overview ? `重点结果：${bounded(sections.overview, 1800)}` : '', ...(sections.integrityLines || []), ...(sections.warnings || [])].filter(Boolean).map(value => bounded(value, 1800));
-    if (sections.remainingWarnings > 0) entries.push(`另有 ${sections.remainingWarnings} 项提醒，请在 PaperEcho 工作台查看。`);
-    entries.push(...(content.items || []).map(item => [
+    summary += '\n' + [sections.overview ? `重点结果：${bounded(sections.overview, 1800)}` : '', ...(sections.integrityLines || []), ...(sections.warnings || []), sections.remainingWarnings > 0 ? `另有 ${sections.remainingWarnings} 项提醒，请在 PaperEcho 工作台查看。` : ''].filter(Boolean).join('\n');
+    entries = (content.items || []).map(item => [
       `[${item.grade}] ${bounded(item.title, 650)}`, item.translatedTitle ? bounded(item.translatedTitle, 500) : '',
       [item.journal, item.year, item.source].filter(Boolean).map(value => bounded(value, 160)).join(' / '),
       item.reason ? `推荐理由：${bounded(item.reason, 250)}` : '',
-    ].filter(Boolean).join('\n')));
+    ].filter(Boolean).join('\n'));
   } else throw new Error('NOTIFICATION_CONTENT_EVENT_UNSUPPORTED');
-  let text = `${heading}\n日期：${bounded(content.date || content.generatedAt || '未提供', 100)}\n${bounded(summary, 800)}`;
+  let text = `${heading}\n日期：${bounded(content.date || content.generatedAt || '未提供', 100)}\n${bounded(summary, content.eventType === 'weekly_completed' ? 2400 : 800)}`;
   let included = 0;
   for (const entry of entries) {
     const remaining = entries.length - included - 1;

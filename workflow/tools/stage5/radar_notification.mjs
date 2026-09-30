@@ -14,8 +14,8 @@ export function buildRadarAggregateMessage(items = [], context = {}) {
   return formatRadarReport(buildRadarNotificationContent(items, context));
 }
 
-export function radarNotificationReceiptPath(runStateRoot, runId, urgentItems = [], audit = {}) {
-  const payload = buildRadarAggregateMessage(urgentItems, { runId, audit });
+export function radarNotificationReceiptPath(runStateRoot, runId, urgentItems = [], audit = {}, content) {
+  const payload = content ? formatRadarReport(content) : buildRadarAggregateMessage(urgentItems, { runId, audit });
   const identity = notificationIdentity({ notificationType: "radar_business", businessSubject: "urgent_a_aggregate", eventEpoch: runId, payload });
   return notificationReceiptPathFor(path.resolve(runStateRoot), identity.receiptId);
 }
@@ -26,7 +26,7 @@ export async function sendRadarAggregateNotification(options = {}) {
     return deliverBusinessChannels({ content, env: options.env || process.env, runStateRoot: options.runStateRoot,
       recoveryCoordinator: options.recoveryCoordinator, qqTransport: options.qqTransport, channelTransports: options.channelTransports, fsApi: options.fsApi, clock: options.clock,
       radarSelection: options.notificationSelection || [], radarCompletionHash: canonicalQueryHash(options.notificationSelection || []),
-      emailDelivery: () => sendEmailRadarAggregateNotification(options) });
+      emailDelivery: () => sendEmailRadarAggregateNotification({ ...options, content }) });
   }
   return sendEmailRadarAggregateNotification(options);
 }
@@ -43,13 +43,15 @@ async function sendEmailRadarAggregateNotification({
   fsApi,
   clock,
   ledgerOperationId = "",
+  content,
 } = {}) {
   const policy = emailDeliveryPolicy('radar', { env });
   if (!policy.required) return { status: 'skipped', reason: policy.reason, attempted: false, attachments: [] };
   if (!urgentItems.length) return { status: "skipped", reason: "no_urgent_items", attempted: false, attachments: [] };
   if (!String(recipient || "").trim()) return { status: "skipped", reason: "recipient_not_configured", attempted: false, attachments: [] };
-  const payload = buildRadarAggregateMessage(urgentItems, { runId, audit });
-  const receiptPath = radarNotificationReceiptPath(runStateRoot, runId, urgentItems, audit);
+  content ||= buildRadarNotificationContent(urgentItems, { runId, audit });
+  const payload = formatRadarReport(content);
+  const receiptPath = radarNotificationReceiptPath(runStateRoot, runId, urgentItems, audit, content);
   const delivered = await deliverReliableNotification({
     receiptPath,
     notificationType: "radar_business",
@@ -57,7 +59,7 @@ async function sendEmailRadarAggregateNotification({
     businessSubject: "urgent_a_aggregate",
     eventEpoch: runId,
     payload,
-    recoveryData: { ...await notificationRecoveryData(buildRadarNotificationContent(urgentItems, { runId, audit })), radarSelection: notificationSelection },
+    recoveryData: { ...await notificationRecoveryData(content), radarSelection: notificationSelection },
     recipient,
     ledgerOperationId,
     transport,

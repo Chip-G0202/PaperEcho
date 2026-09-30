@@ -8,8 +8,8 @@ export function createFeishuTransport({ webhookUrl, signingSecret = '' }, option
     const out = (accepted, category, code) => providerOutcome(accepted, category, code, 'feishu');
     if (!validFeishuWebhook(webhookUrl) || !validFeishuSigningSecret(signingSecret)) return out(false, 'provider_configuration_invalid');
     const post = payload?.content?.post?.zh_cn;
-    if (payload?.msg_type !== 'post' || typeof post?.title !== 'string' || !Array.isArray(post.content) || !post.content.length || !post.content.every(row => Array.isArray(row) && row.length && row.every(node => node.tag === 'text' && typeof node.text === 'string'))) return out(false, 'provider_payload_invalid');
-    const body = { msg_type: 'post', content: { post: { zh_cn: post } } };
+    if (payload?.msg_type !== 'post' || typeof post?.title !== 'string' || !Array.isArray(post.content) || !post.content.length || !post.content.every(row => Array.isArray(row) && row.length && row.every(node => node?.tag === 'text' && typeof node.text === 'string' && !/\p{Surrogate}/u.test(node.text)))) return out(false, 'provider_payload_invalid');
+    const body = { msg_type: 'post', content: { post: { zh_cn: { title: post.title, content: post.content.map(row => row.map(node => ({ tag: 'text', text: node.text }))) } } } };
     if (signingSecret) {
       body.timestamp = String(Math.floor((options.clock?.() || new Date()).getTime() / 1000));
       body.sign = createHmac('sha256', `${body.timestamp}\n${signingSecret}`).update('').digest('base64');

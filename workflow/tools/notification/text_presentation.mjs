@@ -1,5 +1,5 @@
 export function boundedText(value, budget) {
-  const text = String(value ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').replace(/\p{Surrogate}/gu, '\ufffd');
+  const text = String(value ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').replace(/\p{Surrogate}/gu, '\ufffd').trim();
   if (Buffer.byteLength(text) <= budget) return text;
   let result = '';
   for (const { segment } of new Intl.Segmenter('zh', { granularity: 'grapheme' }).segment(text)) { if (Buffer.byteLength(result + segment + '…') > budget) break; result += segment; }
