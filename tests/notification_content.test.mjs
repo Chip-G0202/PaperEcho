@@ -73,6 +73,19 @@ test("Weekly content and renderer preserve counts, grades, overview, integrity a
   assert.ok(result.html.indexOf("分级情况") < result.html.indexOf("本轮文献概况"));
 });
 
+test("Weekly long literature identifiers wrap inside the responsive email layout without losing content", () => {
+  const doi = "10.example/" + "longidentifier".repeat(12);
+  const item = { title: "Long title & <literal text>", translatedTitle: "中文译名", final_grade: "A", doi, semantic_reason: "Existing reason" };
+  const message = formatStage5Report(summary, { literatureItems: [item] });
+  assert.match(message.html, /name="viewport" content="width=device-width, initial-scale=1"/);
+  assert.match(message.html, /table-layout:fixed;overflow-wrap:anywhere;word-break:break-word/);
+  assert.ok(message.html.includes(doi));
+  assert.ok(message.text.includes(doi));
+  assert.match(message.html, /Long title &amp; &lt;literal text&gt;/);
+  assert.match(message.text, /\[A\] Long title & <literal text>/);
+  assert.equal(message.subject, formatStage5Report(summary).subject);
+});
+
 for (const kind of ["radar", "weekly"]) test(`${kind} notification-only retry uses same receipt and sends effectively once`, async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "notification-content-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
