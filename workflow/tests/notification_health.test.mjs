@@ -21,14 +21,14 @@ async function createRun(runRoot, runId) {
 const healthEnv = { PAPERECHO_CONFIG_SCHEMA_VERSION: "2", PAPERECHO_HEALTH_NOTIFIER_ENABLED: "true", PAPERECHO_HEALTH_DEGRADATION_THRESHOLD: "2", PAPERECHO_NOTIFICATION_RETRY_FAILED: "true" };
 const source = { kind: "source_availability", healthKey: `source:weekly:rss:${"a".repeat(64)}:availability`, degraded: true, subject: { source: "rss", profile: "weekly" } };
 
-test("source degradation alerts on the second observation, once per epoch, and recovery once", async (t) => {
+for (const schemaVersion of ['2', '3', '4']) test(`schema ${schemaVersion} source degradation alerts on the second observation, once per epoch, and recovery once`, async (t) => {
   const ctx = await rootFixture(t);
   let sends = 0;
   const transport = async () => { sends += 1; return { accepted: true, acceptedCount: 1 }; };
   const observe = async (index, observation) => {
     const runId = `health-run-${index}`;
     await createRun(ctx.runRoot, runId);
-    return processHealthNotifications({ runRoot: ctx.runRoot, runId, observations: [observation], recipient: "reader@example.test", env: healthEnv, transport });
+    return processHealthNotifications({ runRoot: ctx.runRoot, runId, observations: [observation], recipient: "reader@example.test", env: { ...healthEnv, PAPERECHO_CONFIG_SCHEMA_VERSION: schemaVersion }, transport });
   };
   assert.equal((await observe(1, source)).events.length, 0);
   assert.equal((await observe(2, source)).events[0].status, "accepted");

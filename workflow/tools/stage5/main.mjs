@@ -6,16 +6,18 @@ import { emailTransportConfig, sendStage5Email } from "./email_sender.mjs";
 import { readNotificationReceipt, receiptPathFor, recipientHash, writeNotificationReceipt, notificationRecoveryData } from "./email_receipt.mjs";
 import { generateLiteratureOverview } from "./literature_overview.mjs";
 import { deliverReliableNotification } from "../notification/delivery.mjs";
+import { emailDeliveryPolicy } from '../notification/policy.mjs';
 
 const MAX_ATTACHMENTS = 1;
 const MAX_TOTAL_BYTES = 20 * 1024 * 1024;
 const ALLOWED = new Map([["monthly_docx", ".docx"]]);
 
-export function resolveStage5Request(argv = process.argv.slice(2), env = process.env) {
+export function resolveStage5Request(argv = process.argv.slice(2), env = process.env, event = 'weekly') {
   const equals = argv.find((arg) => String(arg).startsWith("--email="));
   const index = argv.indexOf("--email");
   const cliRecipient = equals ? String(equals).slice("--email=".length) : index >= 0 ? argv[index + 1] : "";
-  const recipient = String(cliRecipient || env.PAPERFLOW_REPORT_TO || env.NOTIFICATION_EMAIL || "").trim();
+  const policy = emailDeliveryPolicy(event, { env });
+  const recipient = policy.required ? String(cliRecipient || env.PAPERFLOW_REPORT_TO || env.NOTIFICATION_EMAIL || "").trim() : '';
   return { recipient, forceResend: argv.includes("--force-resend"), source: cliRecipient ? "cli" : env.PAPERFLOW_REPORT_TO ? "PAPERFLOW_REPORT_TO" : env.NOTIFICATION_EMAIL ? "NOTIFICATION_EMAIL" : "none" };
 }
 
@@ -46,6 +48,8 @@ export async function prepareStage5Attachments(runSummary, { fsApi = fs } = {}) 
 }
 
 export async function runStage5Notification({ runSummary, literatureItems = [], recipient, forceResend = false, transport, config = {} } = {}) {
+  const policy = emailDeliveryPolicy('weekly', { env: config.env || process.env });
+  if (!policy.required) return { status: 'skipped', reason: policy.reason, attachments: [] };
   if (!String(recipient || "").trim()) return { status: "skipped", reason: "recipient_not_configured", attachments: [] };
   if (!isValidRecipient(recipient)) return { status: "failed", reason: "recipient_invalid", attachments: [] };
   const normalizedRecipient = String(recipient).trim().toLowerCase();

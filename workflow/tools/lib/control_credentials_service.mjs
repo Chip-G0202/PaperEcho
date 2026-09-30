@@ -55,6 +55,23 @@ export class SecretService {
   }
   replace(id, value) { return this.#write(id, value, false); }
   clear(id) { return this.#write(id, '', true); }
+  async smtpStatus(passwordEnv = 'SMTP_PASS') {
+    if (passwordEnv === 'SMTP_PASS') return (await this.list()).find((entry) => entry.id === 'SMTP_PASS');
+    const state = await this.#read().catch(() => null);
+    return { id: 'SMTP_PASS', configured: Boolean(this.#env[passwordEnv] ?? state?.values[passwordEnv]), writable: false, reason: '密码由自定义环境引用管理，请在原配置入口维护。' };
+  }
+  // Only the application service receives this environment; HTTP never exposes it.
+  async withSmtpEnvironment(smtp, operation) {
+    const state = await this.#read().catch(() => null);
+    const passwordEnv = smtp.passwordEnv || 'SMTP_PASS';
+    const password = this.#env[passwordEnv] ?? state?.values[passwordEnv] ?? '';
+    if (password) this.#seen.add(password);
+    const env = { SMTP_PASS: password };
+    for (const [field, key] of Object.entries({ host: 'SMTP_HOST', user: 'SMTP_USER', from: 'SMTP_FROM', port: 'SMTP_PORT', secure: 'SMTP_SECURE' })) {
+      if (smtp[field] != null) env[key] = String(smtp[field]);
+    }
+    return operation(env);
+  }
   async #write(id, value, clear) {
     if (!CONTROL_SECRET_NAMES.includes(id)) throw new Error('CREDENTIAL_KEY_NOT_ALLOWED');
     if (typeof value !== 'string' || (!clear && !value.length) || value.length > 4096 || /[\r\n\u0000-\u001f\u007f]/.test(value) || (value.includes('"') && value.includes("'"))) throw new Error('CREDENTIAL_VALUE_INVALID');

@@ -15,10 +15,12 @@ Control Center application boundary：
 
 - `workflow/tools/lib/control_application_services.mjs`：组合 services；纯文本评价调用 `stage1/manual_standard_evaluation.mjs` 的共享核心，propose 默认不变。
 - `control_feedback_service.mjs`：canonical paper feedback history/current、幂等提交和批量原子写入；`control_legacy_feedback_adapter.mjs`：单向 XLSX import。
-- `control_config_service.mjs`：固定字段 registry，映射现有 domain JSON；Runner 对象校验仍由 `runner/config_loader.mjs` 持有。
+- `control_config_service.mjs`：固定字段 registry，映射 canonical application config（迁移前兼容 domain JSON）；Runner 对象校验仍由 `runner/config_loader.mjs` 持有。
 - `control_rule_suggestion_service.mjs`：人工决策及安全 apply 编排；schema/dedup 仍归 `unified_pending_rule_suggestions.mjs`，正文插入逻辑复用 `screening_standards_rule_suggestions.mjs`。DOCX adapter 调同一 service。
 - `control_review_query_service.mjs`：registered run manifest/Stage4 artifact 只读查询，复用 verified-write filter。
 - `control_credentials_service.mjs`：SecretService 的 allowlist 凭据状态、原子 Replace/Clear 和输出脱敏；复用 `.env` loader 解析，无独立 credential store，外部注入覆盖时只读。
+- `control_notification_service.mjs`：Email 是第一个正式 channel；应用层配置就绪状态、显式测试及原回执的最近状态。普通设置由 ConfigService、凭据由 SecretService 持有；测试使用既有 content/render/delivery/receipt/SMTP 链路，不运行业务流程。
+- `workflow/tools/notification/policy.mjs`：渠道开关与 Radar/Weekly 事件偏好分开解析；disabled/no-channel 无发送要求，不创建通知恢复操作，不影响业务成功。
 - `workflow/tools/web/server.mjs` 与 `web/static/`：loopback HTTP 和 UI，不持有 retrieval、ranking、Zotero、learning 或配置文件写入逻辑。
 
 | 能力 | 当前 Owner | CLI Wrapper | 当前状态 |
@@ -35,7 +37,7 @@ Control Center application boundary：
 | runtime config | `workflow/tools/lib/runtime_config.mjs` | 无 | 独立 lib 模块 |
 | schedule / interval gate | `workflow/tools/lib/schedule_support.mjs` | 无 | 独立 lib 模块 |
 | notification content | `workflow/tools/stage5/notification_content.mjs` | 无 | 从现有 Radar/Weekly 业务结果构建内容，不检索、不重新评级 |
-| email rendering | `stage5/radar_report.mjs`、`stage5/report_summary.mjs` | 无 | 共用 `stage5/email_layout.mjs` 的品牌布局与 HTML escaping；HTML/text 使用同一内容模型 |
+| email rendering | `stage5/radar_report.mjs`、`stage5/report_summary.mjs`、`stage5/test_notification_report.mjs` | 无 | 共用 `stage5/email_layout.mjs` 的品牌布局与 HTML escaping；HTML/text 使用同一内容模型 |
 | notification delivery / recovery | `notification/delivery.mjs`、`stage5/email_receipt.mjs`、`recovery/notification_recovery.mjs`（均在 `workflow/tools/`） | 原 Runner `--resume` | SMTP 仍归 `stage5/email_sender.mjs`；已成功业务不重跑，原回执和 ledger 完成恢复 |
 | triage policy | `workflow/tools/stage1/rule_classifier.mjs` | `workflow/tools/stage1/main.mjs` | Stage1-local rule classifier；旧 `workflow_classifier.mjs` / `triage_policy.mjs` 兼容入口已删除 |
 

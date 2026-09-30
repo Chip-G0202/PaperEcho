@@ -53,7 +53,7 @@ function has(object, key) {
 function validateKeys(value, section, schemaVersion = 1) {
   if (value == null) return {};
   if (!isObject(value)) fail("CONFIG_SECTION_INVALID", `${section} must be an object`, { section });
-  const allowed = section === "common" && schemaVersion >= 2 ? new Set([...SECTION_KEYS.common, ...V2_COMMON_KEYS]) : SECTION_KEYS[section];
+  const allowed = section === "common" && schemaVersion >= 2 ? new Set([...SECTION_KEYS.common, ...V2_COMMON_KEYS]) : section === "notifications" && schemaVersion >= 4 ? new Set([...SECTION_KEYS.notifications, "radar", "weekly"]) : SECTION_KEYS[section];
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) fail("CONFIG_FIELD_UNKNOWN", `${section}.${key} is not supported`, { section, field: key });
   }
@@ -121,7 +121,12 @@ function validateCommon(common, schemaVersion = 1) {
   if (schemaVersion >= 2) {
     sourceState = validateKeys(value.sourceState, "sourceState");
     optionalString(sourceState.root, "common.sourceState.root");
-    notifications = validateKeys(value.notifications, "notifications");
+    notifications = validateKeys(value.notifications, "notifications", schemaVersion);
+    if (schemaVersion >= 4) for (const event of ["radar", "weekly"]) {
+      const preference = notifications[event];
+      if (preference != null && (!isObject(preference) || Object.keys(preference).some((key) => key !== "enabled"))) fail("CONFIG_FIELD_UNKNOWN", "unsupported notification preference", { field: event });
+      optionalBoolean(preference?.enabled, `common.notifications.${event}.enabled`);
+    }
     failure = validateKeys(notifications.failure, "failure");
     optionalBoolean(failure.enabled, "common.notifications.failure.enabled");
     health = validateKeys(notifications.health, "health");
@@ -212,18 +217,18 @@ async function loadConfigFile({ requestedPath, source, fsApi, cwd }) {
 
 export function validateRunnerConfigObject(config) {
   if (!isObject(config)) fail("CONFIG_ROOT_INVALID", "PaperEcho config root must be an object");
-  if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1, 2 or 3", { schemaVersion: config.schemaVersion ?? null });
+  if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1, 2, 3 or 4", { schemaVersion: config.schemaVersion ?? null });
   for (const key of Object.keys(config)) {
-    if (!new Set(["schemaVersion", "mode", "profile", "common", "desktop", "web", "local", ...(config.schemaVersion === 3 ? [...Object.values(DOMAIN_SECTIONS), 'weekly', 'migration'] : [])]).has(key)) fail("CONFIG_FIELD_UNKNOWN", `top-level field ${key} is not supported`, { field: key });
+    if (!new Set(["schemaVersion", "mode", "profile", "common", "desktop", "web", "local", ...(config.schemaVersion >= 3 ? [...Object.values(DOMAIN_SECTIONS), 'weekly', 'migration'] : [])]).has(key)) fail("CONFIG_FIELD_UNKNOWN", `top-level field ${key} is not supported`, { field: key });
   }
   optionalString(config.mode, "mode");
   if (config.mode != null && !MODES.has(config.mode)) fail("CONFIG_MODE_INVALID", `mode must be desktop, web, local, or null`, { mode: config.mode });
   optionalString(config.profile, "profile");
   if (config.profile != null && !PROFILES.has(config.profile)) fail("CONFIG_PROFILE_INVALID", "profile must be standard, complete, or radar", { profile: config.profile });
   validateEnabledSections(config);
-  if (config.schemaVersion === 3) {
+  if (config.schemaVersion >= 3) {
     validateApplicationSections(config);
-    validateCommon(config.common, 3);
+    validateCommon(config.common, config.schemaVersion);
     for (const mode of MODES) validatePathSection(mode, config[mode]);
   }
   return config;
@@ -277,7 +282,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   const pathSection = validatePathSection(mode, config?.[mode]);
   const configDir = loaded.configPath ? path.dirname(loaded.configPath) : cwd;
   const effectiveEnv = { ...env };
-  if (configSchemaVersion === 3) {
+  if (configSchemaVersion >= 3) {
     effectiveEnv.PAPERECHO_APPLICATION_CONFIG = loaded.configPath;
     effectiveEnv.review_results_RUN_INTERVAL_DAYS = String(config.weekly?.intervalDays || 7);
   }
@@ -285,6 +290,9 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   if (cliOptions.translationConfig) effectiveEnv.PAPERECHO_INVOCATION_TRANSLATION_CONFIG = cliOptions.translationConfig;
   const secretStatus = {};
   effectiveEnv.PAPERECHO_CONFIG_SCHEMA_VERSION = String(configSchemaVersion);
+  setEnvValue(effectiveEnv, "PAPERECHO_EMAIL_ENABLED", common.email.enabled !== false);
+  setEnvValue(effectiveEnv, "PAPERECHO_NOTIFY_RADAR", common.notifications.radar?.enabled !== false);
+  setEnvValue(effectiveEnv, "PAPERECHO_NOTIFY_WEEKLY", common.notifications.weekly?.enabled !== false);
   for (const name of ["PAPERECHO_FAILURE_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_DEGRADATION_THRESHOLD", "PAPERECHO_NOTIFICATION_RECEIPT_ROOT", "PAPERECHO_NOTIFICATION_HEALTH_ROOT", "PAPERECHO_NOTIFICATION_RETRY_FAILED", "PAPERECHO_NOTIFICATION_UNKNOWN_POLICY", "PAPERECHO_SOURCE_STATE_ROOT", "PAPERECHO_INTEGRITY_ENABLED", "PAPERECHO_INTEGRITY_BOOTSTRAP_BATCH_SIZE", "PAPERECHO_INTEGRITY_CROSSREF_CONCURRENCY", "PAPERECHO_INTEGRITY_PUBMED_BATCH_SIZE", "PAPERECHO_INTEGRITY_CACHE_TTL_DAYS"]) delete effectiveEnv[name];
 
   if (has(common.value, "projectRoot") && common.value.projectRoot) effectiveEnv.ZOTERO_PROJECT_ROOT = resolveRelative(common.value.projectRoot, configDir);

@@ -4,6 +4,8 @@
 
 Recipient priority is CLI `--email`, then `PAPERFLOW_REPORT_TO`, then legacy `NOTIFICATION_EMAIL`. No recipient returns `skipped: recipient_not_configured` before SMTP validation or transport creation.
 
+`notification/policy.mjs` gates automatic delivery first: `common.email.enabled=false` or the current Radar/Weekly event preference disabled means no delivery requirement, no notification recovery operation, and normal business success. CLI recipient overrides do not enable a disabled channel/event. Schema v4 keeps event preferences under `common.notifications.radar/weekly`, separate from Email/SMTP configuration. Missing preferences retain prior enabled behavior.
+
 SMTP is the only provider. PaperEcho supplies no relay.
 
 | Setting | Contract |
@@ -16,6 +18,13 @@ SMTP is the only provider. PaperEcho supplies no relay.
 | `SMTP_FROM` | optional validated address; absent/empty falls back to `SMTP_USER` |
 
 An explicit recipient with missing/invalid SMTP fails Stage5 clearly. It does not delete or roll back Stage1-Stage4 results. Tests inject a transport or Nodemailer loader and never connect to a real server.
+
+## Control Center Email channel
+
+- `lib/control_notification_service.mjs` owns the minimal application contract for the real Email channel. ConfigService owns ordinary settings, SecretService owns configured/writable status and Replace/Clear, and raw secrets never enter GET responses.
+- Readiness means configuration is complete/incomplete/invalid; it does not claim verified SMTP connectivity. Disabled Email retains its settings and credentials.
+- Explicit test notification is allowed with configured Email even while disabled. It renders `notification_test` content via `test_notification_report.mjs` and the shared layout, then calls existing delivery/receipt/SMTP owners. It does not enable Email, run business stages, change schedules, or write business ledger operations.
+- Test receipts use the existing receipt schema at `<receipt-root>/tests/<requestId>.json`; the same request retains accepted/unknown no-repeat semantics. Application and UI both guard in-flight tests. Recent channel status is a sanitized projection of existing Weekly/Radar/test receipts; there is no second delivery-history store.
 
 ## Run Summary and formatter
 

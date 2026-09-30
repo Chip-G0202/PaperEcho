@@ -89,6 +89,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
         if (decoded === '/api/pending-summary') return send(200, await services.review.pendingSummary());
         if (decoded === '/api/settings') return send(200, await services.config.list());
         if (decoded === '/api/credentials') return send(200, await services.secrets.list());
+        if (decoded === '/api/notifications') return send(200, await services.notifications.settings());
         if (decoded === '/api/suggestions') {
           const list = await services.rules.list();
           return send(200, list.map((entry) => Object.fromEntries(['id', 'suggestion_id', 'target', 'change_type', 'rule_text', 'suggested_rule', 'rationale', 'evidence_titles', 'evidence_text_excerpt', 'risk_level', 'status', 'content_issue', 'can_apply', 'decision_receipt'].map((key) => [key, entry[key]]))));
@@ -98,6 +99,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       if (req.headers.origin !== `http://${req.headers.host}`) return send(403, { error: 'ORIGIN_REJECTED' });
       if (!equal(req.headers['x-csrf-token'], token)) return send(403, { error: 'CSRF_REQUIRED' });
       const input = await body(req);
+      if (decoded === '/api/notifications/test') return send(200, await services.notifications.test(input));
       if (decoded === '/api/shutdown') {
         res.once('finish', () => {
           const timer = setTimeout(() => server.closeAllConnections(), 2000); timer.unref();

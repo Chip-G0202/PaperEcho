@@ -11,12 +11,40 @@ async function read(file, fallback = null) {
   try { return JSON.parse(await fs.readFile(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return fallback; throw new Error('CONFIG_MIGRATION_SOURCE_UNREADABLE'); }
 }
+// v3 had a single Email switch (also exposed as weekly.email), no event preferences.
+// Keep that channel switch and existing connection/secret references unchanged.
+export function upgradeNotificationConfig(config, now = () => new Date()) {
+  if (config.schemaVersion !== 3) return structuredClone(config);
+  const next = structuredClone(config);
+  next.common ||= {};
+  next.common.notifications ||= {};
+  next.common.notifications.radar = { enabled: true };
+  next.common.notifications.weekly = { enabled: true };
+  next.schemaVersion = 4;
+  next.migration = { fromSchema: 3, toSchema: 4, success: true, timestamp: now().toISOString() };
+  return next;
+}
 export async function migrateApplicationConfig({ root, env = {}, configPath, atomicOptions = {}, now = () => new Date() } = {}) {
   const target = applicationConfigPath({ root, env: {}, configPath });
   return withAtomicJsonLock(target, async () => {
     const old = await read(target);
     if (old) validateRunnerConfigObject(old);
-    if (old?.schemaVersion === 3) return { migrated: false, schemaVersion: 3 };
+    if (old?.schemaVersion === 4) return { migrated: false, schemaVersion: 4 };
+    if (old?.schemaVersion === 3) {
+      const candidate = upgradeNotificationConfig(old, now);
+      validateRunnerConfigObject(candidate);
+      const backup = `${target}.v3-backup`;
+      const existing = await read(backup);
+      if (existing && JSON.stringify(existing) !== JSON.stringify(old)) throw new Error('CONFIG_MIGRATION_BACKUP_CONFLICT');
+      if (!existing) await writeAtomicJson(backup, old);
+      await writeAtomicJson(target, candidate, { ...atomicOptions, validateTemporary: async (temporary) => {
+        const reloaded = await read(temporary);
+        validateRunnerConfigObject(reloaded);
+        if (JSON.stringify(reloaded) !== JSON.stringify(candidate)) throw new Error('CONFIG_MIGRATION_READBACK_FAILED');
+        await atomicOptions.validateTemporary?.(temporary);
+      } });
+      return { migrated: true, schemaVersion: 4, metadata: candidate.migration };
+    }
     let localEnv = {};
     try { localEnv = parseEnvFile(await fs.readFile(path.join(root, '.env'), 'utf8')); }
     catch (error) { if (error.code !== 'ENOENT') throw new Error('CONFIG_MIGRATION_ENV_UNREADABLE'); }
@@ -75,8 +103,11 @@ export async function migrateApplicationConfig({ root, env = {}, configPath, ato
       if (candidate.common.cleanup.enabled == null && env.PAPERFLOW_CLEANUP_ENABLED) candidate.common.cleanup.enabled = !/^(false|0|no|off)$/i.test(env.PAPERFLOW_CLEANUP_ENABLED);
       if (candidate.common.cleanup.retentionDays == null && env.PAPERFLOW_RETENTION_DAYS) candidate.common.cleanup.retentionDays = Number(env.PAPERFLOW_RETENTION_DAYS);
     }
-    candidate.schemaVersion = 3;
-    candidate.migration = { fromSchema: old?.schemaVersion || 0, toSchema: 3, success: true, sourceKinds: sources, timestamp: now().toISOString() };
+    candidate.schemaVersion = 4;
+    candidate.common.notifications ||= {};
+    candidate.common.notifications.radar = { enabled: true };
+    candidate.common.notifications.weekly = { enabled: true };
+    candidate.migration = { fromSchema: old?.schemaVersion || 0, toSchema: 4, success: true, sourceKinds: sources, timestamp: now().toISOString() };
     validateRunnerConfigObject(candidate);
     // The original unified config is retained separately; domain files are never rewritten.
     if (old) {
@@ -91,6 +122,6 @@ export async function migrateApplicationConfig({ root, env = {}, configPath, ato
       if (JSON.stringify(reloaded) !== JSON.stringify(candidate)) throw new Error('CONFIG_MIGRATION_READBACK_FAILED');
       await atomicOptions.validateTemporary?.(temporary);
     } });
-    return { migrated: true, schemaVersion: 3, metadata: candidate.migration };
+    return { migrated: true, schemaVersion: 4, metadata: candidate.migration };
   });
 }

@@ -6,6 +6,7 @@ import { emailTransportConfig } from "../stage5/email_sender.mjs";
 import { createNotificationReceipt, notificationReceiptPathFor } from "../stage5/email_receipt.mjs";
 import { deliverReliableNotification } from "./delivery.mjs";
 import { completeLedgerNotification } from "./ledger_bridge.mjs";
+import { emailDeliveryPolicy } from './policy.mjs';
 
 function enabled(value) { return /^(1|true|yes|on)$/i.test(String(value || "")); }
 function safeToken(value, fallback = "unknown") {
@@ -38,7 +39,7 @@ export async function notifyRunFailure({
   clock = () => new Date(),
   hooks = {},
 } = {}) {
-  if (String(env.PAPERECHO_CONFIG_SCHEMA_VERSION || "") !== "2" || !enabled(env.PAPERECHO_FAILURE_NOTIFIER_ENABLED)) return { status: "disabled", reason: "failure_notifier_disabled" };
+  if (Number(env.PAPERECHO_CONFIG_SCHEMA_VERSION || 0) < 2 || !enabled(env.PAPERECHO_FAILURE_NOTIFIER_ENABLED) || !emailDeliveryPolicy('failure', { env }).required) return { status: "disabled", reason: "failure_notifier_disabled" };
   if (!String(recipient || "").trim()) return { status: "disabled", reason: "recipient_not_configured" };
   const smtp = emailTransportConfig(env);
   if (!transport && !smtp.configured) return { status: "disabled", reason: "smtp_configuration_incomplete", missing: smtp.missing };

@@ -527,7 +527,7 @@ export async function runZoteroLiteratureFilter({
     const indexPath = getDefaultZoteroLibraryIndexPath(config.projectRoot);
     const notificationSelection = await selectRadarNotificationCandidates(indexPath, urgentItems);
     const selectedItems = notificationSelection.selected.map((entry) => entry.item);
-    const stage5Request = resolveStage5Request(argv, env);
+    const stage5Request = resolveStage5Request(argv, env, 'radar');
     const stage5StateRoot = runStateRoot(runRoot, runId);
     const receiptPath = radarNotificationReceiptPath(stage5StateRoot, runId, selectedItems, radarResult.audit);
     const notificationOperation = recoveryCoordinator && selectedItems.length && stage5Request.recipient
@@ -792,7 +792,7 @@ export async function runZoteroLiteratureFilter({
       });
     }
     stage4RunSummary = { ...stage4RunSummary, pipelineMode: pipelineModeFromBackend(resolvedBackend), finishedAt: stage4RunSummary.finishedAt || iso(clock()) };
-    stage5Notification = await stage5Runner({ runSummary: stage4RunSummary, literatureItems: literatureItems || [], recipient: stage5Request.recipient, forceResend: stage5Request.forceResend, config: { runStateRoot: stage5StateRoot, ledgerOperationId: notificationOperation?.idempotencyKey || "" } });
+    stage5Notification = await stage5Runner({ runSummary: stage4RunSummary, literatureItems: literatureItems || [], recipient: stage5Request.recipient, forceResend: stage5Request.forceResend, config: { env, runStateRoot: stage5StateRoot, ledgerOperationId: notificationOperation?.idempotencyKey || "" } });
     if (notificationOperation && (stage5Notification.status === "sent" || (stage5Notification.status === "skipped" && stage5Notification.reason === "already_sent"))) {
       await recoveryCoordinator.completeNotification(notificationOperation, stage5Notification);
       await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: stage5Notification.status });
@@ -897,7 +897,7 @@ async function main() {
         profile,
         configHash,
         inputHash: "",
-        notification: { recipient: resolveStage5Request(process.argv.slice(2), process.env).recipient, env: process.env, recordRadarOutcome: (selected, outcome) => recordRadarNotificationOutcome(getDefaultZoteroLibraryIndexPath(config.projectRoot), selected, outcome) },
+        notification: { recipient: resolveStage5Request(process.argv.slice(2), process.env, profile === "radar" ? "radar" : "weekly").recipient, env: process.env, recordRadarOutcome: (selected, outcome) => recordRadarNotificationOutcome(getDefaultZoteroLibraryIndexPath(config.projectRoot), selected, outcome) },
         beforeReconcile: async ({ store, artifact }) => {
           const items = Array.isArray(artifact) ? artifact : [];
           const hasRadarClaimIntent = items.some((item) => item?.weekly_radar_queue_claim_intent || item?.weekly_radar_queue_claim);

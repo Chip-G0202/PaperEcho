@@ -195,7 +195,7 @@ test("invalid, unsupported, unknown, and missing config files fail closed", asyn
   const cli = parse(["--check", "--config", paths.configPath], paths.root);
   const cases = [
     ["{", "CONFIG_JSON_INVALID"],
-    [JSON.stringify({ schemaVersion: 4, mode: "local" }), "CONFIG_SCHEMA_UNSUPPORTED"],
+    [JSON.stringify({ schemaVersion: 99, mode: "local" }), "CONFIG_SCHEMA_UNSUPPORTED"],
     [JSON.stringify({ schemaVersion: 1, mode: "local", local: { enabled: true, apiKey: "forbidden" } }), "CONFIG_FIELD_UNKNOWN"],
   ];
   for (const [raw, code] of cases) {

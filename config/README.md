@@ -1,20 +1,26 @@
 # 用户可编辑配置
 
-日常配置推荐使用 [PaperEcho Control Center](../docs/control-center.md) 的 Settings。迁移到 schemaVersion 3 后，`config/paperecho.config.json` 是非敏感 application configuration 的 canonical owner。Settings 的固定字段 registry 仍由 `workflow/tools/lib/control_config_service.mjs` 管理，共享解析层为 `workflow/tools/lib/application_config.mjs`；Runner 继续由 `workflow/tools/runner/config_loader.mjs` 解析运行路径。保存只更新 canonical owner，不同步写回旧领域 JSON。
+日常配置推荐使用 [PaperEcho Control Center](../docs/control-center.md) 的 Settings。schemaVersion 3/4 的 `config/paperecho.config.json` 是非敏感 application configuration 的 canonical owner。Settings 的固定字段 registry 仍由 `workflow/tools/lib/control_config_service.mjs` 管理，共享解析层为 `workflow/tools/lib/application_config.mjs`；Runner 继续由 `workflow/tools/runner/config_loader.mjs` 解析运行路径。保存只更新 canonical owner，不同步写回旧领域 JSON。
 
-## v3 与旧版本迁移
+## v4 与旧版本迁移
 
 translation（标题翻译）与 preference（智能评审/偏好学习）仍是独立 capability，可分别设置模型、endpoint、temperature 等。Research Feedback 与普通 Runner 使用同一 Settings 配置。单次 Runner 调用可显式传入 `--preference-config <file>` 或 `--translation-config <file>`；覆盖只影响该 invocation，不写回 Settings，下一次普通调用恢复 canonical 配置。
 
 非敏感配置按显式 invocation override → canonical → legacy compatibility/defaults 解析。迁移前沿用 v1/v2 的优先级；迁移会把旧模型配置和 legacy non-secret env 的有效值固化进相应 section。迁移后，旧模型 env 不再覆盖 Settings。运行路径的现有 CLI 语义和执行期控制参数保持不变。
 
-在目标项目使用 `node workflow/tools/maintenance/migrate_application_config.mjs --root <项目根目录>`。集中 migration owner 为 `workflow/tools/lib/application_config_migration.mjs`，支持无主配置及 schema v1/v2 → v3；重复迁移当前 v3 不写入，未知未来 schema 拒绝处理。迁移读取指定根下的 `.env`，外部环境优先；secret 值不进入主配置或迁移 metadata。
+在目标项目使用 `node workflow/tools/maintenance/migrate_application_config.mjs --root <项目根目录>`。集中 migration owner 为 `workflow/tools/lib/application_config_migration.mjs`，支持无主配置及 schema v1/v2/v3 → v4；重复迁移当前 v4 不写入，未知未来 schema 拒绝处理。v1/v2 迁移读取指定根下的 `.env`，外部环境优先；secret 值不进入主配置或迁移 metadata。v3 → v4 只读取 canonical 配置，保留 Email/SMTP 与其他领域值，增加默认开启的 Radar/Weekly 通知偏好，原主配置保留为固定 `.v3-backup`。v3 安装保存通知设置时也由同一升级函数补齐 v4。
 
 迁移先构造并校验 candidate，保留旧领域文件，将原主配置保留为固定 `.legacy-backup`，再临时写入、回读校验并原子替换。备份冲突或校验/写入失败时不替换原主配置。最小迁移 metadata 位于主配置 `migration`，只包含版本、结果、来源类别和时间。尚未迁移的安装保留 legacy compatibility；迁移成功后旧 JSON 仅作为保留的迁移来源，不再正常写入。
 
 SecretService、受管 `.env` 和 external secret environment 保持独立，外部 secret 优先；GET 只返回配置状态。Runtime/User State（feedback、建议及其决策历史、ledger、receipt、queue、reports、logs）不进入主配置。长期研究规则正文继续由 `screening_standards.md` 管理，prompt Markdown 也保持独立；结构化机器规则进入 `review` section。
 
-Credentials 继续由环境/项目 `.env` 管理，网页支持 allowlist 本地凭据的状态、Replace、Clear，绝不回显原值；外部环境覆盖时只读。SecretService 保留其他 entries，严格检查可支持的单行格式后原子写入；不支持的格式保持原文件。Test 尚无可复用的安全 owner，未开放。缺少既有配置文件时页面显示“尚未初始化”，不会创建一个可能改变 mode 选择的新配置文件。Weekly 调度间隔只读；PubMed keyword groups 由现有 owner 生成 query，不能通过 raw query 绕开它。
+Credentials 继续由环境/项目 `.env` 管理，网页支持 allowlist 本地凭据的状态、Replace、Clear，绝不回显原值；外部环境覆盖时只读。SecretService 保留其他 entries，严格检查可支持的单行格式后原子写入；不支持的格式保持原文件。邮箱显式测试由 Channel Service 复用正式邮件链路，其他凭据不提供连接测试。缺少既有配置文件时页面显示“尚未初始化”；首次保存通知设置通过集中迁移建立 canonical 配置。Weekly 调度间隔只读；PubMed keyword groups 由现有 owner 生成 query，不能通过 raw query 绕开它。
+
+## 通知偏好与邮箱
+
+Settings → 通知与推送分别提供通知偏好、邮箱、凭据。`common.email.enabled` 是唯一 Email channel 开关；SMTP 普通参数仍在 `common.email.smtp`，密码仍由 SecretService 管理。事件偏好独立存于 `common.notifications.radar.enabled` / `weekly.enabled`，既有 failure/health 偏好及默认值保持原 owner。`workflow/tools/notification/policy.mjs` 解析是否需要 delivery；渠道或事件关闭时业务正常完成，不产生 notification operation 或待恢复发送。
+
+`workflow/tools/lib/control_notification_service.mjs` 是最小 Email channel application contract owner，返回 enablement、配置完整/不完整/错误、凭据配置/可写状态及脱敏的最近回执状态。配置完整不表示已经验证 SMTP 连接。显式测试允许在 Email 关闭时执行，不启用渠道，不运行论文流程，不写业务 ledger；使用 shared content、Email renderer/layout、原 delivery/receipt 与 SMTP transport。测试回执由原 receipt schema 保存在 receipt root 的 `tests/<requestId>.json`；同一请求沿用 accepted/unknown 不重复发送契约，并限制并发测试。最近发送状态读取原 Weekly/Radar/test receipts，不另建通知历史库。
 
 ## Config map
 

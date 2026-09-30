@@ -4,6 +4,8 @@ import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { buildPubMedQueryFromKeywordGroups } from './literature_config.mjs';
 import { readApplicationConfig, applicationConfigPath, DOMAIN_SECTIONS } from './application_config.mjs';
+import { migrateApplicationConfig, upgradeNotificationConfig } from './application_config_migration.mjs';
+import { isValidSmtpHost } from '../stage5/email_sender.mjs';
 
 const INITIAL_OWNER_VALUES = Object.freeze({
   'title_translation.config.json': { enabled: true },
@@ -48,15 +50,17 @@ for (const [id, key, type, description, validation] of [
 ]) setting(id, 'Ranking / Review', 'review-workflow-rules.json', key, type, description, validation);
 for (const [id, category, key, type, description, validation] of [
   ['general.profile', 'General', 'profile', 'enum', '运行配置', { values: ['standard', 'complete', 'radar'] }],
-  ['weekly.email', 'Weekly', 'common.email.enabled', 'boolean', 'Weekly 完成后发送邮件'],
   ['radar.enabled', 'Radar', 'common.radar.enabled', 'boolean', '启用 Daily Radar'],
   ['integrity.enabled', 'Integrity', 'common.integrity.enabled', 'boolean', '监测撤稿与更正状态'],
-  ['email.enabled', 'Notifications', 'common.email.enabled', 'boolean', '发送报告邮件'],
+  ['email.enabled', 'Notifications', 'common.email.enabled', 'boolean', '启用邮箱通知'],
   ['email.recipient', 'Notifications', 'common.email.recipient', 'email', '收件人'],
   ['smtp.host', 'Notifications', 'common.email.smtp.host', 'string', 'SMTP 主机', { maxLength: 253 }],
   ['smtp.port', 'Notifications', 'common.email.smtp.port', 'integer', 'SMTP 端口', { min: 1, max: 65535 }],
   ['smtp.secure', 'Notifications', 'common.email.smtp.secure', 'boolean', 'SMTP TLS'],
   ['smtp.user', 'Notifications', 'common.email.smtp.user', 'string', 'SMTP 用户名', { maxLength: 254 }],
+  ['smtp.from', 'Notifications', 'common.email.smtp.from', 'email', '发件人（默认使用登录邮箱）'],
+  ['notification.radar', 'Notifications', 'common.notifications.radar.enabled', 'boolean', 'Daily Radar 推荐通知'],
+  ['notification.weekly', 'Notifications', 'common.notifications.weekly.enabled', 'boolean', '周报完成通知'],
   ['notification.failure', 'Notifications', 'common.notifications.failure.enabled', 'boolean', '运行失败时通知'],
   ['notification.health', 'Notifications', 'common.notifications.health.enabled', 'boolean', '运行健康状态提醒'],
   ['runtime.mode', 'Runtime', 'mode', 'enum', '运行路径', { values: ['local', 'desktop', 'web'] }],
@@ -82,6 +86,7 @@ function put(object, key, value) {
 export function validateSetting(definition, value) {
   const { type, validation: rules } = definition;
   const fail = () => { throw new Error('SETTING_VALUE_INVALID'); };
+  if (definition.id === 'smtp.host' && !isValidSmtpHost(value)) fail();
   if (type === 'boolean' && typeof value !== 'boolean') fail();
   if (['number', 'integer'].includes(type) && (typeof value !== 'number' || !Number.isFinite(value) || (type === 'integer' && !Number.isInteger(value)) || value < rules.min || value > rules.max)) fail();
   if (['string', 'url', 'email', 'enum'].includes(type)) {
@@ -145,7 +150,11 @@ export class ConfigService {
       try {
         if (!owners.has(definition.file)) owners.set(definition.file, await this.readOwnerOrTemplate(definition.file));
         const owner = owners.get(definition.file);
-        value = get(owner.value, definition.key) ?? (definition.id === 'translation.enabled' ? true : null);
+        value = get(owner.value, definition.key) ?? (['translation.enabled', 'notification.radar', 'notification.weekly'].includes(definition.id) ? true : null);
+        // Show the existing SMTP transport defaults so saving the form preserves TLS.
+        if (definition.id === 'smtp.port' && value == null) value = 465;
+        if (definition.id === 'smtp.secure' && value == null) value = Number(owner.value.common?.email?.smtp?.port ?? 465) === 465;
+        if (definition.id === 'email.enabled' && value == null) value = true;
         ownerPresent = owner.present;
       }
       catch (error) { if (error.code !== 'ENOENT') throw error; available = false; }
@@ -162,17 +171,26 @@ export class ConfigService {
   async updateMany(updates) {
     if (!Array.isArray(updates) || updates.length < 1 || updates.length > 50) throw new Error('SETTING_BATCH_INVALID');
     if (new Set(updates.map((entry) => entry?.id)).size !== updates.length) throw new Error('SETTING_BATCH_INVALID');
+    if (updates.some((entry) => !entry || Object.keys(entry).some((key) => !['id', 'value'].includes(key)))) throw new Error('SETTING_BATCH_INVALID');
     const resolved = updates.map(({ id, value }) => {
+      // Legacy UI alias was the very same channel flag; never a second owner.
+      if (id === 'weekly.email') id = 'email.enabled';
       const definition = CONFIG_REGISTRY.find((entry) => entry.id === id);
       if (!definition) throw new Error('SETTING_UNKNOWN');
       validateSetting(definition, value);
       return { id, value, definition };
     });
+    if (new Set(resolved.map((entry) => entry.id)).size !== resolved.length) throw new Error('SETTING_BATCH_INVALID');
     const ownerFiles = [...new Set(resolved.map((entry) => entry.definition.file))].sort();
+    const notificationEdit = resolved.some(({ id }) => /^(email\.|smtp\.|notification\.)/.test(id));
+    if (notificationEdit && !readApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath })) {
+      await migrateApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath, atomicOptions: this.atomicOptions });
+    }
     if (readApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath })) {
       const target = applicationConfigPath({ root: this.root, env: this.env, configPath: this.configPath });
       return withAtomicJsonLock(target, async () => {
-        const candidate = readApplicationConfig({ root: this.root, env: this.env, configPath: target });
+        const current = readApplicationConfig({ root: this.root, env: this.env, configPath: target });
+        const candidate = notificationEdit ? upgradeNotificationConfig(current) : current;
         for (const { id, value, definition } of resolved) {
           const section = DOMAIN_SECTIONS[definition.file];
           const owner = section ? (candidate[section] ||= {}) : candidate;

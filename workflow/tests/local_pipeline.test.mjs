@@ -10,6 +10,7 @@ import { parseLocalArgs, runLocalPipeline } from "../tools/local/main.mjs";
 import { formatTimingSummary } from "../tools/local/local_timing.mjs";
 import { prepareLocalStage4ExportSource } from "../tools/stage4/export_source_step.mjs";
 import { translateTitlesBatch } from "../tools/lib/title_translation_support.mjs";
+import { createRunRecoveryCoordinator } from '../tools/recovery/run_recovery.mjs';
 
 async function tempDir() { return fs.mkdtemp(path.join(os.tmpdir(), "paperflow-local-")); }
 function sharedIndexPath(root) { return path.join(root, "shared", "current_literature_index.json"); }
@@ -141,6 +142,23 @@ function fakeStage1(root, observed, { fail = false } = {}) {
 }
 
 const fakeExport = async () => ({ exportAudit: { actual_output_path: "local.xlsx" }, exportManifest: { schemaVersion: 1, outputRoot: ".", artifacts: [] }, terminalExportError: null });
+
+for (const env of [{ PAPERECHO_EMAIL_ENABLED: 'false' }, { PAPERECHO_NOTIFY_WEEKLY: 'false' }]) test('Local disabled notification completes business and creates no recovery operation', async (t) => {
+  const root = await tempDir(); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const outputRoot = path.join(root, 'out'); const input = path.join(root, 'input.json');
+  await fs.writeFile(input, JSON.stringify([{ title: 'Paper fixture', doi: '10.1234/disabled-local' }]));
+  const runId = 'disabled-local';
+  const coordinator = await createRunRecoveryCoordinator({ runRoot: path.join(outputRoot, 'runs'), runId, mode: 'local', profile: 'standard', configHash: 'a'.repeat(64), inputHash: 'b'.repeat(64), artifactPath: path.join(outputRoot, 'runs', runId, 'input_artifact.json') });
+  const result = await runLocalPipeline({ runId, recoveryCoordinator: coordinator, outputRoot, input, llmMode: 'disabled', recipient: 'reader@example.test' }, {
+    env, sharedIndexPath: sharedIndexPath(root), runStage1: fakeStage1(root, []),
+    runStage4Export: async ({ paths }) => { await fs.mkdir(path.dirname(paths.requestedOutputPath), { recursive: true }); await fs.writeFile(paths.requestedOutputPath, 'fixture export'); return { exportAudit: { actual_output_path: paths.requestedOutputPath }, exportManifest: { schemaVersion: 1, outputRoot, artifacts: [] } }; },
+  });
+  assert.equal(result.ok, true); assert.equal(result.stage5_notification.status, 'skipped');
+  assert.equal(result.stage5_notification.reason, env.PAPERECHO_EMAIL_ENABLED === 'false' ? 'channel_disabled' : 'notification_policy_disabled');
+  assert.equal(coordinator.store.ledger.status, 'completed');
+  assert.equal(coordinator.store.ledger.operations.some((operation) => operation.type === 'notification'), false);
+  assert.equal(coordinator.store.ledger.stages.stage4_exports.status, 'verified'); assert.equal(coordinator.store.ledger.stages.stage5_notification.status, 'verified');
+});
 
 test("Local calls shared Stage5 with recipient and force-resend after Stage4", async () => {
   const root = await tempDir();

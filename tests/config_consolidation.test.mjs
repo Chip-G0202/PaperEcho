@@ -89,17 +89,17 @@ test('isolated Control Center HTTP Settings -> Research Feedback uses exactly th
   assert.ok(!JSON.stringify((await request('/api/settings', null, auth)).value).includes('fake-key'));
 });
 
-for (const version of [0, 1, 2, 3]) test(`migration schema ${version}: fresh/legacy/current and idempotency`, async (t) => {
+for (const version of [0, 1, 2, 3, 4]) test(`migration schema ${version}: fresh/legacy/current and idempotency`, async (t) => {
   const f = await fixture(t, version);
   const before = await fs.readFile(f.configPath, 'utf8').catch(() => null);
   const result = await migrateApplicationConfig({ root: f.root, env: f.env });
-  assert.equal(result.migrated, version !== 3);
+  assert.equal(result.migrated, version !== 4);
   const after = await fs.readFile(f.configPath, 'utf8');
-  assert.equal(JSON.parse(after).schemaVersion, 3);
+  assert.equal(JSON.parse(after).schemaVersion, 4);
   assert.equal((await migrateApplicationConfig({ root: f.root, env: f.env })).migrated, false);
   assert.equal(await fs.readFile(f.configPath, 'utf8'), after);
-  if (version === 3) assert.equal(after, before);
-  else if (before) assert.deepEqual(JSON.parse(await fs.readFile(`${f.configPath}.legacy-backup`, 'utf8')), JSON.parse(before));
+  if (version === 4) assert.equal(after, before);
+  else if (before) assert.deepEqual(JSON.parse(await fs.readFile(`${f.configPath}.${version === 3 ? "v3-backup" : "legacy-backup"}`, 'utf8')), JSON.parse(before));
 });
 
 for (const mode of ['desktop', 'web', 'local']) test(`legacy ${mode}: source/RSS/review/Radar/Weekly/Email effective equivalence`, async (t) => {

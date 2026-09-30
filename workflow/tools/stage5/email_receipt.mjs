@@ -10,6 +10,10 @@ export const NOTIFICATION_RECEIPT_STATUSES = new Set(["pending", "accepted", "un
 
 export function recipientHash(recipient) { return createHash("sha256").update(String(recipient).trim().toLowerCase()).digest("hex"); }
 export function receiptPathFor(outputRoot) { return path.join(path.resolve(outputRoot), "stage5", "email_receipt.json"); }
+export function testNotificationReceiptPathFor(storeRoot, requestId) {
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(requestId || '')) throw new Error('NOTIFICATION_TEST_REQUEST_INVALID');
+  return path.join(path.resolve(storeRoot), 'tests', `${requestId}.json`);
+}
 export function notificationReceiptPathFor(storeRoot, receiptId) {
   if (!/^nr-[a-f0-9]{32}$/.test(String(receiptId || ""))) throw new Error("NOTIFICATION_RECEIPT_ID_INVALID");
   return path.join(path.resolve(storeRoot), `${receiptId}.json`);

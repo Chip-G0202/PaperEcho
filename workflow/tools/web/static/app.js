@@ -24,14 +24,14 @@ const settingGroups = [
   ['review', '模型与审阅', ['Models', 'Ranking / Review']],
   ['runtime', '运行路径', ['Runtime']],
   ['automation', '自动化', ['Radar', 'Weekly', 'Integrity']],
-  ['connections', '连接与通知', ['Zotero', 'Notifications', 'Credentials']],
+  ['connections', '通知与推送', ['Zotero', 'Notifications', 'Credentials']],
 ];
 const settingViews = {
   common: [['databases', '文献数据库', ['Sources']], ['rss', 'RSS 订阅', ['Sources', 'RSS']], ['period', '检索周期', ['General', 'Search']]],
   review: [['translation', '标题翻译', ['Models']], ['preference', '偏好学习', ['Models', 'Ranking / Review']]],
   runtime: [['path', '运行路径', ['Runtime']]],
   automation: [['radar', 'Daily Radar', ['Radar']], ['weekly', '周报', ['Weekly', 'Integrity']]],
-  connections: [['notifications', '通知', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
+  connections: [['notifications', '通知偏好', ['Notifications']], ['email', '邮箱', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
 };
 function el(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; }
 function button(text, action) { const node = el('button', text); node.type = 'button'; node.addEventListener('click', async () => {
@@ -540,7 +540,7 @@ function settingPlaceholder(setting) {
   const exact = {
     'translation.model': '例如：deepseek-flash', 'preference.model': '例如：deepseek-flash',
     'translation.endpoint': '例如：https://api.example.com/v1/chat/completions', 'preference.endpoint': '例如：https://api.example.com/v1/chat/completions',
-    'email.recipient': '例如：name@example.com', 'smtp.host': '例如：smtp.example.com', 'smtp.port': '例如：465', 'smtp.user': '例如：name@example.com',
+    'email.recipient': '例如：name@example.com', 'smtp.host': '例如：smtp.example.com', 'smtp.port': '例如：465', 'smtp.user': '例如：name@example.com', 'smtp.from': '默认使用登录邮箱',
     'web.userId': '例如：1234567', 'zotero.batch': '例如：25', 'pubmed.days': '例如：10', 'openalex.days': '例如：10',
     'runtime.projectRoot': '例如：C:\\Research\\PaperEcho', 'local.input': '例如：input', 'local.output': '例如：output', 'local.feedback': '例如：feedback', 'desktop.zoteroExe': '例如：C:\\Program Files\\Zotero\\zotero.exe',
     'translation.temperature': '例如：0.1', 'preference.temperature': '例如：0.1', 'translation.timeout': '例如：30000', 'preference.timeout': '例如：30000',
@@ -571,11 +571,11 @@ function appendCredentialEditor(section, item, onStatusChange = () => {}) {
   if (item.writable) {
     const input = el('input'); input.type = 'password'; input.autocomplete = 'new-password'; input.maxLength = 4096; input.placeholder = item.id === 'ZOTERO_API_KEY' ? '请输入 Zotero API Key' : '输入新值；原值不会回显';
     const editor = el('div', undefined, 'credential-editor'); editor.hidden = true;
-    const save = button(zoteroKey ? '保存 API Key' : '保存凭据', async () => { const value = input.value; await api('/api/credentials', { id: item.id, action: 'replace', value }); input.value = ''; item.configured = true; editor.hidden = true; sync(); onStatusChange(); notice.textContent = `凭据已替换。${item.reload}`; });
+    const save = button(zoteroKey ? '保存 API Key' : '保存凭据', async () => { const value = input.value; await api('/api/credentials', { id: item.id, action: 'replace', value }); input.value = ''; item.configured = true; editor.hidden = true; sync(); await onStatusChange(); notice.textContent = `凭据已替换。${item.reload}`; });
     const cancel = button('取消', () => { input.value = ''; editor.hidden = true; });
     editor.append(label(item.id === 'ZOTERO_API_KEY' ? '新的 Zotero Web API Key' : '新的凭据', input), save, cancel);
     configure = button('', () => { editor.hidden = false; input.focus(); });
-    clear = button(zoteroKey ? '清除' : '清除凭据', async () => { if (!confirm(`清除 ${item.id}？依赖该凭据的功能可能暂不可用。`)) return; await api('/api/credentials', { id: item.id, action: 'clear' }); input.value = ''; item.configured = false; editor.hidden = true; sync(); onStatusChange(); notice.textContent = `凭据已清除。${item.reload}`; });
+    clear = button(zoteroKey ? '清除' : '清除凭据', async () => { if (!confirm(`清除 ${item.id}？依赖该凭据的功能可能暂不可用。`)) return; await api('/api/credentials', { id: item.id, action: 'clear' }); input.value = ''; item.configured = false; editor.hidden = true; sync(); await onStatusChange(); notice.textContent = `凭据已清除。${item.reload}`; });
     const actions = el('div', undefined, 'actions credential-actions'); actions.append(configure, clear); row.append(actions, editor); sync();
   } else row.append(el('p', item.reason, 'muted'));
   section.append(row); return row;
@@ -599,6 +599,12 @@ function runtimePathOptions(selected, onChange) {
   }
   Object.defineProperty(fieldset, 'value', { get: () => fieldset.querySelector('input:checked')?.value });
   return fieldset;
+}
+const emailResultLabels = { success: '发送成功', failed: '发送失败', pending: '待恢复', none: '尚未发送', busy: '发送中', blocked: '暂时无法发送' };
+const emailErrorLabels = { authentication_failed: '认证失败', connection_failed: '连接失败', configuration_invalid: '配置错误', configuration_incomplete: '配置不完整', temporarily_unavailable: '暂时无法发送', test_in_progress: '测试通知正在发送' };
+function emailDeliveryText(delivery) {
+  const time = delivery.at && Number.isFinite(Date.parse(delivery.at)) ? ` · ${new Date(delivery.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}` : '';
+  return `最近发送：${emailResultLabels[delivery.status] || '尚未发送'}${delivery.kind === 'test' ? '（测试通知）' : ''}${time}${delivery.error ? ` · ${emailErrorLabels[delivery.error] || '暂时无法发送'}` : ''}`;
 }
 async function settings(group = settingsGroup, view = settingsView) {
   settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common'; settingsView = view;
@@ -644,16 +650,24 @@ async function settings(group = settingsGroup, view = settingsView) {
       const row = el('div', undefined, 'feature-dependent capability-status'); const status = el('p'); syncFeatureStatus = () => { status.textContent = typeof featureOptions.statusText === 'function' ? featureOptions.statusText() : featureOptions.statusText; }; syncFeatureStatus(); row.append(el('strong', '当前配置状态'), status); container.append(row); dependentRows.push({ row });
     }
     for (const item of featureOptions.credentials || []) {
-      const row = appendCredentialEditor(container, item, syncFeatureStatus); if (row) { row.className += ' feature-dependent'; dependentRows.push({ row }); }
+      const row = appendCredentialEditor(container, item, async () => { await featureOptions.refresh?.(); syncFeatureStatus(); }); if (row) { row.className += ' feature-dependent'; dependentRows.push({ row }); }
     }
+    if (featureOptions.extraContent) { container.append(featureOptions.extraContent); dependentRows.push({ row: featureOptions.extraContent }); }
     if (featureToggles.length) {
       const detailsId = `feature-details-${crypto.randomUUID()}`;
+      let editWhileDisabled = false;
       const syncFeatureState = () => {
-        const expanded = featureToggles.some((input) => input.checked); container.dataset.featureCollapsed = String(!expanded);
+        const expanded = featureToggles.some((input) => input.checked) || editWhileDisabled; container.dataset.featureCollapsed = String(!expanded);
         for (const input of featureToggles) { input.setAttribute('aria-controls', detailsId); input.setAttribute('aria-expanded', String(expanded)); }
         dependentRows.forEach(({ row, input }, index) => { if (index === 0) row.id ||= detailsId; row.hidden = !expanded; if (input) input.disabled = !expanded; });
       };
-      for (const input of featureToggles) input.addEventListener('change', syncFeatureState); syncFeatureState();
+      for (const input of featureToggles) input.addEventListener('change', () => { editWhileDisabled = false; syncFeatureState(); }); syncFeatureState();
+      if (featureOptions.allowDisabledEditing) {
+        const diagnostic = button('配置与测试邮箱（不启用通知）', () => { editWhileDisabled = !editWhileDisabled; syncFeatureState(); diagnostic.setAttribute('aria-expanded', String(editWhileDisabled)); });
+        const syncDiagnostic = () => { diagnostic.hidden = featureToggles.some((input) => input.checked); diagnostic.setAttribute('aria-expanded', String(editWhileDisabled)); };
+        for (const input of featureToggles) input.addEventListener('change', syncDiagnostic); syncDiagnostic();
+        diagnostic.setAttribute('aria-expanded', 'false'); container.append(diagnostic);
+      }
     }
     if (unavailable) container.append(el('p', '当前配置未提供此组的部分常用字段；已有值仍由原配置维护。', 'meta'));
     if (!saves.length) return;
@@ -667,7 +681,7 @@ async function settings(group = settingsGroup, view = settingsView) {
         else if (entry.setting.type === 'boolean') { entry.setting.value = entry.input.checked; entry.setting.sourceEntry.value = entry.input.checked; if (entry.setting.stateText) entry.setting.stateText.textContent = entry.input.checked ? '当前已开启' : '当前已关闭'; }
         else if (value !== undefined && entry.input.dataset?.replacement === 'true') { entry.setting.value = value; entry.setting.sourceEntry.value = value; entry.input.value = ''; if (entry.setting.currentValue) entry.setting.currentValue.textContent = `当前：${currentSettingText(entry.setting)}`; }
       }
-      syncFeatureStatus();
+      await featureOptions.refresh?.(); syncFeatureStatus();
       notice.textContent = `“${saveName}”已保存，下次运行生效。`;
     }); save.className = 'primary'; actions.append(save); container.append(actions);
   };
@@ -726,14 +740,34 @@ async function settings(group = settingsGroup, view = settingsView) {
     sync();
     const actions = el('div', undefined, 'actions group-save section-actions'); save = button('', async () => { const selected = options.value; if (!selected) throw new Error('请先选择一种运行路径。'); const selectedRecords = records.filter((entry) => entry.pathName === selected || entry.pathName === 'shared' && selected !== 'local'); const updates = [{ id: 'runtime.mode', value: selected }]; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); if (record.required && value === undefined && !String(record.entry.value || '').trim()) throw new Error(`请先填写${record.entry.description}，原设置未改变。`); if (record.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); if (value !== undefined) updates.push({ id: record.entry.id, value }); } await api('/api/settings', { updates }); mode.value = selected; mode.ownerPresent = true; current.textContent = `当前运行路径：${runtimePaths[selected].title}`; current.className = 'runtime-current'; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); record.entry.ownerPresent = true; if (value !== undefined) { record.entry.value = value; if (record.input.dataset?.replacement === 'true') record.input.value = ''; } if (record.currentValue) record.currentValue.textContent = `当前：${currentSettingText(record.entry)}`; } panels[selected].querySelector('.runtime-readiness').textContent = readinessFor[selected](); notice.textContent = selected === 'web' ? 'Zotero Web 配置已保存；下次运行生效。连接状态仍由运行前检测确认。' : '“运行路径”已保存，下次运行生效；连接与路径可用性仍由运行前检查确认。'; }); save.className = 'primary'; actions.append(save); section.append(actions); sync(); body.append(section); return;
   }
-  if (settingsGroup === 'connections' && settingsView === 'notifications') {
+  if (settingsGroup === 'connections' && ['notifications', 'email'].includes(settingsView)) {
+    const channel = (await api('/api/notifications')).channels.find((entry) => entry.id === 'email');
+    const credential = channel.credential;
+    const readinessLabels = { configured: '配置完整', incomplete: '配置不完整', invalid: '配置错误' };
+    const channelStatus = el('p', undefined, 'channel-status'); const recent = el('p', undefined, 'meta delivery-status');
+    const syncStatus = () => { channelStatus.textContent = `${channel.enabled ? '已启用' : '未启用'} · ${readinessLabels[channel.readiness]}`; recent.textContent = emailDeliveryText(channel.lastDelivery); };
+    const refresh = async () => { const next = (await api('/api/notifications')).channels.find((entry) => entry.id === 'email'); Object.assign(channel, next); Object.assign(credential, next.credential); syncStatus(); };
+    syncStatus();
+    const emailSection = el('section', undefined, 'settings-section section channel-card');
+    emailSection.append(el('h3', '邮箱', 'section-header'), channelStatus, el('p', '关闭后保留配置和密码，Radar 与周报仍正常运行。', 'meta'), recent);
     const emailEntries = data.filter((entry) => entry.category === 'Notifications' && (entry.id.startsWith('email.') || entry.id.startsWith('smtp.')));
-    const credential = credentials.find((entry) => entry.id === 'SMTP_PASS');
-    const emailStatus = () => { const missing = ['email.recipient', 'smtp.host', 'smtp.user'].filter((id) => !String(emailEntries.find((entry) => entry.id === id)?.value || '').trim()).map((id) => ({ 'email.recipient': '收件人', 'smtp.host': 'SMTP 主机', 'smtp.user': 'SMTP 用户名' })[id]); if (!credential?.configured) missing.push('SMTP 密码'); return missing.length ? `启用邮件后，还需要完成以下配置：${missing.join('、')}。` : '邮件参数已配置；真实投递能力仍由运行前检查确认。'; };
-    const emailSection = el('section', undefined, 'settings-section section'); emailSection.append(el('h3', '报告邮件', 'section-header'), el('p', '启用后使用下方 SMTP 配置发送报告；关闭不会清空已有参数。', 'meta'));
-    appendSettingsControls(emailSection, emailEntries, '报告邮件', '保存报告邮件', ['email.enabled'], { statusText: emailStatus, credentials: credential ? [credential] : [] }); body.append(emailSection);
-    const reminderEntries = data.filter((entry) => entry.category === 'Notifications' && entry.id.startsWith('notification.'));
-    if (reminderEntries.length) { const reminderSection = el('section', undefined, 'settings-section section'); reminderSection.append(el('h3', '运行提醒', 'section-header'), el('p', '失败与健康提醒沿用现有 Stage5 通知 owner，不在此处更改投递逻辑。', 'meta')); appendSettingsControls(reminderSection, reminderEntries, '运行提醒'); body.append(reminderSection); }
+    if (settingsView === 'notifications') {
+      appendSettingsControls(emailSection, emailEntries.filter((entry) => entry.id === 'email.enabled'), '邮箱渠道', '保存邮箱开关', ['email.enabled'], { refresh });
+      emailSection.append(button('邮箱配置与测试', () => navigate('settings/connections/email'))); body.append(emailSection);
+      const preferences = el('section', undefined, 'settings-section section'); preferences.append(el('h3', '通知偏好', 'section-header'), el('p', '选择允许通知的事件。只有开启邮箱渠道后才会自动发送；Daily Radar 仍只通知当前重要推荐。', 'meta'));
+      appendSettingsControls(preferences, data.filter((entry) => entry.id.startsWith('notification.')), '通知偏好', '保存通知偏好'); body.append(preferences);
+    } else {
+      const emailStatus = () => { const names = { 'email.recipient': '收件人', 'smtp.host': '邮件服务器', 'smtp.user': '登录账号', 'smtp.password': '邮箱密码' }; return channel.readiness === 'configured' ? '配置完整。连接与实际发送结果请通过测试通知确认。' : channel.readiness === 'invalid' ? '配置错误，请检查邮箱地址和服务器参数。' : `配置不完整，还需填写：${channel.missing.map((id) => names[id] || '邮箱设置').join('、')}。`; };
+      const testPanel = el('div', undefined, 'notification-test feature-dependent');
+      const testState = el('p', '测试只检查邮箱发送，不改变通知开关或论文处理结果。', 'meta'); testState.setAttribute('role', 'status');
+      let requestId = crypto.randomUUID();
+      const test = button('发送测试通知', async () => {
+        test.textContent = '发送中…'; testState.textContent = '正在发送测试通知…';
+        try { const result = await api('/api/notifications/test', { channel: 'email', requestId }); testState.textContent = emailErrorLabels[result.error] || emailResultLabels[result.status] || '暂时无法发送'; notice.textContent = testState.textContent; await refresh(); if (result.status === 'success') requestId = crypto.randomUUID(); }
+        finally { test.textContent = '发送测试通知'; }
+      }); testPanel.append(test, testState, el('p', '测试使用已保存的设置；修改邮箱参数后请先保存。', 'meta'));
+      appendSettingsControls(emailSection, emailEntries, '邮箱配置', '保存邮箱配置', ['email.enabled'], { statusText: emailStatus, credentials: [credential], refresh, extraContent: testPanel, allowDisabledEditing: true }); body.append(emailSection);
+    }
     return;
   }
   for (const group of active[2]) {

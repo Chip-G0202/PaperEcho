@@ -9,8 +9,29 @@ import { finishRunGroup, runGroupPath, startRunGroup } from "../tools/lib/runtim
 import { loadRadarUrgentQueue, enqueueRadarUrgent, recordRadarNotificationOutcome, selectRadarNotificationCandidates } from "../tools/radar/state.mjs";
 import { runZoteroLiteratureFilter } from "../tools/stage0/main.mjs";
 import { sendRadarAggregateNotification } from "../tools/stage5/radar_notification.mjs";
+import { createRunRecoveryCoordinator } from '../tools/recovery/run_recovery.mjs';
 
 const urgent = (extra = {}) => ({ title: "Urgent", journal: "Journal", doi: "10.1000/notify", url: "https://doi.org/10.1000/notify", grade: "A", rule_grade: "A", final_grade: "A", llm_review_grade: "A", semantic_grade: "A", semantic_source: "llm_title_review", semantic_reason: "confirmed", ...extra });
+
+for (const disabledEnv of [{ PAPERECHO_EMAIL_ENABLED: 'false' }, { PAPERECHO_NOTIFY_RADAR: 'false' }]) test('Radar business completes while disabled notifications create no pending recovery', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'radar-disabled-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const now = new Date('2026-09-30T07:00:00Z'); const researchRoot = path.join(root, 'review_results'); const reviewRoot = path.join(researchRoot, '文献评价');
+  const coordinator = await createRunRecoveryCoordinator({ runRoot: path.join(reviewRoot, 'runs'), runId: 'disabled-radar', mode: 'desktop', profile: 'radar', launcherId: 'fixture', configHash: 'a'.repeat(64), inputHash: 'b'.repeat(64) });
+  const auditPath = path.join(root, 'radar_audit.json'); await fs.writeFile(auditPath, '{}');
+  let attempts = 0;
+  const report = await runZoteroLiteratureFilter({
+    config: { platform: 'win32', repoRoot: root, projectRoot: root, researchRoot, reviewRoot, pipelineDir: path.join(researchRoot, 'pipeline/fixture'), now },
+    recoveryCoordinator: coordinator, runId: 'disabled-radar', triggerMode: 'manual', runMode: { isManualOrForce: true }, clock: () => now,
+    env: { PAPERECHO_RUN_PROFILE: 'radar', PAPERFLOW_REPORT_TO: 'reader@example.test', ...disabledEnv }, argv: ['--email=reader@example.test'],
+    readJson: async () => ({}), writeJson: async () => {}, writeReport: async () => {},
+    statArtifact: async (file) => ({ exists: file === auditPath, mtimeMs: now.getTime() }),
+    runStage: async (stage) => { assert.equal(stage.name, 'stage1'); return { exitCode: 0, data: { triagedAll: [urgent()], radar: { auditPath, audit: { candidateCount: 1, zoteroWriteCount: 0, xlsxWriteCount: 0 }, urgentItems: [urgent()] } } }; },
+    radarStage5Runner: (input) => sendRadarAggregateNotification({ ...input, transport: async () => { attempts++; throw new Error('disabled transport'); } }),
+  });
+  assert.equal(report.status, 'completed'); assert.equal(report.steps.stage5_notification.status, 'skipped'); assert.equal(attempts, 0);
+  assert.equal(coordinator.store.ledger.operations.some((operation) => operation.type === 'notification'), false);
+  assert.equal(coordinator.store.ledger.stages.stage1.status, 'verified'); assert.equal(coordinator.store.ledger.stages.stage5_notification.status, 'verified');
+});
 
 test("Radar Stage2/Stage3 capability boundary rejects every Zotero write path", async () => {
   const previous = process.env.PAPERECHO_RUN_PROFILE;

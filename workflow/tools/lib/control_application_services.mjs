@@ -11,8 +11,9 @@ import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 import { ReviewQueryService } from './control_review_query_service.mjs';
 import { buildRuntimeConfig } from './runtime_config.mjs';
 import { ControlScheduleStatusService } from './control_schedule_status_service.mjs';
+import { NotificationChannelService } from './control_notification_service.mjs';
 
-export function createControlServices({ root, reviewRoot, env = process.env, llmClient = null, context = buildRuntimeConfig({ cwd: root, env, argv: [] }) } = {}) {
+export function createControlServices({ root, reviewRoot, env = process.env, llmClient = null, notificationTransport, context = buildRuntimeConfig({ cwd: root, env, argv: [] }) } = {}) {
   reviewRoot ||= context.reviewRoot;
   env = { ...(context.env || env), PAPERECHO_APPLICATION_CONFIG: context.configPath || path.join(root, 'config', 'paperecho.config.json') };
   const secrets = new SecretService({ root, env });
@@ -50,5 +51,6 @@ export function createControlServices({ root, reviewRoot, env = process.env, llm
   });
   const review = new ReviewQueryService({ root, reviewRoot, feedback, rules, context });
   const schedule = new ControlScheduleStatusService({ context: { ...context, reviewRoot }, config });
-  return { feedback, config, rules, secrets, review, schedule };
+  const notifications = new NotificationChannelService({ config, secrets, review, context, env, transport: notificationTransport });
+  return { feedback, config, rules, secrets, review, schedule, notifications };
 }

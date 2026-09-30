@@ -12,6 +12,7 @@ import { buildLocalRuntimeConfig } from "../lib/runtime_config.mjs";
 import { generateLiteratureTitleTranslations } from "../lib/title_translation_generation.mjs";
 import { resolveStage5Request, runStage5Notification } from "../stage5/main.mjs";
 import { receiptPathFor, recipientHash } from "../stage5/email_receipt.mjs";
+import { emailDeliveryPolicy } from '../notification/policy.mjs';
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
 import { createRunRecoveryCoordinator, resumeRunFromLedger } from "../recovery/run_recovery.mjs";
 import { buildLocalRecoveryReconcilers } from "../recovery/local_reconciliation.mjs";
@@ -63,6 +64,7 @@ function feedbackRows(events, repository) {
 }
 
 export async function runLocalPipeline(options = {}, dependencies = {}) {
+  if (!emailDeliveryPolicy('weekly', { env: dependencies.env || process.env }).required) options = { ...options, recipient: '' };
   const runId = options.runId || `local-${new Date().toISOString().replace(/[-:.]/g, "")}-${randomUUID().slice(0, 8)}`;
   const recoveryCoordinator = options.recoveryCoordinator || null;
   const startedAt = new Date().toISOString();
@@ -276,10 +278,10 @@ export async function runLocalPipeline(options = {}, dependencies = {}) {
       ? await recoveryCoordinator.prepareFileOperation({ type: "notification", targetId: recipientHash(options.recipient), targetPath: receiptPathFor(stage5StateRoot), input: { runId, notificationType: "run_summary", artifactHash: recoveryCoordinator.store.ledger.artifact.hash }, retryable: false, intent: { notificationType: "run_summary", eventEpoch: runId } })
       : null;
     if (!options.recipient) {
-      stage5Notification = await stage5Runner({ runSummary, literatureItems, recipient: "", forceResend: options.forceResend, config: { runStateRoot: stage5StateRoot } });
+      stage5Notification = await stage5Runner({ runSummary, literatureItems, recipient: "", forceResend: options.forceResend, config: { env: dependencies.env || process.env, runStateRoot: stage5StateRoot } });
       timing.skip("stage5_notification", stage5Notification.reason);
     } else {
-      stage5Notification = await timing.run("stage5_notification", () => stage5Runner({ runSummary, literatureItems, recipient: options.recipient, forceResend: options.forceResend, config: { runStateRoot: stage5StateRoot, ledgerOperationId: notificationOperation?.idempotencyKey || "" } }));
+      stage5Notification = await timing.run("stage5_notification", () => stage5Runner({ runSummary, literatureItems, recipient: options.recipient, forceResend: options.forceResend, config: { env: dependencies.env || process.env, runStateRoot: stage5StateRoot, ledgerOperationId: notificationOperation?.idempotencyKey || "" } }));
       if (stage5Notification.status !== "sent" && !(stage5Notification.status === "skipped" && stage5Notification.reason === "already_sent")) throw new Error(`STAGE5_NOTIFICATION_${String(stage5Notification.status || "failed").toUpperCase()}:${stage5Notification.reason}`);
     }
     if (notificationOperation && (stage5Notification.status === "sent" || (stage5Notification.status === "skipped" && stage5Notification.reason === "already_sent"))) {

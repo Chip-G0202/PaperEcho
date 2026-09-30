@@ -140,7 +140,7 @@ export function buildExecutionPlan(options, { env = process.env, repoRoot = REPO
   childEnv.PAPERECHO_RUN_ID = runId;
   const runtime = options.mode === "local" ? null : buildRuntimeConfig({ cwd: repoRoot, env, argv: [process.execPath, entry, ...args] });
   const runRoot = options.mode === "local" ? path.join(options.outputRoot, "runs") : path.join(runtime.reviewRoot, "runs");
-  return { entry, args, childEnv, cwd: repoRoot, runRoot, runId, emailRequested: Boolean(resolveStage5Request(options.email ? ["--email", options.email] : [], env).recipient) };
+  return { entry, args, childEnv, cwd: repoRoot, runRoot, runId, emailRequested: Boolean(resolveStage5Request(options.email ? ["--email", options.email] : [], env, options.profile === "radar" ? "radar" : "weekly").recipient) };
 }
 
 export async function runPreflight(options, dependencies = {}) {
@@ -240,7 +240,7 @@ export async function runPreflight(options, dependencies = {}) {
     }
   }
 
-  const stage5Request = resolveStage5Request(options.email ? ["--email", options.email] : [], env);
+  const stage5Request = resolveStage5Request(options.email ? ["--email", options.email] : [], env, options.profile === "radar" ? "radar" : "weekly");
   const emailRequested = Boolean(stage5Request.recipient) && !options.resume;
   if (emailRequested) {
     const smtp = emailTransportConfig(env);

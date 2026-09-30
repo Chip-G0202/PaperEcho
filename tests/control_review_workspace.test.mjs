@@ -377,12 +377,47 @@ test('email toggle owns its configuration panel and preserves fields while off',
     { category: 'Notifications', available: true, id: 'smtp.user', description: 'SMTP 用户名', type: 'string', value: 'old@example.test', validation: {} },
     { category: 'Notifications', available: true, id: 'notification.failure', description: '运行失败时通知', type: 'boolean', value: true, validation: {} },
   ];
-  app.setApi(async (url) => url === '/api/credentials' ? [{ id: 'SMTP_PASS', configured: true, writable: true }] : settings);
-  await app.settings('connections', 'notifications'); const sections = app.main.querySelectorAll('.settings-section'); const email = sections[0];
-  assert.match(email.textContent, /报告邮件.*发送报告邮件.*SMTP 主机.*邮件参数已配置/);
+  const credential = { id: 'SMTP_PASS', configured: true, writable: true };
+  const channel = { id: 'email', enabled: false, readiness: 'configured', missing: [], credential, lastDelivery: { status: 'none' } };
+  app.setApi(async (url) => url === '/api/credentials' ? [credential] : url === '/api/notifications' ? { channels: [channel] } : settings);
+  await app.settings('connections', 'email'); const email = app.main.querySelector('.channel-card');
+  assert.match(email.textContent, /邮箱.*未启用.*配置完整.*SMTP 主机.*连接与实际发送结果请通过测试通知确认/);
   assert.equal(email.querySelectorAll('.feature-dependent').every((row) => row.hidden), true);
   const toggle = email.querySelector('.feature-toggle').querySelector('input'); await toggle.click();
-  assert.equal(email.querySelectorAll('.feature-dependent').every((row) => !row.hidden), true); assert.match(sections[1].textContent, /运行提醒/);
+  assert.equal(email.querySelectorAll('.feature-dependent').every((row) => !row.hidden), true);
+  await toggle.click(); assert.equal(email.querySelectorAll('.feature-dependent').every((row) => row.hidden), true);
+  assert.equal(settings.find((entry) => entry.id === 'email.recipient').value, 'old@example.test');
+  await byText(email, '配置与测试邮箱（不启用通知）').click();
+  assert.equal(toggle.checked, false); assert.equal(email.querySelectorAll('.feature-dependent').every((row) => !row.hidden), true);
+});
+test('notification UI saves event preferences separately and protects test in-flight state', async () => {
+  const app = ui(); const calls = []; const credential = { id: 'SMTP_PASS', configured: true, writable: true };
+  const channel = { id: 'email', enabled: true, readiness: 'configured', missing: [], credential, lastDelivery: { status: 'none' } };
+  const settings = [
+    { category: 'Notifications', available: true, id: 'email.enabled', description: '启用邮箱通知', type: 'boolean', value: true, validation: {} },
+    ...['radar', 'weekly'].map((event) => ({ category: 'Notifications', available: true, id: `notification.${event}`, description: event === 'radar' ? 'Daily Radar 推荐通知' : '周报完成通知', type: 'boolean', value: true, validation: {} })),
+    { category: 'Notifications', available: true, id: 'smtp.host', description: 'SMTP 主机', type: 'string', value: 'smtp.example.test', validation: {} },
+  ];
+  let release;
+  app.setApi(async (url, value) => {
+    if (url === '/api/credentials') return [credential];
+    if (url === '/api/notifications') return { channels: [channel] };
+    if (!value) return settings;
+    calls.push([url, value]);
+    if (url === '/api/notifications/test') return new Promise((resolve) => { release = () => resolve({ status: 'success' }); });
+    throw new Error('保存失败，请重试');
+  });
+  await app.settings('connections', 'notifications');
+  assert.doesNotMatch(app.main.textContent, /QQ|微信|飞书|Weekly 完成后发送邮件/);
+  await byText(app.main, '保存通知偏好').click();
+  assert.deepEqual(Array.from(calls[0][1].updates, (entry) => entry.id), ['notification.radar', 'notification.weekly']);
+  app.main.replaceChildren(); await app.settings('connections', 'email');
+  const host = app.main.querySelectorAll('input').find((input) => input.type === 'text'); host.value = 'new.example.test';
+  await byText(app.main, '保存邮箱配置').click(); assert.equal(host.value, 'new.example.test'); assert.match(app.main.textContent, /保存失败/);
+  const button = byText(app.main, '发送测试通知'); const pending = button.click();
+  await new Promise((resolve) => setImmediate(resolve)); assert.equal(button.disabled, true); assert.equal(button.textContent, '发送中…');
+  await button.click(); assert.equal(calls.filter(([url]) => url === '/api/notifications/test').length, 1);
+  release(); await pending; assert.equal(button.disabled, false); assert.equal(button.textContent, '发送测试通知'); assert.match(app.main.textContent, /发送成功/);
 });
 test('automation switch saves through its owner and updates visible state', async () => {
   const app = ui(); const calls = []; const settings = [{ category: 'Radar', available: true, id: 'radar.enabled', description: '启用 Daily Radar', type: 'boolean', value: false, validation: {} }];

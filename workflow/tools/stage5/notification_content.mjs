@@ -59,3 +59,6 @@ export function buildWeeklyNotificationContent(runSummary, options = {}) {
     sections: { overview: view.overview, integrityLines, warnings: view.warnings, remainingWarnings: view.remainingWarnings },
   };
 }
+export function buildTestNotificationContent({ generatedAt }) {
+  return { eventType: 'notification_test', title: 'PaperEcho 通知测试', generatedAt, message: '通知测试成功' };
+}

@@ -16,6 +16,7 @@ import { buildExecutionPlan, runPreflight } from "./preflight.mjs";
 import { extractLastJsonObject, validateProductionResult } from "./result_validation.mjs";
 import { notifyRunFailure } from "../notification/failure_notifier.mjs";
 import { processHealthNotifications } from "../notification/health_notifier.mjs";
+import { emailDeliveryPolicy } from '../notification/policy.mjs';
 
 const SECRET_NAMES = ["SMTP_PASS", "ZOTERO_API_KEY", "TITLE_TRANSLATION_API_KEY", "PREFERENCE_LEARNING_API_KEY", "EASYSCHOLAR_SECRET_KEY"];
 
@@ -153,9 +154,9 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     stdout.write(`${JSON.stringify(result)}\n`);
     return result.exitCode;
   }
-  const notificationSchemaV2 = String(resolved.env.PAPERECHO_CONFIG_SCHEMA_VERSION || "") === "2";
+  const notificationSchemaSupported = Number(resolved.env.PAPERECHO_CONFIG_SCHEMA_VERSION || 0) >= 2 && emailDeliveryPolicy('failure', { env: resolved.env }).required;
   const recipient = String(options.email || resolved.env.PAPERFLOW_REPORT_TO || resolved.env.NOTIFICATION_EMAIL || "").trim();
-  if (processResult.code !== 0 && notificationSchemaV2 && /^(1|true|yes|on)$/i.test(String(resolved.env.PAPERECHO_FAILURE_NOTIFIER_ENABLED || ""))) {
+  if (processResult.code !== 0 && notificationSchemaSupported && /^(1|true|yes|on)$/i.test(String(resolved.env.PAPERECHO_FAILURE_NOTIFIER_ENABLED || ""))) {
     const stage = failedStage(productionReport);
     if (stage !== "stage5") {
       try {
@@ -165,7 +166,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
         stdout.write(`${JSON.stringify({ type: "failure_notification", status: "failed", reason: "notifier_internal_error" })}\n`);
       }
     }
-  } else if (processResult.code === 0 && notificationSchemaV2 && /^(1|true|yes|on)$/i.test(String(resolved.env.PAPERECHO_HEALTH_NOTIFIER_ENABLED || ""))) {
+  } else if (processResult.code === 0 && notificationSchemaSupported && /^(1|true|yes|on)$/i.test(String(resolved.env.PAPERECHO_HEALTH_NOTIFIER_ENABLED || ""))) {
     try {
       const health = await (dependencies.processHealthNotificationsImpl || processHealthNotifications)({ runRoot: plan.runRoot, runId: plan.runId, observations: productionReport?.notification_health_observations || [], recipient, env: resolved.env, fsApi: dependencies.fsApi });
       stdout.write(`${JSON.stringify({ type: "health_notifications", status: health.status, eventCount: health.events?.length || 0, maxNotifications: health.maxNotifications || 0 })}\n`);
