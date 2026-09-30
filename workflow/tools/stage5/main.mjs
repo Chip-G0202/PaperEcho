@@ -55,7 +55,7 @@ export async function runStage5Notification({ runSummary, literatureItems = [], 
     const stateRoot = path.resolve(config.runStateRoot || runSummary.outputRoot);
     const active = ['email', 'qq'].some(channel => channelDeliveryPolicy(channel, 'weekly', { env: config.env || process.env }).required);
     const overview = active ? await generateLiteratureOverview({ runSummary, literatureItems, llmClient: config.llmClient || null, runtime: config.llmRuntime || null, fsApi, stateRoot, legacyStateRoot: runSummary.outputRoot }) : { overview: '' };
-    const content = buildWeeklyNotificationContent(runSummary, { overview: overview.overview });
+    const content = buildWeeklyNotificationContent(runSummary, { overview: overview.overview, literatureItems });
     return deliverBusinessChannels({ content, env: config.env || process.env, runStateRoot: stateRoot, recoveryCoordinator: config.recoveryCoordinator,
       qqTransport: config.qqTransport, fsApi, clock: config.clock,
       emailDelivery: () => runEmailStage5Notification({ runSummary, literatureItems, recipient, forceResend, transport, config: { ...config, content } }) });
@@ -91,7 +91,7 @@ async function runEmailStage5Notification({ runSummary, literatureItems = [], re
       if (!mailConfig.configured) throw Object.assign(new Error(mailConfig.error), { category: mailConfig.missing.length ? "transport_not_configured" : "smtp_config_invalid" });
     }
     const overview = config.content ? null : await generateLiteratureOverview({ runSummary, literatureItems, llmClient: config.llmClient || null, runtime: config.llmRuntime || null, fsApi, stateRoot, legacyStateRoot: runSummary.outputRoot });
-    const content = config.content || buildWeeklyNotificationContent(runSummary, { overview: overview.overview });
+    const content = config.content || buildWeeklyNotificationContent(runSummary, { overview: overview.overview, literatureItems });
     const report = renderWeeklyReport(content);
     const delivery = await deliverReliableNotification({
       receiptPath,

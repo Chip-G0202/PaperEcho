@@ -1,26 +1,32 @@
+import { createHash } from 'node:crypto';
 function modeLabel(mode) { return ({ desktop: "Desktop", web: "Web", local: "Local" })[mode] || "PaperEcho"; }
 function dateText(summary) { return String(summary.finishedAt || summary.startedAt || "").slice(0, 10); }
 function warningText(value) { return String(value || "").replace(/[A-Za-z]:[\\/][^\s]+|\/(?:Users|home)\/[^\s]+/g, "[路径已隐藏]").replace(/\s+/g, " ").trim().slice(0, 120); }
 function hasNumber(value) { return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value)); }
 
 // Pure projection of existing business results. Never supplies a new clock value.
-export function buildRadarNotificationContent(items = [], { runId = "", audit = {} } = {}) {
-  const papers = items.filter((item) => item && ["A", "B", "C"].includes(String(item.final_grade || item.grade || "").slice(0, 1).toUpperCase())).map((item) => ({
+function literatureContent(items = []) {
+  return items.filter((item) => item && ["A", "B", "C"].includes(String(item.final_grade || item.grade || "").slice(0, 1).toUpperCase()) && item.excluded !== true).map((item) => ({
+    id: String(item.itemKey || item.id || item.stable_id || item.doi || item.pmid || item.pmcid || createHash('sha256').update(JSON.stringify([item.title, item.year, item.journal])).digest('hex')),
     title: String(item.title || "未提供标题"),
     translatedTitle: String(item.translatedTitle || item.translated_title || item.title_translation || item.shortTitle || ""),
     journal: String(item.journal || item.publicationTitle || item.source || item.source_type || ""),
     year: String(item.year || ""),
+    source: String(item.source_type || item.source || ''),
     grade: String(item.final_grade || item.grade).slice(0, 1).toUpperCase(),
-    reason: String(item.semantic_reason || item.grade_reason || ""),
+    reason: String(item.recommendation_reason || item.semantic_reason || item.grade_reason || ""),
     url: /^https?:\/\/[^\s]+$/i.test(String(item.url || "")) ? String(item.url) : "",
     identifier: item.doi ? `DOI: ${item.doi}` : item.pmid ? `PMID: ${item.pmid}` : "",
   }));
+}
+export function buildRadarNotificationContent(items = [], { runId = "", audit = {} } = {}) {
+  const papers = literatureContent(items);
   const summary = [];
   if (hasNumber(audit.candidateCount)) summary.push({ label: "本轮候选", value: Number(audit.candidateCount) });
   summary.push({ label: "本封推荐", value: papers.length });
   summary.push({ label: "A 级文献", value: papers.filter((item) => item.grade === "A").length });
   return {
-    eventType: "radar_completed", title: "今日文献速览", generatedAt: String(audit.generatedAt || ""), date: String(audit.generatedAt || "").slice(0, 10), runId: String(runId),
+    eventId: String(runId), eventType: "radar_completed", title: "今日文献速览", generatedAt: String(audit.generatedAt || ""), date: String(audit.generatedAt || "").slice(0, 10), runId: String(runId),
     subject: `PaperEcho Daily Radar：${papers.length} 篇文献`, summary, items: papers,
   };
 }
@@ -54,7 +60,9 @@ export function buildWeeklyNotificationContent(runSummary, options = {}) {
     Number(view.integrity.unresolvedConflicts) > 0 ? `未解决证据冲突：${Number(view.integrity.unresolvedConflicts)} 项` : "",
   ].filter(Boolean) : [];
   return {
-    eventType: "weekly_completed", title: "文献流程已完成", generatedAt: String(runSummary.finishedAt || runSummary.startedAt || ""), date: view.date, runId: view.runId, subject: view.subject, mode: view.mode,
+    eventId: String(view.runId || ''), eventType: "weekly_completed", title: "文献流程已完成", generatedAt: String(runSummary.finishedAt || runSummary.startedAt || ""), date: view.date, period: { start: String(runSummary.startedAt || '').slice(0, 10), end: view.date }, runId: view.runId, subject: view.subject, mode: view.mode,
+    // Highlights are the existing business order's prefix, never a new ranking.
+    items: literatureContent(options.literatureItems).slice(0, 5),
     summary: { created: view.created, grades: view.grades, gradesAvailable: view.gradesAvailable },
     sections: { overview: view.overview, integrityLines, warnings: view.warnings, remainingWarnings: view.remainingWarnings },
   };

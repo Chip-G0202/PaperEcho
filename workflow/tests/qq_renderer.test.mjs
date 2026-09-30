@@ -4,7 +4,7 @@ import { renderQqNotification, QQ_TEXT_BUDGET_BYTES } from '../tools/notificatio
 import { buildRadarNotificationContent, buildWeeklyNotificationContent, buildTestNotificationContent } from '../tools/stage5/notification_content.mjs';
 import { createQqTransport } from '../tools/notification/qq_transport.mjs';
 
-test('QQ Radar projects shared content with grade priority and leaves input unchanged', () => {
+test('QQ Radar preserves canonical order and leaves input unchanged', () => {
   const content = buildRadarNotificationContent([
     { title: 'B title', final_grade: 'B' }, { title: 'English title', translatedTitle: '中文标题 🧪', journal: 'Journal', year: 2026, final_grade: 'A', grade_reason: '推荐理由' },
   ], { runId: 'fixture', audit: { generatedAt: '2026-09-30T12:00:00Z', candidateCount: 10 } });
@@ -12,7 +12,7 @@ test('QQ Radar projects shared content with grade priority and leaves input unch
   const result = renderQqNotification(content);
   assert.equal(result.msg_type, 0);
   for (const text of ['PaperEcho / Daily Radar', '2026-09-30', '本轮候选：10', '本封推荐：2', 'English title', '中文标题 🧪', 'Journal / 2026', '[A]', '推荐理由']) assert.ok(result.content.includes(text), text);
-  assert.ok(result.content.indexOf('[A]') < result.content.indexOf('[B]'));
+  assert.ok(result.content.indexOf('[B]') < result.content.indexOf('[A]'));
   assert.deepEqual(content, before);
   assert.deepEqual(renderQqNotification(content), result);
 });

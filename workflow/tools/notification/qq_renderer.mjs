@@ -21,10 +21,10 @@ export function renderQqNotification(content) {
   if (content.eventType === 'radar_completed') {
     heading = 'PaperEcho / Daily Radar';
     summary = (content.summary || []).map(item => `${bounded(item.label, 100)}：${bounded(item.value, 40)}`).join(' · ');
-    entries = (content.items || []).map((item, index) => ({ item, index })).sort((a, b) => 'ABC'.indexOf(a.item.grade) - 'ABC'.indexOf(b.item.grade) || a.index - b.index).map(({ item }) => [
+    entries = (content.items || []).map(item => [
       `[${item.grade}] ${bounded(item.title, 650)}`,
       item.translatedTitle ? bounded(item.translatedTitle, 500) : '',
-      [item.journal && bounded(item.journal, 160), item.year && bounded(item.year, 30)].filter(Boolean).join(' / '),
+      [item.journal && bounded(item.journal, 160), item.year && bounded(item.year, 30), item.source && bounded(item.source, 100)].filter(Boolean).join(' / '),
       item.reason ? `推荐理由：${bounded(item.reason, 250)}` : '',
     ].filter(Boolean).join('\n'));
   } else if (content.eventType === 'weekly_completed') {
@@ -35,6 +35,11 @@ export function renderQqNotification(content) {
     const sections = content.sections || {};
     entries = [sections.overview ? `重点结果：${bounded(sections.overview, 1800)}` : '', ...(sections.integrityLines || []), ...(sections.warnings || [])].filter(Boolean).map(value => bounded(value, 1800));
     if (sections.remainingWarnings > 0) entries.push(`另有 ${sections.remainingWarnings} 项提醒，请在 PaperEcho 工作台查看。`);
+    entries.push(...(content.items || []).map(item => [
+      `[${item.grade}] ${bounded(item.title, 650)}`, item.translatedTitle ? bounded(item.translatedTitle, 500) : '',
+      [item.journal, item.year, item.source].filter(Boolean).map(value => bounded(value, 160)).join(' / '),
+      item.reason ? `推荐理由：${bounded(item.reason, 250)}` : '',
+    ].filter(Boolean).join('\n')));
   } else throw new Error('NOTIFICATION_CONTENT_EVENT_UNSUPPORTED');
   let text = `${heading}\n日期：${bounded(content.date || content.generatedAt || '未提供', 100)}\n${bounded(summary, 800)}`;
   let included = 0;
