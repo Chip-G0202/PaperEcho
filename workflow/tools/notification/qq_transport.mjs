@@ -37,21 +37,20 @@ function errorCode(data) {
 
 // Cache is instance-local and memory-only; replacing credentials creates a new
 // transport. One failed acquisition is not cached. No background refresh/daemon.
-export function createQqClient({ appId, clientSecret }, {
+export function createQqTransport({ appId, clientSecret, targetType, targetId }, {
   fetchImpl = globalThis.fetch, clock = () => Date.now(), timeoutMs = 15000,
 } = {}) {
   let token = null;
   let acquisition = null;
   async function request(endpoint, body, accessToken) {
     try {
-      const response = await fetchImpl(API_ROOT + endpoint, { method: body === undefined ? 'GET' : 'POST', redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
-        headers: { 'Content-Type': 'application/json; charset=utf-8', ...(accessToken ? { Authorization: `QQBot ${accessToken}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      const response = await fetchImpl(API_ROOT + endpoint, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
+        headers: { 'Content-Type': 'application/json; charset=utf-8', ...(accessToken ? { Authorization: `QQBot ${accessToken}` } : {}) }, body: JSON.stringify(body) });
       const data = await response.json().catch(() => null);
       return { status: response.status, data };
     } catch { return { status: null, data: null }; }
   }
   async function access() {
-    if (typeof appId !== 'string' || !appId.trim() || typeof clientSecret !== 'string' || !clientSecret) return outcome(false, 'qq_configuration_invalid');
     if (token && token.expiresAt - clock() > Math.min(60000, token.lifetime / 3)) return token.value;
     if (!acquisition) acquisition = (async () => {
       const result = await request('/app/getAppAccessToken', { appId, clientSecret });
@@ -67,21 +66,15 @@ export function createQqClient({ appId, clientSecret }, {
     })().finally(() => { acquisition = null; });
     return acquisition;
   }
-  async function send(targetType, targetId, payload, replyId) {
+  return async (payload) => {
     if (typeof appId !== 'string' || !appId.trim() || typeof clientSecret !== 'string' || !clientSecret
       || !['user', 'group'].includes(targetType) || typeof targetId !== 'string' || !targetId.trim() || /[\u0000-\u001f]/.test(targetId)) return outcome(false, 'qq_configuration_invalid');
     if (!payload || payload.msg_type !== 0 || typeof payload.content !== 'string' || !payload.content.trim() || /\p{Surrogate}/u.test(payload.content) || Buffer.byteLength(payload.content, 'utf8') > QQ_TEXT_BUDGET_BYTES
       || Object.keys(payload).some((key) => !['msg_type', 'content', 'to', 'messageId'].includes(key))) return outcome(false, 'qq_invalid_payload');
-    const wire = { msg_type: 0, content: payload.content };
-    // Active notification stays unchanged. Passive command replies use exactly
-    // one provider message identity/sequence; neither path retries an unknown send.
-    if (replyId !== undefined) {
-      if (targetType !== 'user' || typeof replyId !== 'string' || !replyId.trim() || replyId.length > 512 || /[\s\u0000-\u001f]/.test(replyId)) return outcome(false, 'qq_invalid_payload');
-      wire.msg_id = replyId; wire.msg_seq = 1;
-    }
     const accessToken = await access();
     if (typeof accessToken !== 'string') return accessToken;
-    const { status, data } = await request(`/v2/${targetType === 'user' ? 'users' : 'groups'}/${encodeURIComponent(targetId)}/messages`, wire, accessToken);
+    // Outbound-only active message: no msg_id/event_id or interaction recall.
+    const { status, data } = await request(`/v2/${targetType === 'user' ? 'users' : 'groups'}/${encodeURIComponent(targetId)}/messages`, { msg_type: 0, content: payload.content }, accessToken);
     const code = errorCode(data);
     if (Number.isFinite(code) && code !== 0 || [401, 403, 429].includes(status)) {
       const error = category(code, status);
@@ -92,28 +85,5 @@ export function createQqClient({ appId, clientSecret }, {
       && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(data.timestamp) && Number.isFinite(Date.parse(data.timestamp))) return outcome(true, 'accepted', status);
     // Lost/invalid/ambiguous send response cannot safely authorize another send.
     return outcome(undefined, status == null ? 'qq_network' : status >= 500 ? 'qq_provider_unavailable' : 'qq_response_ambiguous', status);
-  }
-  return {
-    getAccessToken: access,
-    invalidateToken: () => { token = null; },
-    async getGateway() {
-      const accessToken = await access();
-      if (typeof accessToken !== 'string') throw new Error('QQ_GATEWAY_AUTH_FAILED');
-      const { status, data } = await request('/gateway', undefined, accessToken);
-      const rejection = category(errorCode(data), status);
-      if (rejection === 'qq_authentication') token = null;
-      if (status !== 200 || errorCode(data) !== 0) throw new Error(['qq_authentication', 'qq_authorization'].includes(rejection) ? 'QQ_GATEWAY_AUTH_FAILED' : 'QQ_GATEWAY_DISCOVERY_FAILED');
-      let url;
-      try { url = new URL(data.url); } catch { throw new Error('QQ_GATEWAY_URL_INVALID'); }
-      if (url.protocol !== 'wss:' || url.hostname !== 'api.bot.qq.com' || url.port || url.username || url.password || url.search || url.hash || !/^\/websocket\/?$/.test(url.pathname)) throw new Error('QQ_GATEWAY_URL_INVALID');
-      return url.href;
-    },
-    sendNotification: (targetType, targetId, payload) => send(targetType, targetId, payload),
-    sendPassiveReply: ({ userId, messageId, content }) => typeof userId === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(userId) && typeof messageId === 'string' && messageId.length > 0 && messageId.length <= 512 && !/[\s\u0000-\u001f]/.test(messageId)
-      ? send('user', userId, { msg_type: 0, content }, messageId) : Promise.resolve(outcome(false, 'qq_invalid_payload')),
   };
-}
-export function createQqTransport({ targetType, targetId, ...credentials }, options) {
-  const client = createQqClient(credentials, options);
-  return payload => client.sendNotification(targetType, targetId, payload);
 }

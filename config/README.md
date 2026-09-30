@@ -1,14 +1,14 @@
 # 用户可编辑配置
 
-日常配置推荐使用 [PaperEcho Control Center](../docs/control-center.md) 的 Settings。schemaVersion 3/4/5/6 的 `config/paperecho.config.json` 是非敏感 application configuration 的 canonical owner。Settings 的固定字段 registry 仍由 `workflow/tools/lib/control_config_service.mjs` 管理，共享解析层为 `workflow/tools/lib/application_config.mjs`；Runner 继续由 `workflow/tools/runner/config_loader.mjs` 解析运行路径。保存只更新 canonical owner，不同步写回旧领域 JSON。
+日常配置推荐使用 [PaperEcho Control Center](../docs/control-center.md) 的 Settings。schemaVersion 3/4/5 的 `config/paperecho.config.json` 是非敏感 application configuration 的 canonical owner。Settings 的固定字段 registry 仍由 `workflow/tools/lib/control_config_service.mjs` 管理，共享解析层为 `workflow/tools/lib/application_config.mjs`；Runner 继续由 `workflow/tools/runner/config_loader.mjs` 解析运行路径。保存只更新 canonical owner，不同步写回旧领域 JSON。
 
-## v6 与旧版本迁移
+## v5 与旧版本迁移
 
 translation（标题翻译）与 preference（智能评审/偏好学习）仍是独立 capability，可分别设置模型、endpoint、temperature 等。Research Feedback 与普通 Runner 使用同一 Settings 配置。单次 Runner 调用可显式传入 `--preference-config <file>` 或 `--translation-config <file>`；覆盖只影响该 invocation，不写回 Settings，下一次普通调用恢复 canonical 配置。
 
 非敏感配置按显式 invocation override → canonical → legacy compatibility/defaults 解析。迁移前沿用 v1/v2 的优先级；迁移会把旧模型配置和 legacy non-secret env 的有效值固化进相应 section。迁移后，旧模型 env 不再覆盖 Settings。运行路径的现有 CLI 语义和执行期控制参数保持不变。
 
-在目标项目使用 `node workflow/tools/maintenance/migrate_application_config.mjs --root <项目根目录>`。集中 migration owner 为 `workflow/tools/lib/application_config_migration.mjs`，支持无主配置及 schema v1/v2/v3/v4/v5 → v6；重复迁移当前 v6 不写入，未知未来 schema 拒绝处理。v1/v2 迁移读取指定根下的 `.env`，外部环境优先；secret 值不进入主配置或迁移 metadata。v3/v4/v5 升级只读取 canonical 配置，保留 Email/SMTP 与其他领域值，v3 补齐默认开启的 Radar/Weekly 通知偏好；v5 增加默认关闭的 QQ outbound，v6 增加 `common.notifications.channels.qq.remoteInteraction: { enabled: false }`，不生成授权用户或凭据占位值，不从 outbound 目标推断授权。原主配置保留为固定 `.v3-backup` / `.v4-backup` / `.v5-backup`。旧安装只保存 Email/事件设置仍兼容升级到 v4，保存普通 QQ 设置进入 v5，保存远程设置通过集中升级函数进入 v6。
+在目标项目使用 `node workflow/tools/maintenance/migrate_application_config.mjs --root <项目根目录>`。集中 migration owner 为 `workflow/tools/lib/application_config_migration.mjs`，支持无主配置及 schema v1/v2/v3/v4 → v5；重复迁移当前 v5 不写入，未知未来 schema 拒绝处理。v1/v2 迁移读取指定根下的 `.env`，外部环境优先；secret 值不进入主配置或迁移 metadata。v3/v4 升级只读取 canonical 配置，保留 Email/SMTP 与其他领域值，v3 补齐默认开启的 Radar/Weekly 通知偏好；v5 增加 `common.notifications.channels.qq: { enabled: false }`，不生成凭据或目标占位值。原主配置保留为固定 `.v3-backup` / `.v4-backup`。v3 安装只保存 Email/事件设置仍兼容升级到 v4；保存 QQ 设置则通过集中升级函数进入 v5。
 
 迁移先构造并校验 candidate，保留旧领域文件，将原主配置保留为固定 `.legacy-backup`，再临时写入、回读校验并原子替换。备份冲突或校验/写入失败时不替换原主配置。最小迁移 metadata 位于主配置 `migration`，只包含版本、结果、来源类别和时间。尚未迁移的安装保留 legacy compatibility；迁移成功后旧 JSON 仅作为保留的迁移来源，不再正常写入。
 
@@ -24,21 +24,9 @@ Settings → 通知与推送分别提供通知偏好、邮箱、QQ、凭据。`c
 
 同一 Channel Service 也负责 QQ readiness、测试和最近状态；QQ 配置完整不等于 provider 已验证。QQ 测试允许渠道关闭时显式发送，回执位于同一 receipt root 的 `tests/qq/<requestId>.json`。业务共用 NotificationContent，由 `notification/channel_delivery.mjs` 分发给既有 Email 路径与 QQ renderer/transport；每个 event/channel 独立 identity、receipt 与 ledger operation。历史无 channel 字段的回执仍按 Email 解释，Email identity 不变。部分通知失败不会回滚 v5 业务成功；正式 `--resume` 只重试失败渠道，accepted 不重发，unknown 保持 fail-closed，恢复不重跑检索、评级、Zotero 或导出。v5 SMTP 不完整是渠道问题，不阻断业务/QQ 的 preflight。
 
-QQ outbound 使用官方主动单聊/群聊文本 API，AppID/AppSecret 换取内存 access_token，无 OS daemon。证据：[认证](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/access-token.html)、[主动消息及频率限制](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html)、[单聊](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html)、[群聊](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_messages.post.html)。用户可关闭主动消息权限；目标/权限/额度由 provider 决定。没有官方主动发送幂等参数，因此不确定结果不能靠再次发送确认。
+QQ 仅使用官方主动单聊/群聊文本 API，AppID/AppSecret 换取内存 access_token，不运行 inbound/WebSocket daemon。证据：[认证](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/access-token.html)、[主动消息及频率限制](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html)、[单聊](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html)、[群聊](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_messages.post.html)。用户可关闭主动消息权限；目标/权限/额度由 provider 决定。没有官方主动发送幂等参数，因此不确定结果不能靠再次发送确认。
 
 QQ renderer 使用获准的 **PaperEcho 产品预算 5000 UTF-8 字节**，按优先级保留标题/日期、摘要、高优先级文献及必要理由，并用“还有 N 项”表示省略；只生成单条文本，不拆分多条。依据是[腾讯官方 SDK](https://github.com/tencent-connect/qqbot-nodejs/blob/main/src/protocol/utils/text-chunk.ts) 的“约 5000 字符”说明；**provider 硬上限、计量单位及真实边界仍未验证**，本地预算测试不代表平台边界验收。运输层拒绝超过产品预算或无效 Unicode 的 payload。
-
-## QQ 只读远程交互（Phase 4A）
-
-PaperEcho Core（含 Control Center、Radar、Weekly、Email、QQ outbound）保持 **Node >=18**。只有 QQ Remote Interaction 要求 **Node >=22.4 且内置 WebSocket 可用**，使用 Node built-in stable WebSocket；没有新增依赖或提高全局最低版本。`remote/qq_gateway.mjs` 是 capability gate 与 Gateway owner，低版本可保存设置，但 listener fail closed，不启动连接或重连。
-
-Settings → 通知与推送 → QQ 的 `remoteInteraction.enabled` 与 outbound 开关独立，默认关闭；`remoteInteraction.authorizedUser` 必须显式填写一个机器人对应的单聊 `user_openid`。ConfigService 保存 non-secret 标识，UI/API 仅显示已配置，`remote/qq_remote_service.mjs` 对官方事件身份精确授权；昵称、首个用户、发送目标均不授予权限，未知用户静默忽略。配置完整、开关开启、环境支持、实际连接是四个不同状态；只有收到 READY/RESUMED 才显示在线。
-
-Listener 跟随 Control Center 启动、设置重载和关闭，没有公网 webhook、自启动或 OS 服务。使用[官方 Gateway](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html) discovery/Hello/Identify/心跳/Resume，复用 `notification/qq_transport.mjs` 的内存 token/cache。最小 intent bit 25 官方同时包含 C2C 和群事件，业务只分发 `C2C_MESSAGE_CREATE`，所有群/频道/交互事件忽略。连接重试最多六次并退避；不支持的关闭错误终止连接。
-
-`remote/actions.mjs` 只接受 `/help /status /latest /radar /weekly`，无参数；经既有 ReviewQueryService / ControlScheduleStatusService 读取已有结果，缺数据返回“暂无数据”。`/latest` 使用 Control Center 已有文献读模型。所有远程写操作、workflow trigger、检索、shell、文件/URL 参数和自然语言解释均未开放。短回复使用官方被动 `msg_id` / `msg_seq=1`，1600 UTF-8 字节是产品预算；回复不进入 notification receipt/ledger。
-
-`remote/inbound_receipt.mjs` 复用 atomic JSON/lock，入站 identity 为 provider/AppID/user_openid/真实 message id 的摘要；receipt 位于 review root 的 `remote_interaction/qq/<AppID摘要>`，只记录身份摘要、action、授权与执行/回复状态、时间，不存原始消息或 token。先持久化 started，再执行、持久化完成，再尝试一次回复；duplicate、崩溃 started、failed/unknown 回复全部 hold，不重复动作或盲重发。每授权用户每分钟 6 次、全局 20 次，重复事件不耗配额。Session/sequence 仅在 listener 内存：心跳使用收到的 sequence，Resume 等待处理完成并使用 completed sequence；进程重启重新 Identify，持久 receipt 仍防重放。
 
 ## Config map
 

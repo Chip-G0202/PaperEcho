@@ -89,16 +89,16 @@ test('isolated Control Center HTTP Settings -> Research Feedback uses exactly th
   assert.ok(!JSON.stringify((await request('/api/settings', null, auth)).value).includes('fake-key'));
 });
 
-for (const version of [0, 1, 2, 3, 4, 5, 6]) test(`migration schema ${version}: fresh/legacy/current and idempotency`, async (t) => {
+for (const version of [0, 1, 2, 3, 4, 5]) test(`migration schema ${version}: fresh/legacy/current and idempotency`, async (t) => {
   const f = await fixture(t, version);
   const before = await fs.readFile(f.configPath, 'utf8').catch(() => null);
   const result = await migrateApplicationConfig({ root: f.root, env: f.env });
-  assert.equal(result.migrated, version !== 6);
+  assert.equal(result.migrated, version !== 5);
   const after = await fs.readFile(f.configPath, 'utf8');
-  assert.equal(JSON.parse(after).schemaVersion, 6);
+  assert.equal(JSON.parse(after).schemaVersion, 5);
   assert.equal((await migrateApplicationConfig({ root: f.root, env: f.env })).migrated, false);
   assert.equal(await fs.readFile(f.configPath, 'utf8'), after);
-  if (version === 6) assert.equal(after, before);
+  if (version === 5) assert.equal(after, before);
   else if (before) assert.deepEqual(JSON.parse(await fs.readFile(`${f.configPath}.${version >= 3 ? `v${version}-backup` : "legacy-backup"}`, 'utf8')), JSON.parse(before));
 });
 

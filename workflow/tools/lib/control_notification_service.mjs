@@ -7,7 +7,7 @@ import { buildTestNotificationContent } from '../stage5/notification_content.mjs
 import { renderTestNotification } from '../stage5/test_notification_report.mjs';
 import { deliverReliableNotification } from '../notification/delivery.mjs';
 import { renderQqNotification } from '../notification/qq_renderer.mjs';
-import { createQqClient } from '../notification/qq_transport.mjs';
+import { createQqTransport } from '../notification/qq_transport.mjs';
 import { qqRecipient } from '../notification/channel_delivery.mjs';
 
 export function publicEmailDelivery(receipt) {
@@ -25,8 +25,6 @@ export function publicEmailDelivery(receipt) {
 // Email is the first real channel. Configuration, secrets and delivery keep their owners.
 export class NotificationChannelService {
   #testing = false;
-  #qqClient;
-  #qqCredentials;
   constructor({ config, secrets, review, context, env = {}, transport, qqTransport, clock = () => new Date() }) {
     Object.assign(this, { config, secrets, review, context, env, transport, qqTransport, clock });
   }
@@ -42,15 +40,6 @@ export class NotificationChannelService {
     const receiptRoot = configuredRoot ? path.resolve(path.dirname(this.config.ownerPath('paperecho.config.json')), configuredRoot)
       : this.env.PAPERECHO_NOTIFICATION_RECEIPT_ROOT || path.join(path.dirname(this.review.runRoot), 'notification_receipts');
     return { owner, email, qq: owner.common?.notifications?.channels?.qq || { enabled: false }, receiptRoot };
-  }
-  async client(qq) {
-    return this.secrets.withCredential('QQ_BOT_APP_SECRET', secret => {
-      if (!this.#qqCredentials || this.#qqCredentials.appId !== qq.appId || this.#qqCredentials.secret !== secret) {
-        this.#qqCredentials = { appId: qq.appId, secret };
-        this.#qqClient = createQqClient({ appId: qq.appId, clientSecret: secret });
-      }
-      return this.#qqClient;
-    });
   }
   async qqReadiness(qq) {
     const credential = (await this.secrets.list()).find(entry => entry.id === 'QQ_BOT_APP_SECRET');
@@ -130,8 +119,7 @@ export class NotificationChannelService {
       const payload = input.channel === 'qq' ? renderQqNotification(content) : { ...renderTestNotification(content), attachments: [] };
       const deliver = (env, transport, recipient) => deliverReliableNotification({ receiptPath, notificationType: 'channel_test', runId: '', businessSubject: input.requestId, eventEpoch: input.requestId,
         payload, recipient, recoveryData: { content }, env, transport, clock: this.clock, channel: input.channel });
-      const client = input.channel === 'qq' && !this.qqTransport ? await this.client(qq) : null;
-      const delivered = input.channel === 'qq' ? await deliver({}, this.qqTransport || (payload => client.sendNotification(qq.targetType, qq.targetId, payload)), qqRecipient(qq)) : await this.secrets.withSmtpEnvironment(email.smtp, async (env) => {
+      const delivered = input.channel === 'qq' ? await this.secrets.withCredential('QQ_BOT_APP_SECRET', secret => deliver({}, this.qqTransport || createQqTransport({ ...qq, clientSecret: secret }), qqRecipient(qq))) : await this.secrets.withSmtpEnvironment(email.smtp, async (env) => {
         if (!emailTransportConfig(env).configured) return null;
         return deliver(env, this.transport, email.recipient);
       });

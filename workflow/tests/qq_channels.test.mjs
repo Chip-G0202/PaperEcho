@@ -28,7 +28,7 @@ async function fixture(t, options = {}) {
 }
 const qqChannel = async f => (await f.services.notifications.settings()).channels.find(entry => entry.id === 'qq');
 
-test('v4 to v6 migration preserves preferences/email, initializes disabled QQ, is atomic/idempotent', async t => {
+test('v4 to v5 migration preserves preferences/email, initializes disabled QQ, is atomic/idempotent', async t => {
   const f = await fixture(t);
   const old = { ...f.value, schemaVersion: 4 };
   delete old.common.notifications.channels;
@@ -38,11 +38,11 @@ test('v4 to v6 migration preserves preferences/email, initializes disabled QQ, i
   await assert.rejects(migrateApplicationConfig({ root: f.root, atomicOptions: { validateTemporary: async () => { throw new Error('injected failure'); } } }));
   assert.deepEqual(await f.read(), old);
   const result = await migrateApplicationConfig({ root: f.root });
-  assert.equal(result.schemaVersion, 6);
+  assert.equal(result.schemaVersion, 5);
   const after = await f.read();
   assert.deepEqual(after.common.email, old.common.email);
   for (const event of ['radar', 'weekly']) assert.deepEqual(after.common.notifications[event], old.common.notifications[event]);
-  assert.deepEqual(after.common.notifications.channels, { qq: { enabled: false, remoteInteraction: { enabled: false } } });
+  assert.deepEqual(after.common.notifications.channels, { qq: { enabled: false } });
   assert.deepEqual(JSON.parse(await fs.readFile(f.configPath + '.v4-backup', 'utf8')), old);
   assert.equal((await migrateApplicationConfig({ root: f.root })).migrated, false);
   assert.deepEqual(await f.read(), after);
