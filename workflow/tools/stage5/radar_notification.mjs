@@ -6,6 +6,9 @@ import { notificationIdentity, notificationReceiptPathFor, notificationRecoveryD
 import { buildRadarNotificationContent } from "./notification_content.mjs";
 import { formatRadarReport } from "./radar_report.mjs";
 import { emailDeliveryPolicy } from '../notification/policy.mjs';
+import { channelDeliveryPolicy } from '../notification/policy.mjs';
+import { deliverBusinessChannels } from '../notification/channel_delivery.mjs';
+import { canonicalQueryHash } from '../stage1/source_state.mjs';
 
 export function buildRadarAggregateMessage(items = [], context = {}) {
   return formatRadarReport(buildRadarNotificationContent(items, context));
@@ -17,7 +20,18 @@ export function radarNotificationReceiptPath(runStateRoot, runId, urgentItems = 
   return notificationReceiptPathFor(path.resolve(runStateRoot), identity.receiptId);
 }
 
-export async function sendRadarAggregateNotification({
+export async function sendRadarAggregateNotification(options = {}) {
+  if (Number((options.env || process.env).PAPERECHO_CONFIG_SCHEMA_VERSION) >= 5 || options.urgentItems?.length && channelDeliveryPolicy('qq', 'radar', { env: options.env || process.env }).required) {
+    const content = buildRadarNotificationContent(options.urgentItems, { runId: options.runId, audit: options.audit });
+    return deliverBusinessChannels({ content, env: options.env || process.env, runStateRoot: options.runStateRoot,
+      recoveryCoordinator: options.recoveryCoordinator, qqTransport: options.qqTransport, fsApi: options.fsApi, clock: options.clock,
+      radarSelection: options.notificationSelection || [], radarCompletionHash: canonicalQueryHash(options.notificationSelection || []),
+      emailDelivery: () => sendEmailRadarAggregateNotification(options) });
+  }
+  return sendEmailRadarAggregateNotification(options);
+}
+
+async function sendEmailRadarAggregateNotification({
   runId,
   urgentItems = [],
   audit = {},

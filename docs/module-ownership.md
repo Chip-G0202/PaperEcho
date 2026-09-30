@@ -19,7 +19,7 @@ Control Center application boundary：
 - `control_rule_suggestion_service.mjs`：人工决策及安全 apply 编排；schema/dedup 仍归 `unified_pending_rule_suggestions.mjs`，正文插入逻辑复用 `screening_standards_rule_suggestions.mjs`。DOCX adapter 调同一 service。
 - `control_review_query_service.mjs`：registered run manifest/Stage4 artifact 只读查询，复用 verified-write filter。
 - `control_credentials_service.mjs`：SecretService 的 allowlist 凭据状态、原子 Replace/Clear 和输出脱敏；复用 `.env` loader 解析，无独立 credential store，外部注入覆盖时只读。
-- `control_notification_service.mjs`：Email 是第一个正式 channel；应用层配置就绪状态、显式测试及原回执的最近状态。普通设置由 ConfigService、凭据由 SecretService 持有；测试使用既有 content/render/delivery/receipt/SMTP 链路，不运行业务流程。
+- `control_notification_service.mjs`：Email/QQ 共用 channel application contract；应用层配置就绪状态、显式测试及各渠道原回执的最近状态。普通设置由 ConfigService、凭据由 SecretService 持有；测试使用 content/render/delivery/receipt/transport 链路，不运行业务流程。
 - `workflow/tools/notification/policy.mjs`：渠道开关与 Radar/Weekly 事件偏好分开解析；disabled/no-channel 无发送要求，不创建通知恢复操作，不影响业务成功。
 - `workflow/tools/web/server.mjs` 与 `web/static/`：loopback HTTP 和 UI，不持有 retrieval、ranking、Zotero、learning 或配置文件写入逻辑。
 
@@ -38,6 +38,8 @@ Control Center application boundary：
 | schedule / interval gate | `workflow/tools/lib/schedule_support.mjs` | 无 | 独立 lib 模块 |
 | notification content | `workflow/tools/stage5/notification_content.mjs` | 无 | 从现有 Radar/Weekly 业务结果构建内容，不检索、不重新评级 |
 | email rendering | `stage5/radar_report.mjs`、`stage5/report_summary.mjs`、`stage5/test_notification_report.mjs` | 无 | 共用 `stage5/email_layout.mjs` 的品牌布局与 HTML escaping；HTML/text 使用同一内容模型 |
+| QQ rendering / transport | `notification/qq_renderer.mjs`、`notification/qq_transport.mjs` | 无 | 同一 content 的有界纯文本；官方单聊/群聊主动发送，内存 token，无 inbound；5000 UTF-8 字节为产品预算，provider 硬上限未验证 |
+| business channel fan-out | `notification/channel_delivery.mjs` | Stage5 / Radar 入口 | 共用事件偏好，各渠道独立 receipt/ledger；v5 通知部分失败保持业务成功，不建立平行 QQ 服务 |
 | notification delivery / recovery | `notification/delivery.mjs`、`stage5/email_receipt.mjs`、`recovery/notification_recovery.mjs`（均在 `workflow/tools/`） | 原 Runner `--resume` | SMTP 仍归 `stage5/email_sender.mjs`；已成功业务不重跑，原回执和 ledger 完成恢复 |
 | triage policy | `workflow/tools/stage1/rule_classifier.mjs` | `workflow/tools/stage1/main.mjs` | Stage1-local rule classifier；旧 `workflow_classifier.mjs` / `triage_policy.mjs` 兼容入口已删除 |
 

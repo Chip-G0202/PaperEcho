@@ -75,8 +75,10 @@ export async function deliverReliableNotification({
   clock = () => new Date(),
   hooks = {},
   recoveryData = null,
+  channel = 'email',
+  prepareOnly = false,
 } = {}) {
-  const planned = createNotificationReceipt({ notificationType, runId, businessSubject, eventEpoch, payload, ledgerOperationId, recipient, clock });
+  const planned = createNotificationReceipt({ notificationType, runId, businessSubject, eventEpoch, payload, ledgerOperationId, recipient, clock, channel });
   if (recoveryData) planned.recoveryData = structuredClone(recoveryData);
   const locked = await withReceiptLock(receiptPath, async () => {
     let previous = await readNotificationReceipt(receiptPath, { fsApi, allowLegacy: true })
@@ -99,6 +101,7 @@ export async function deliverReliableNotification({
 
     let receipt = previous && !force ? previous : planned;
     if (!previous || force) await writeNotificationReceipt(receiptPath, receipt, { fsApi });
+    if (prepareOnly) return { status: receipt.status, reason: 'delivery_prepared', receipt, receiptPath, attempted: false };
     await hooks.afterPending?.({ receipt: structuredClone(receipt), receiptPath });
 
     receipt = validateNotificationReceipt({
@@ -129,7 +132,7 @@ export async function deliverReliableNotification({
         ...receipt,
         status,
         updatedAt: nowIso(clock),
-        lastSmtp: smtpSummary(status, { ...result, category: status === "failed" ? "smtp_rejected" : "smtp_result_ambiguous" }),
+        lastSmtp: smtpSummary(status, { ...result, category: channel === 'qq' && /^qq_(authentication|authorization|invalid_destination|rate_limited|invalid_payload|provider_unavailable|unknown|network|response_ambiguous|configuration_invalid)$/.test(result?.category) ? result.category : status === "failed" ? "smtp_rejected" : "smtp_result_ambiguous" }),
       });
       await writeNotificationReceipt(receiptPath, updated, { fsApi });
       return { status, reason: updated.lastSmtp.category, receipt: updated, receiptPath, attempted: true };

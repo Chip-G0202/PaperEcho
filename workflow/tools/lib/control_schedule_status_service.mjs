@@ -65,7 +65,7 @@ export class ControlScheduleStatusService {
       }
       const businessComplete = flow === 'weekly'
         ? ledger.stages?.stage4_exports?.status === 'verified' && preview.referenceSlot === plannedSlot
-        : ledger.status === 'completed';
+        : ledger.stages?.stage1?.status === 'verified' && ['stage2_writeback', 'stage3_translation', 'stage4_exports'].every(name => ledger.stages?.[name]?.status === 'skipped');
       const notification = ledger.stages?.stage5_notification?.status;
       result.notification = notification === 'failed' ? 'pending' : notification === 'verified' ? 'completed' : null;
       const stateLabel = ledger.status === 'completed' ? 'completed'

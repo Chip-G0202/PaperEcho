@@ -1,26 +1,32 @@
 # 用户可编辑配置
 
-日常配置推荐使用 [PaperEcho Control Center](../docs/control-center.md) 的 Settings。schemaVersion 3/4 的 `config/paperecho.config.json` 是非敏感 application configuration 的 canonical owner。Settings 的固定字段 registry 仍由 `workflow/tools/lib/control_config_service.mjs` 管理，共享解析层为 `workflow/tools/lib/application_config.mjs`；Runner 继续由 `workflow/tools/runner/config_loader.mjs` 解析运行路径。保存只更新 canonical owner，不同步写回旧领域 JSON。
+日常配置推荐使用 [PaperEcho Control Center](../docs/control-center.md) 的 Settings。schemaVersion 3/4/5 的 `config/paperecho.config.json` 是非敏感 application configuration 的 canonical owner。Settings 的固定字段 registry 仍由 `workflow/tools/lib/control_config_service.mjs` 管理，共享解析层为 `workflow/tools/lib/application_config.mjs`；Runner 继续由 `workflow/tools/runner/config_loader.mjs` 解析运行路径。保存只更新 canonical owner，不同步写回旧领域 JSON。
 
-## v4 与旧版本迁移
+## v5 与旧版本迁移
 
 translation（标题翻译）与 preference（智能评审/偏好学习）仍是独立 capability，可分别设置模型、endpoint、temperature 等。Research Feedback 与普通 Runner 使用同一 Settings 配置。单次 Runner 调用可显式传入 `--preference-config <file>` 或 `--translation-config <file>`；覆盖只影响该 invocation，不写回 Settings，下一次普通调用恢复 canonical 配置。
 
 非敏感配置按显式 invocation override → canonical → legacy compatibility/defaults 解析。迁移前沿用 v1/v2 的优先级；迁移会把旧模型配置和 legacy non-secret env 的有效值固化进相应 section。迁移后，旧模型 env 不再覆盖 Settings。运行路径的现有 CLI 语义和执行期控制参数保持不变。
 
-在目标项目使用 `node workflow/tools/maintenance/migrate_application_config.mjs --root <项目根目录>`。集中 migration owner 为 `workflow/tools/lib/application_config_migration.mjs`，支持无主配置及 schema v1/v2/v3 → v4；重复迁移当前 v4 不写入，未知未来 schema 拒绝处理。v1/v2 迁移读取指定根下的 `.env`，外部环境优先；secret 值不进入主配置或迁移 metadata。v3 → v4 只读取 canonical 配置，保留 Email/SMTP 与其他领域值，增加默认开启的 Radar/Weekly 通知偏好，原主配置保留为固定 `.v3-backup`。v3 安装保存通知设置时也由同一升级函数补齐 v4。
+在目标项目使用 `node workflow/tools/maintenance/migrate_application_config.mjs --root <项目根目录>`。集中 migration owner 为 `workflow/tools/lib/application_config_migration.mjs`，支持无主配置及 schema v1/v2/v3/v4 → v5；重复迁移当前 v5 不写入，未知未来 schema 拒绝处理。v1/v2 迁移读取指定根下的 `.env`，外部环境优先；secret 值不进入主配置或迁移 metadata。v3/v4 升级只读取 canonical 配置，保留 Email/SMTP 与其他领域值，v3 补齐默认开启的 Radar/Weekly 通知偏好；v5 增加 `common.notifications.channels.qq: { enabled: false }`，不生成凭据或目标占位值。原主配置保留为固定 `.v3-backup` / `.v4-backup`。v3 安装只保存 Email/事件设置仍兼容升级到 v4；保存 QQ 设置则通过集中升级函数进入 v5。
 
 迁移先构造并校验 candidate，保留旧领域文件，将原主配置保留为固定 `.legacy-backup`，再临时写入、回读校验并原子替换。备份冲突或校验/写入失败时不替换原主配置。最小迁移 metadata 位于主配置 `migration`，只包含版本、结果、来源类别和时间。尚未迁移的安装保留 legacy compatibility；迁移成功后旧 JSON 仅作为保留的迁移来源，不再正常写入。
 
 SecretService、受管 `.env` 和 external secret environment 保持独立，外部 secret 优先；GET 只返回配置状态。Runtime/User State（feedback、建议及其决策历史、ledger、receipt、queue、reports、logs）不进入主配置。长期研究规则正文继续由 `screening_standards.md` 管理，prompt Markdown 也保持独立；结构化机器规则进入 `review` section。
 
-Credentials 继续由环境/项目 `.env` 管理，网页支持 allowlist 本地凭据的状态、Replace、Clear，绝不回显原值；外部环境覆盖时只读。SecretService 保留其他 entries，严格检查可支持的单行格式后原子写入；不支持的格式保持原文件。邮箱显式测试由 Channel Service 复用正式邮件链路，其他凭据不提供连接测试。缺少既有配置文件时页面显示“尚未初始化”；首次保存通知设置通过集中迁移建立 canonical 配置。Weekly 调度间隔只读；PubMed keyword groups 由现有 owner 生成 query，不能通过 raw query 绕开它。
+Credentials 继续由环境/项目 `.env` 管理，网页支持 allowlist 本地凭据的状态、Replace、Clear，绝不回显原值；外部环境覆盖时只读。SecretService 保留其他 entries，严格检查可支持的单行格式后原子写入；不支持的格式保持原文件。Email/QQ 显式测试由 Channel Service 复用正式发送链路，其他凭据不提供连接测试。缺少既有配置文件时页面显示“尚未初始化”；首次保存通知设置通过集中迁移建立 canonical 配置。Weekly 调度间隔只读；PubMed keyword groups 由现有 owner 生成 query，不能通过 raw query 绕开它。
 
-## 通知偏好与邮箱
+## 通知偏好、邮箱与 QQ
 
-Settings → 通知与推送分别提供通知偏好、邮箱、凭据。`common.email.enabled` 是唯一 Email channel 开关；SMTP 普通参数仍在 `common.email.smtp`，密码仍由 SecretService 管理。事件偏好独立存于 `common.notifications.radar.enabled` / `weekly.enabled`，既有 failure/health 偏好及默认值保持原 owner。`workflow/tools/notification/policy.mjs` 解析是否需要 delivery；渠道或事件关闭时业务正常完成，不产生 notification operation 或待恢复发送。
+Settings → 通知与推送分别提供通知偏好、邮箱、QQ、凭据。`common.email.enabled` 是唯一 Email channel 开关；SMTP 普通参数仍在 `common.email.smtp`，密码仍由 SecretService 管理。QQ 的非敏感字段为 `common.notifications.channels.qq.enabled/appId/targetType/targetId`；`targetType` 为 `user` 或 `group`，目标是该机器人对应的 OpenID，不是 QQ 号码。AppSecret 仅由 SecretService / 环境中的 `QQ_BOT_APP_SECRET` 管理。事件偏好独立存于 `common.notifications.radar.enabled` / `weekly.enabled`，既有 failure/health 偏好及默认值保持原 owner。`workflow/tools/notification/policy.mjs` 解析是否需要 delivery；渠道或事件关闭时业务正常完成，不产生新的 notification operation 或待恢复发送。
 
 `workflow/tools/lib/control_notification_service.mjs` 是最小 Email channel application contract owner，返回 enablement、配置完整/不完整/错误、凭据配置/可写状态及脱敏的最近回执状态。配置完整不表示已经验证 SMTP 连接。显式测试允许在 Email 关闭时执行，不启用渠道，不运行论文流程，不写业务 ledger；使用 shared content、Email renderer/layout、原 delivery/receipt 与 SMTP transport。测试回执由原 receipt schema 保存在 receipt root 的 `tests/<requestId>.json`；同一请求沿用 accepted/unknown 不重复发送契约，并限制并发测试。最近发送状态读取原 Weekly/Radar/test receipts，不另建通知历史库。
+
+同一 Channel Service 也负责 QQ readiness、测试和最近状态；QQ 配置完整不等于 provider 已验证。QQ 测试允许渠道关闭时显式发送，回执位于同一 receipt root 的 `tests/qq/<requestId>.json`。业务共用 NotificationContent，由 `notification/channel_delivery.mjs` 分发给既有 Email 路径与 QQ renderer/transport；每个 event/channel 独立 identity、receipt 与 ledger operation。历史无 channel 字段的回执仍按 Email 解释，Email identity 不变。部分通知失败不会回滚 v5 业务成功；正式 `--resume` 只重试失败渠道，accepted 不重发，unknown 保持 fail-closed，恢复不重跑检索、评级、Zotero 或导出。v5 SMTP 不完整是渠道问题，不阻断业务/QQ 的 preflight。
+
+QQ 仅使用官方主动单聊/群聊文本 API，AppID/AppSecret 换取内存 access_token，不运行 inbound/WebSocket daemon。证据：[认证](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/access-token.html)、[主动消息及频率限制](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html)、[单聊](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html)、[群聊](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_messages.post.html)。用户可关闭主动消息权限；目标/权限/额度由 provider 决定。没有官方主动发送幂等参数，因此不确定结果不能靠再次发送确认。
+
+QQ renderer 使用获准的 **PaperEcho 产品预算 5000 UTF-8 字节**，按优先级保留标题/日期、摘要、高优先级文献及必要理由，并用“还有 N 项”表示省略；只生成单条文本，不拆分多条。依据是[腾讯官方 SDK](https://github.com/tencent-connect/qqbot-nodejs/blob/main/src/protocol/utils/text-chunk.ts) 的“约 5000 字符”说明；**provider 硬上限、计量单位及真实边界仍未验证**，本地预算测试不代表平台边界验收。运输层拒绝超过产品预算或无效 Unicode 的 payload。
 
 ## Config map
 

@@ -408,7 +408,7 @@ test('notification UI saves event preferences separately and protects test in-fl
     throw new Error('保存失败，请重试');
   });
   await app.settings('connections', 'notifications');
-  assert.doesNotMatch(app.main.textContent, /QQ|微信|飞书|Weekly 完成后发送邮件/);
+  assert.doesNotMatch(app.main.textContent, /微信|飞书|Weekly 完成后发送邮件/);
   await byText(app.main, '保存通知偏好').click();
   assert.deepEqual(Array.from(calls[0][1].updates, (entry) => entry.id), ['notification.radar', 'notification.weekly']);
   app.main.replaceChildren(); await app.settings('connections', 'email');
@@ -470,6 +470,61 @@ test('C downgrade and drop remain distinct canonical history revisions', async (
 test('Research Feedback shares the document content column', async () => {
   const app = ui(); await app.research(); const form = app.main.querySelector('.research-form');
   assert.match(form.className, /page-content/); assert.match(form.className, /document-column/); assert.ok(form.querySelector('textarea'));
+});
+
+for (const [emailEnabled, qqEnabled] of [[false, false], [true, false], [false, true], [true, true]]) test(`notification cards independently render Email=${emailEnabled}, QQ=${qqEnabled}`, async () => {
+  const app = ui();
+  const channel = (id, enabled) => ({ id, displayName: id === 'email' ? '邮箱' : 'QQ', enabled, readiness: 'configured', missing: [], credential: { id: id === 'email' ? 'SMTP_PASS' : 'QQ_BOT_APP_SECRET', configured: true, writable: true }, lastDelivery: { status: id === 'email' ? 'success' : 'failed', error: id === 'email' ? null : 'rate_limited' } });
+  const channels = [channel('email', emailEnabled), channel('qq', qqEnabled)];
+  const settings = channels.map(item => ({ category: 'Notifications', available: true, id: `${item.id}.enabled`, description: `启用${item.displayName}通知`, type: 'boolean', value: item.enabled, validation: {} }));
+  app.setApi(async url => url === '/api/settings' ? settings : url === '/api/credentials' ? [] : { channels });
+  await app.settings('connections', 'notifications');
+  assert.equal(app.main.querySelectorAll('.channel-card').length, 2);
+  assert.ok(byText(app.main, '邮箱配置与测试'));
+  assert.ok(byText(app.main, 'QQ配置与测试'));
+  assert.match(app.main.textContent, /发送成功/);
+  assert.match(app.main.textContent, /发送频率受限/);
+  assert.deepEqual(app.main.querySelectorAll('input').filter(input => input.type === 'checkbox').map(input => input.checked), [emailEnabled, qqEnabled]);
+});
+
+test('QQ disabled configuration is collapsed; explicit test, Replace/Clear preserve toggle and never echo secret', async () => {
+  const app = ui(); const calls = [];
+  const credential = { id: 'QQ_BOT_APP_SECRET', configured: true, writable: true };
+  const channel = { id: 'qq', displayName: 'QQ', enabled: false, readiness: 'configured', missing: [], credential, lastDelivery: { status: 'none' } };
+  const setting = (id, type, value, validation = {}) => ({ id, type, value, validation, category: 'Notifications', description: id, available: true });
+  const settings = [setting('qq.enabled', 'boolean', false), setting('qq.appId', 'string', 'fixture-app'), setting('qq.targetType', 'enum', 'user', { values: ['user', 'group'] }), setting('qq.targetId', 'string', 'fixture-openid')];
+  app.setApi(async (url, input) => {
+    if (url === '/api/settings') return settings;
+    if (url === '/api/credentials' && !input) return [credential];
+    if (url === '/api/notifications') return { channels: [channel] };
+    calls.push([url, input]);
+    if (url === '/api/credentials') { credential.configured = input.action !== 'clear'; return { configured: credential.configured }; }
+    if (url === '/api/notifications/test') { channel.lastDelivery = { status: 'success', kind: 'test' }; return { status: 'success' }; }
+    throw new Error('unexpected mutation');
+  });
+  await app.settings('connections', 'qq');
+  const card = app.main.querySelector('.channel-card');
+  assert.equal(card.dataset.featureCollapsed, 'true');
+  assert.equal(card.querySelector('.notification-test').hidden, true);
+  await byText(card, '配置与测试QQ（不启用通知）').click();
+  assert.equal(card.dataset.featureCollapsed, 'false');
+  assert.equal(card.querySelector('input').checked, false);
+  assert.match(card.textContent, /单聊用户/);
+  assert.match(card.textContent, /群聊/);
+  await byText(card, '发送测试通知').click();
+  assert.equal(calls[0][1].channel, 'qq');
+  assert.match(card.textContent, /发送成功/);
+  await byText(card, '替换凭据').click();
+  const input = card.querySelectorAll('input').find(input => input.type === 'password');
+  assert.equal(input.value, '');
+  input.value = 'typed-fixture-secret';
+  await byText(card, '保存凭据').click();
+  assert.equal(input.value, '');
+  await byText(card, '清除凭据').click();
+  assert.equal(credential.configured, false);
+  assert.equal(channel.enabled, false);
+  assert.equal(calls.some(([url]) => url === '/api/settings'), false);
+  assert.equal(card.textContent.includes('typed-fixture-secret'), false);
 });
 test('zero results, missing identifier, completed queue and neutral selection stay usable', async () => {
   const app = ui(); app.setApi(async () => ({ runId: null, total: 0, items: [] })); await app.paperReview(); assert.match(app.main.textContent, /此队列暂无文献/);

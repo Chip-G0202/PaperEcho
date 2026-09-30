@@ -8,6 +8,7 @@ import { buildRuntimeConfig } from "../tools/lib/runtime_config.mjs";
 import { runZoteroLiteratureFilter } from "../tools/stage0/main.mjs";
 import { runStage5Notification } from '../tools/stage5/main.mjs';
 import { createRunRecoveryCoordinator } from '../tools/recovery/run_recovery.mjs';
+import { validateProductionResult } from '../tools/runner/result_validation.mjs';
 
 async function runMode(backend, stage5Result = { status: "sent", reason: "sent", attachments: ["周报.xlsx"] }, resolvedBackend = backend === "auto" ? "web_api" : backend, notificationEnv = {}, trackRecovery = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperflow-stage5-integration-"));
@@ -36,7 +37,7 @@ async function runMode(backend, stage5Result = { status: "sent", reason: "sent",
     config, triggerMode: "manual", runMode: { explicitForceRun: true, isManualOrForce: true, stage1Only: false }, clock: () => now,
     argv: ["--email", "reader@example.test"], env: { ZOTERO_BACKEND: backend, ...notificationEnv }, readJson, statArtifact, writeJson: async () => {}, writeReport: async () => {}, ensureStartupReady: async () => ({ ok: true }),
     runStage: async (stage) => ({ exitCode: 0, stdout: "", stderr: "", data: stage.name === "stage4_exports" ? { runSummary, literatureItems } : stage.name === "zotero_backend_ready" ? { backend: resolvedBackend } : null }),
-    stage5Runner: async (input) => { calls.push(input); return stage5Result || runStage5Notification({ ...input, transport: async () => { throw new Error('disabled transport must not run'); } }); },
+    stage5Runner: async (input) => { calls.push(input); return typeof stage5Result === 'function' ? stage5Result(input) : stage5Result || runStage5Notification({ ...input, transport: async () => { throw new Error('disabled transport must not run'); } }); },
   });
   return { report, calls, xlsx, config, recoveryCoordinator };
 }
@@ -75,4 +76,24 @@ for (const backend of ['cli', 'web_api']) for (const notificationEnv of [{ PAPER
   assert.equal(calls[0].recipient, ''); assert.equal(await fs.readFile(xlsx, 'utf8'), 'xlsx');
   assert.equal(recoveryCoordinator.store.ledger.operations.some((operation) => operation.type === 'notification'), false);
   assert.equal(recoveryCoordinator.store.ledger.stages.stage5_notification.status, 'verified');
+});
+
+for (const backend of ['cli', 'web_api']) for (const failed of ['email', 'qq', 'both', 'none']) test(`${backend} v5 Stage5 isolates ${failed} failure and Runner validates completed business`, async () => {
+  const messages = { email: 0, qq: 0 };
+  const env = { PAPERECHO_CONFIG_SCHEMA_VERSION: '5', PAPERECHO_QQ_CHANNEL: JSON.stringify({ enabled: true, appId: 'fixture', targetType: 'user', targetId: 'fixture' }) };
+  const { report, config, recoveryCoordinator, xlsx } = await runMode(backend, input => runStage5Notification({ ...input,
+    runSummary: { ...input.runSummary, runId: input.config.recoveryCoordinator.store.ledger.runId },
+    transport: async () => { messages.email++; return { accepted: !['email', 'both'].includes(failed) }; },
+    config: { ...input.config, qqTransport: async () => { messages.qq++; return { accepted: !['qq', 'both'].includes(failed), category: 'qq_rate_limited' }; } },
+  }), backend, env, true);
+  assert.equal(report.status, failed === 'none' ? 'completed' : 'completed_with_warnings');
+  assert.equal(report.steps.stage5_notification.businessStatus, 'success');
+  assert.deepEqual(messages, { email: 1, qq: 1 });
+  assert.equal(await fs.readFile(xlsx, 'utf8'), 'xlsx');
+  const operations = recoveryCoordinator.store.ledger.operations.filter(item => item.type === 'notification');
+  assert.equal(operations.length, 2);
+  for (const op of operations) assert.equal(op.status, ['both', op.intent.channel || 'email'].includes(failed) ? 'failed' : 'verified');
+  const checked = await validateProductionResult({ options: { mode: backend === 'web_api' ? 'web' : 'desktop', profile: 'standard', email: 'reader@example.test' },
+    plan: { runRoot: path.join(config.reviewRoot, 'runs'), emailRequested: true }, processResult: { code: 0, stdout: JSON.stringify(report) } });
+  assert.equal(checked.ok, true);
 });

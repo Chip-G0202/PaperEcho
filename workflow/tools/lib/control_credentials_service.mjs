@@ -4,7 +4,7 @@ import { parseEnvFile } from './env_file_parser.mjs';
 import { writeAtomicText, withAtomicJsonLock } from './atomic_json.mjs';
 
 export const CONTROL_SECRET_NAMES = Object.freeze([
-  'TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY', 'EASYSCHOLAR_SECRET_KEY', 'SMTP_PASS', 'ZOTERO_API_KEY',
+  'TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY', 'EASYSCHOLAR_SECRET_KEY', 'SMTP_PASS', 'ZOTERO_API_KEY', 'QQ_BOT_APP_SECRET',
 ]);
 
 // Editing supports a strict subset of the existing loader's single-line format.
@@ -71,6 +71,13 @@ export class SecretService {
       if (smtp[field] != null) env[key] = String(smtp[field]);
     }
     return operation(env);
+  }
+  async withCredential(id, operation) {
+    if (!CONTROL_SECRET_NAMES.includes(id)) throw new Error('CREDENTIAL_KEY_NOT_ALLOWED');
+    const state = await this.#read().catch(() => null);
+    const secret = this.#env[id] ?? state?.values[id] ?? '';
+    if (secret) this.#seen.add(secret);
+    return operation(secret);
   }
   async #write(id, value, clear) {
     if (!CONTROL_SECRET_NAMES.includes(id)) throw new Error('CREDENTIAL_KEY_NOT_ALLOWED');

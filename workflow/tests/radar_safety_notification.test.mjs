@@ -13,6 +13,27 @@ import { createRunRecoveryCoordinator } from '../tools/recovery/run_recovery.mjs
 
 const urgent = (extra = {}) => ({ title: "Urgent", journal: "Journal", doi: "10.1000/notify", url: "https://doi.org/10.1000/notify", grade: "A", rule_grade: "A", final_grade: "A", llm_review_grade: "A", semantic_grade: "A", semantic_source: "llm_title_review", semantic_reason: "confirmed", ...extra });
 
+for (const enabled of [true, false]) test(`Radar v5 orchestration preserves business and never leaves all-disabled recovery (${enabled})`, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'radar-qq-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const now = new Date('2026-09-30T07:00:00Z'); const researchRoot = path.join(root, 'review_results'); const reviewRoot = path.join(researchRoot, '文献评价');
+  const coordinator = await createRunRecoveryCoordinator({ runRoot: path.join(reviewRoot, 'runs'), runId: 'qq-radar', mode: 'desktop', profile: 'radar', launcherId: 'fixture', configHash: 'a'.repeat(64), inputHash: 'b'.repeat(64) });
+  const auditPath = path.join(root, 'radar_audit.json'); await fs.writeFile(auditPath, '{}');
+  let attempts = 0; let retrievals = 0;
+  const report = await runZoteroLiteratureFilter({
+    config: { platform: 'win32', repoRoot: root, projectRoot: root, researchRoot, reviewRoot, pipelineDir: path.join(researchRoot, 'pipeline/fixture'), now },
+    recoveryCoordinator: coordinator, runId: 'qq-radar', triggerMode: 'manual', runMode: { isManualOrForce: true }, clock: () => now,
+    env: { PAPERECHO_RUN_PROFILE: 'radar', PAPERECHO_CONFIG_SCHEMA_VERSION: '5', PAPERECHO_EMAIL_ENABLED: 'false', PAPERECHO_QQ_CHANNEL: JSON.stringify({ enabled, appId: 'fixture', targetType: 'group', targetId: 'fixture' }) }, argv: [],
+    readJson: async () => ({}), writeJson: async () => {}, writeReport: async () => {}, statArtifact: async file => ({ exists: file === auditPath, mtimeMs: now.getTime() }),
+    runStage: async stage => { assert.equal(stage.name, 'stage1'); retrievals++; return { exitCode: 0, data: { triagedAll: [urgent()], radar: { auditPath, audit: { generatedAt: now.toISOString(), candidateCount: 1, zoteroWriteCount: 0, xlsxWriteCount: 0 }, urgentItems: [urgent()] } } }; },
+    radarStage5Runner: input => sendRadarAggregateNotification({ ...input, qqTransport: async () => { attempts++; return { accepted: false, category: 'qq_rate_limited' }; } }),
+  });
+  assert.equal(report.status, enabled ? 'completed_with_warnings' : 'completed');
+  assert.equal(report.steps.stage5_notification.businessStatus, 'success');
+  assert.equal(attempts, Number(enabled)); assert.equal(retrievals, 1);
+  assert.equal(coordinator.store.ledger.status, enabled ? 'incomplete' : 'completed');
+  assert.equal(coordinator.store.ledger.operations.filter(item => item.type === 'notification').length, Number(enabled));
+});
+
 for (const disabledEnv of [{ PAPERECHO_EMAIL_ENABLED: 'false' }, { PAPERECHO_NOTIFY_RADAR: 'false' }]) test('Radar business completes while disabled notifications create no pending recovery', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'radar-disabled-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
   const now = new Date('2026-09-30T07:00:00Z'); const researchRoot = path.join(root, 'review_results'); const reviewRoot = path.join(researchRoot, '文献评价');

@@ -31,7 +31,7 @@ const settingViews = {
   review: [['translation', '标题翻译', ['Models']], ['preference', '偏好学习', ['Models', 'Ranking / Review']]],
   runtime: [['path', '运行路径', ['Runtime']]],
   automation: [['radar', 'Daily Radar', ['Radar']], ['weekly', '周报', ['Weekly', 'Integrity']]],
-  connections: [['notifications', '通知偏好', ['Notifications']], ['email', '邮箱', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
+  connections: [['notifications', '通知偏好', ['Notifications']], ['email', '邮箱', ['Notifications']], ['qq', 'QQ', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
 };
 function el(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; }
 function button(text, action) { const node = el('button', text); node.type = 'button'; node.addEventListener('click', async () => {
@@ -529,7 +529,7 @@ function settingControl(setting) {
     Object.defineProperty(input, 'value', { get: () => [...preserved, ...[...input.querySelectorAll('input')].filter((entry) => entry.checked).map((entry) => entry.value)] });
   } else if (setting.type === 'enum' && setting.validation.values.length <= 5) {
     input = el('fieldset', undefined, 'setting-options'); input.append(el('legend', setting.description)); const name = `option-${crypto.randomUUID()}`;
-    for (const value of setting.validation.values) { const radio = el('input'); radio.type = 'radio'; radio.name = name; radio.value = value; radio.checked = value === setting.value; const text = ({ local: '本地', desktop: '桌面', web: '网页', disabled: '停用', enabled: '启用', strict: '严格', warn: '提醒', off: '关闭', on: '开启', auto: '自动', standard: '标准运行', complete: '完整运行', radar: '每日速览' })[value] || value; input.append(label(text, radio)); }
+    for (const value of setting.validation.values) { const radio = el('input'); radio.type = 'radio'; radio.name = name; radio.value = value; radio.checked = value === setting.value; const text = setting.id === 'qq.targetType' ? ({ user: '单聊用户', group: '群聊' })[value] : ({ local: '本地', desktop: '桌面', web: '网页', disabled: '停用', enabled: '启用', strict: '严格', warn: '提醒', off: '关闭', on: '开启', auto: '自动', standard: '标准运行', complete: '完整运行', radar: '每日速览' })[value] || value; input.append(label(text, radio)); }
     Object.defineProperty(input, 'value', { get: () => input.querySelector('input:checked')?.value });
   } else if (setting.type === 'enum') input = select(setting.validation.values.map((value) => [value, value]), setting.value);
   else if (setting.type === 'boolean') { input = el('input'); input.type = 'checkbox'; input.setAttribute('role', 'switch'); input.checked = setting.value === true; }
@@ -557,7 +557,7 @@ function settingValue(setting, input) {
 }
 function appendCredentialEditor(section, item, onStatusChange = () => {}) {
   if (!item) return null;
-  const names = { TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key' };
+  const names = { TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key', QQ_BOT_APP_SECRET: 'QQ 机器人 AppSecret' };
   const row = el('div', undefined, 'setting'); const status = el('p');
   let configure; let clear;
   const zoteroKey = item.id === 'ZOTERO_API_KEY';
@@ -601,7 +601,7 @@ function runtimePathOptions(selected, onChange) {
   return fieldset;
 }
 const emailResultLabels = { success: '发送成功', failed: '发送失败', pending: '待恢复', none: '尚未发送', busy: '发送中', blocked: '暂时无法发送' };
-const emailErrorLabels = { authentication_failed: '认证失败', connection_failed: '连接失败', configuration_invalid: '配置错误', configuration_incomplete: '配置不完整', temporarily_unavailable: '暂时无法发送', test_in_progress: '测试通知正在发送' };
+const emailErrorLabels = { authentication_failed: '认证失败', authorization_failed: '发送权限不可用', destination_unavailable: '目标不可用', rate_limited: '发送频率受限', payload_invalid: '消息不符合平台要求', connection_failed: '连接失败', configuration_invalid: '配置错误', configuration_incomplete: '配置不完整', temporarily_unavailable: '暂时无法发送', test_in_progress: '测试通知正在发送' };
 function emailDeliveryText(delivery) {
   const time = delivery.at && Number.isFinite(Date.parse(delivery.at)) ? ` · ${new Date(delivery.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}` : '';
   return `最近发送：${emailResultLabels[delivery.status] || '尚未发送'}${delivery.kind === 'test' ? '（测试通知）' : ''}${time}${delivery.error ? ` · ${emailErrorLabels[delivery.error] || '暂时无法发送'}` : ''}`;
@@ -663,7 +663,7 @@ async function settings(group = settingsGroup, view = settingsView) {
       };
       for (const input of featureToggles) input.addEventListener('change', () => { editWhileDisabled = false; syncFeatureState(); }); syncFeatureState();
       if (featureOptions.allowDisabledEditing) {
-        const diagnostic = button('配置与测试邮箱（不启用通知）', () => { editWhileDisabled = !editWhileDisabled; syncFeatureState(); diagnostic.setAttribute('aria-expanded', String(editWhileDisabled)); });
+        const diagnostic = button(featureOptions.diagnosticLabel || '配置与测试邮箱（不启用通知）', () => { editWhileDisabled = !editWhileDisabled; syncFeatureState(); diagnostic.setAttribute('aria-expanded', String(editWhileDisabled)); });
         const syncDiagnostic = () => { diagnostic.hidden = featureToggles.some((input) => input.checked); diagnostic.setAttribute('aria-expanded', String(editWhileDisabled)); };
         for (const input of featureToggles) input.addEventListener('change', syncDiagnostic); syncDiagnostic();
         diagnostic.setAttribute('aria-expanded', 'false'); container.append(diagnostic);
@@ -740,33 +740,40 @@ async function settings(group = settingsGroup, view = settingsView) {
     sync();
     const actions = el('div', undefined, 'actions group-save section-actions'); save = button('', async () => { const selected = options.value; if (!selected) throw new Error('请先选择一种运行路径。'); const selectedRecords = records.filter((entry) => entry.pathName === selected || entry.pathName === 'shared' && selected !== 'local'); const updates = [{ id: 'runtime.mode', value: selected }]; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); if (record.required && value === undefined && !String(record.entry.value || '').trim()) throw new Error(`请先填写${record.entry.description}，原设置未改变。`); if (record.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); if (value !== undefined) updates.push({ id: record.entry.id, value }); } await api('/api/settings', { updates }); mode.value = selected; mode.ownerPresent = true; current.textContent = `当前运行路径：${runtimePaths[selected].title}`; current.className = 'runtime-current'; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); record.entry.ownerPresent = true; if (value !== undefined) { record.entry.value = value; if (record.input.dataset?.replacement === 'true') record.input.value = ''; } if (record.currentValue) record.currentValue.textContent = `当前：${currentSettingText(record.entry)}`; } panels[selected].querySelector('.runtime-readiness').textContent = readinessFor[selected](); notice.textContent = selected === 'web' ? 'Zotero Web 配置已保存；下次运行生效。连接状态仍由运行前检测确认。' : '“运行路径”已保存，下次运行生效；连接与路径可用性仍由运行前检查确认。'; }); save.className = 'primary'; actions.append(save); section.append(actions); sync(); body.append(section); return;
   }
-  if (settingsGroup === 'connections' && ['notifications', 'email'].includes(settingsView)) {
-    const channel = (await api('/api/notifications')).channels.find((entry) => entry.id === 'email');
+  if (settingsGroup === 'connections' && ['notifications', 'email', 'qq'].includes(settingsView)) {
+    const channelSettings = await api('/api/notifications');
+    for (const channel of channelSettings.channels.filter(entry => settingsView === 'notifications' || entry.id === settingsView)) {
+    const name = channel.displayName || (channel.id === 'email' ? '邮箱' : 'QQ');
+    const toggleId = `${channel.id}.enabled`;
     const credential = channel.credential;
     const readinessLabels = { configured: '配置完整', incomplete: '配置不完整', invalid: '配置错误' };
     const channelStatus = el('p', undefined, 'channel-status'); const recent = el('p', undefined, 'meta delivery-status');
     const syncStatus = () => { channelStatus.textContent = `${channel.enabled ? '已启用' : '未启用'} · ${readinessLabels[channel.readiness]}`; recent.textContent = emailDeliveryText(channel.lastDelivery); };
-    const refresh = async () => { const next = (await api('/api/notifications')).channels.find((entry) => entry.id === 'email'); Object.assign(channel, next); Object.assign(credential, next.credential); syncStatus(); };
+    const refresh = async () => { const next = (await api('/api/notifications')).channels.find((entry) => entry.id === channel.id); Object.assign(channel, next); Object.assign(credential, next.credential); syncStatus(); };
     syncStatus();
     const emailSection = el('section', undefined, 'settings-section section channel-card');
-    emailSection.append(el('h3', '邮箱', 'section-header'), channelStatus, el('p', '关闭后保留配置和密码，Radar 与周报仍正常运行。', 'meta'), recent);
-    const emailEntries = data.filter((entry) => entry.category === 'Notifications' && (entry.id.startsWith('email.') || entry.id.startsWith('smtp.')));
+    emailSection.append(el('h3', name, 'section-header'), channelStatus, el('p', '关闭后保留配置和凭据，Radar 与周报仍正常运行。', 'meta'), recent);
+    const emailEntries = data.filter((entry) => entry.category === 'Notifications' && (channel.id === 'email' ? entry.id.startsWith('email.') || entry.id.startsWith('smtp.') : entry.id.startsWith('qq.')));
     if (settingsView === 'notifications') {
-      appendSettingsControls(emailSection, emailEntries.filter((entry) => entry.id === 'email.enabled'), '邮箱渠道', '保存邮箱开关', ['email.enabled'], { refresh });
-      emailSection.append(button('邮箱配置与测试', () => navigate('settings/connections/email'))); body.append(emailSection);
-      const preferences = el('section', undefined, 'settings-section section'); preferences.append(el('h3', '通知偏好', 'section-header'), el('p', '选择允许通知的事件。只有开启邮箱渠道后才会自动发送；Daily Radar 仍只通知当前重要推荐。', 'meta'));
-      appendSettingsControls(preferences, data.filter((entry) => entry.id.startsWith('notification.')), '通知偏好', '保存通知偏好'); body.append(preferences);
+      appendSettingsControls(emailSection, emailEntries.filter((entry) => entry.id === toggleId), `${name}渠道`, `保存${name}开关`, [toggleId], { refresh });
+      emailSection.append(button(`${name}配置与测试`, () => navigate(`settings/connections/${channel.id}`))); body.append(emailSection);
     } else {
-      const emailStatus = () => { const names = { 'email.recipient': '收件人', 'smtp.host': '邮件服务器', 'smtp.user': '登录账号', 'smtp.password': '邮箱密码' }; return channel.readiness === 'configured' ? '配置完整。连接与实际发送结果请通过测试通知确认。' : channel.readiness === 'invalid' ? '配置错误，请检查邮箱地址和服务器参数。' : `配置不完整，还需填写：${channel.missing.map((id) => names[id] || '邮箱设置').join('、')}。`; };
+      const emailStatus = () => { const names = { 'email.recipient': '收件人', 'smtp.host': '邮件服务器', 'smtp.user': '登录账号', 'smtp.password': '邮箱密码', 'qq.appId': 'AppID', 'qq.targetType': '目标类型', 'qq.targetId': '目标 OpenID', 'qq.secret': 'AppSecret' }; return channel.readiness === 'configured' ? '配置完整。连接与实际发送结果请通过测试通知确认。' : channel.readiness === 'invalid' ? `配置错误，请检查${name}参数。` : `配置不完整，还需填写：${channel.missing.map((id) => names[id] || `${name}设置`).join('、')}。`; };
       const testPanel = el('div', undefined, 'notification-test feature-dependent');
-      const testState = el('p', '测试只检查邮箱发送，不改变通知开关或论文处理结果。', 'meta'); testState.setAttribute('role', 'status');
+      const testState = el('p', `测试只检查${name}发送，不改变通知开关或论文处理结果。`, 'meta'); testState.setAttribute('role', 'status');
       let requestId = crypto.randomUUID();
       const test = button('发送测试通知', async () => {
         test.textContent = '发送中…'; testState.textContent = '正在发送测试通知…';
-        try { const result = await api('/api/notifications/test', { channel: 'email', requestId }); testState.textContent = emailErrorLabels[result.error] || emailResultLabels[result.status] || '暂时无法发送'; notice.textContent = testState.textContent; await refresh(); if (result.status === 'success') requestId = crypto.randomUUID(); }
+        try { const result = await api('/api/notifications/test', { channel: channel.id, requestId }); testState.textContent = emailErrorLabels[result.error] || emailResultLabels[result.status] || '暂时无法发送'; notice.textContent = testState.textContent; await refresh(); if (result.status === 'success') requestId = crypto.randomUUID(); }
         finally { test.textContent = '发送测试通知'; }
-      }); testPanel.append(test, testState, el('p', '测试使用已保存的设置；修改邮箱参数后请先保存。', 'meta'));
-      appendSettingsControls(emailSection, emailEntries, '邮箱配置', '保存邮箱配置', ['email.enabled'], { statusText: emailStatus, credentials: [credential], refresh, extraContent: testPanel, allowDisabledEditing: true }); body.append(emailSection);
+      }); testPanel.append(test, testState, el('p', '测试使用已保存的设置；修改参数后请先保存。', 'meta'));
+      if (channel.id === 'qq') emailSection.append(el('p', '使用 QQ 开放平台机器人 AppID / AppSecret；目标填写该机器人对应的用户或群 OpenID，不是 QQ 号码。', 'meta'));
+      appendSettingsControls(emailSection, emailEntries, `${name}配置`, `保存${name}配置`, [toggleId], { statusText: emailStatus, credentials: [credential], refresh, extraContent: testPanel, allowDisabledEditing: true, diagnosticLabel: `配置与测试${name}（不启用通知）` }); body.append(emailSection);
+    }
+    }
+    if (settingsView === 'notifications') {
+      const preferences = el('section', undefined, 'settings-section section'); preferences.append(el('h3', '通知偏好', 'section-header'), el('p', '选择允许通知的事件，并通过已启用的渠道发送；Daily Radar 仍只通知当前重要推荐。', 'meta'));
+      appendSettingsControls(preferences, data.filter((entry) => entry.id.startsWith('notification.')), '通知偏好', '保存通知偏好'); body.append(preferences);
     }
     return;
   }

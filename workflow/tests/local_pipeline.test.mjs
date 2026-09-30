@@ -11,9 +11,32 @@ import { formatTimingSummary } from "../tools/local/local_timing.mjs";
 import { prepareLocalStage4ExportSource } from "../tools/stage4/export_source_step.mjs";
 import { translateTitlesBatch } from "../tools/lib/title_translation_support.mjs";
 import { createRunRecoveryCoordinator } from '../tools/recovery/run_recovery.mjs';
+import { runStage5Notification } from '../tools/stage5/main.mjs';
 
 async function tempDir() { return fs.mkdtemp(path.join(os.tmpdir(), "paperflow-local-")); }
 function sharedIndexPath(root) { return path.join(root, "shared", "current_literature_index.json"); }
+
+test('Local v5 partial channel failure preserves business, export and successful Email receipt', async t => {
+  const root = await tempDir(); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const outputRoot = path.join(root, 'out'); const input = path.join(root, 'input.json'); const runId = 'qq-local';
+  await fs.writeFile(input, JSON.stringify([{ title: 'Paper fixture', doi: '10.1234/qq-local' }]));
+  const coordinator = await createRunRecoveryCoordinator({ runRoot: path.join(outputRoot, 'runs'), runId, mode: 'local', profile: 'standard', configHash: 'a'.repeat(64), inputHash: 'b'.repeat(64), artifactPath: path.join(outputRoot, 'runs', runId, 'input_artifact.json') });
+  const env = { PAPERECHO_CONFIG_SCHEMA_VERSION: '5', PAPERECHO_QQ_CHANNEL: JSON.stringify({ enabled: true, appId: 'fixture', targetType: 'user', targetId: 'fixture' }) };
+  const messages = { email: 0, qq: 0 };
+  const result = await runLocalPipeline({ runId, recoveryCoordinator: coordinator, outputRoot, input, llmMode: 'disabled', recipient: 'reader@example.test' }, {
+    env, sharedIndexPath: sharedIndexPath(root), runStage1: fakeStage1(root, []),
+    runStage4Export: async ({ paths }) => { await fs.mkdir(path.dirname(paths.requestedOutputPath), { recursive: true }); await fs.writeFile(paths.requestedOutputPath, 'fixture export'); return { exportAudit: { actual_output_path: paths.requestedOutputPath }, exportManifest: { schemaVersion: 1, outputRoot, artifacts: [] } }; },
+    runStage5Notification: request => runStage5Notification({ ...request, transport: async () => { messages.email++; return { accepted: true }; }, config: { ...request.config, qqTransport: async () => { messages.qq++; return { accepted: false, category: 'qq_rate_limited' }; } } }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.stage5_notification.businessStatus, 'success');
+  assert.equal(result.stage5_notification.channels.email.status, 'sent');
+  assert.equal(result.stage5_notification.channels.qq.status, 'failed');
+  assert.deepEqual(messages, { email: 1, qq: 1 });
+  assert.equal(coordinator.store.ledger.stages.stage4_exports.status, 'verified');
+  assert.equal(coordinator.store.ledger.status, 'incomplete');
+  assert.equal(await fs.readFile(result.export_path, 'utf8'), 'fixture export');
+});
 
 test("local runtime config resolves CLI paths without changing shared defaults", () => {
   const parsed = parseLocalArgs(["--output-root", "tmp/local", "--input=data/items.json", "--llm-mode", "mock", "--email", "reader@example.test", "--force-resend"]);

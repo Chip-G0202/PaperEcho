@@ -333,7 +333,9 @@ export async function runZoteroLiteratureFilter({
       }
     }
     if (recoveryCoordinator) {
-      await recoveryCoordinator.store.setRunStatus(workflowLedgerStatus(terminalStatus, recoveryCoordinator.store.ledger.operations), terminalStatus);
+      const channelCompletion = report?.steps?.stage5_notification?.channels && report.steps.stage5_notification.notificationStatus === 'completed'
+        && terminalStatus === 'completed' && recoveryCoordinator.store.ledger.operations.every(operation => operation.status === 'verified');
+      await recoveryCoordinator.store.setRunStatus(channelCompletion ? 'completed' : workflowLedgerStatus(terminalStatus, recoveryCoordinator.store.ledger.operations), terminalStatus);
     }
     return report;
   };
@@ -533,21 +535,24 @@ export async function runZoteroLiteratureFilter({
     const notificationOperation = recoveryCoordinator && selectedItems.length && stage5Request.recipient
       ? await recoveryCoordinator.prepareFileOperation({ type: "notification", targetId: "radar_business", targetPath: receiptPath, input: { fingerprints: notificationSelection.selected.map((entry) => entry.fingerprint) }, retryable: false, intent: { notificationType: "radar_business", eventEpoch: runId, radarCompletionHash: canonicalQueryHash(notificationSelection.selected) } })
       : null;
-    const stage5Notification = await radarStage5Runner({ runId, urgentItems: selectedItems, audit: radarResult.audit, notificationSelection: notificationSelection.selected, recipient: stage5Request.recipient, runStateRoot: stage5StateRoot, env, ledgerOperationId: notificationOperation?.idempotencyKey || "" });
-    await recordRadarNotificationOutcome(indexPath, notificationSelection.selected, stage5Notification, { generatedAt: iso(clock()) });
-    if (notificationOperation && stage5Notification.status === "accepted") {
-      await recoveryCoordinator.completeNotification(notificationOperation, { ...stage5Notification, receiptStatus: "accepted", messageId: stage5Notification.receipt?.messageId || "" });
+    const stage5Notification = await radarStage5Runner({ runId, urgentItems: selectedItems, audit: radarResult.audit, notificationSelection: notificationSelection.selected, recipient: stage5Request.recipient, runStateRoot: stage5StateRoot, env, ledgerOperationId: notificationOperation?.idempotencyKey || "", recoveryCoordinator });
+    const emailNotification = stage5Notification.channels?.email || stage5Notification;
+    const radarOutcome = stage5Notification.channels ? Object.values(stage5Notification.channels).find(value => value.status === 'accepted') || Object.values(stage5Notification.channels).find(value => value.status === 'unknown') || Object.values(stage5Notification.channels).find(value => value.status === 'failed') || stage5Notification : stage5Notification;
+    await recordRadarNotificationOutcome(indexPath, notificationSelection.selected, radarOutcome, { generatedAt: iso(clock()) });
+    if (notificationOperation && emailNotification.status === "accepted") {
+      await recoveryCoordinator.completeNotification(notificationOperation, { ...emailNotification, receiptStatus: "accepted", messageId: emailNotification.receipt?.messageId || "" });
       await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: "accepted" });
-    } else if (notificationOperation && stage5Notification.status === "unknown") {
+    } else if (notificationOperation && emailNotification.status === "unknown") {
       await recoveryCoordinator.store.transition(notificationOperation.idempotencyKey, "remote_observed", { verification: { possibleAccepted: true } });
       await recoveryCoordinator.store.setStage("stage5_notification", "failed", { status: "unknown" });
-    } else if (notificationOperation && stage5Notification.status === "failed") {
+    } else if (notificationOperation && emailNotification.status === "failed") {
       await recoveryCoordinator.store.transition(notificationOperation.idempotencyKey, "failed", { error: `RADAR_NOTIFICATION_${String(stage5Notification.reason || "failed").toUpperCase()}` });
       await recoveryCoordinator.store.setStage("stage5_notification", "failed", { status: "failed" });
     } else if (recoveryCoordinator) {
       await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: "skipped", reason: stage5Notification.reason });
     }
-    const finalStatus = stage5Notification.status === "failed" ? "failed_stage5_notification" : stage5Notification.status === "unknown" ? "completed_with_warnings" : "completed";
+    if (recoveryCoordinator && stage5Notification.channels) await recoveryCoordinator.store.setStage('stage5_notification', stage5Notification.notificationStatus === 'completed' ? 'verified' : 'failed', { status: stage5Notification.notificationStatus });
+    const finalStatus = stage5Notification.channels ? stage5Notification.notificationStatus === 'completed' ? 'completed' : 'completed_with_warnings' : stage5Notification.status === "failed" ? "failed_stage5_notification" : stage5Notification.status === "unknown" ? "completed_with_warnings" : "completed";
     const report = buildOrchestratorReport({
       status: finalStatus,
       runContext,
@@ -792,9 +797,10 @@ export async function runZoteroLiteratureFilter({
       });
     }
     stage4RunSummary = { ...stage4RunSummary, pipelineMode: pipelineModeFromBackend(resolvedBackend), finishedAt: stage4RunSummary.finishedAt || iso(clock()) };
-    stage5Notification = await stage5Runner({ runSummary: stage4RunSummary, literatureItems: literatureItems || [], recipient: stage5Request.recipient, forceResend: stage5Request.forceResend, config: { env, runStateRoot: stage5StateRoot, ledgerOperationId: notificationOperation?.idempotencyKey || "" } });
-    if (notificationOperation && (stage5Notification.status === "sent" || (stage5Notification.status === "skipped" && stage5Notification.reason === "already_sent"))) {
-      await recoveryCoordinator.completeNotification(notificationOperation, stage5Notification);
+    stage5Notification = await stage5Runner({ runSummary: stage4RunSummary, literatureItems: literatureItems || [], recipient: stage5Request.recipient, forceResend: stage5Request.forceResend, config: { env, runStateRoot: stage5StateRoot, ledgerOperationId: notificationOperation?.idempotencyKey || "", recoveryCoordinator } });
+    const emailNotification = stage5Notification.channels?.email || stage5Notification;
+    if (notificationOperation && (emailNotification.status === "sent" || (emailNotification.status === "skipped" && emailNotification.reason === "already_sent"))) {
+      await recoveryCoordinator.completeNotification(notificationOperation, emailNotification);
       await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: stage5Notification.status });
     } else if (notificationOperation) {
       await recoveryCoordinator.store.transition(notificationOperation.idempotencyKey, "failed", { error: `STAGE5_${String(stage5Notification.status || "unknown").toUpperCase()}` });
@@ -802,6 +808,7 @@ export async function runZoteroLiteratureFilter({
     } else if (recoveryCoordinator) {
       await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: "skipped", reason: stage5Notification.reason });
     }
+    if (recoveryCoordinator && stage5Notification.channels) await recoveryCoordinator.store.setStage('stage5_notification', stage5Notification.notificationStatus === 'completed' ? 'verified' : 'failed', { status: stage5Notification.notificationStatus });
   }
   try {
     const performance = await writeWorkflowPerformanceSummary({
@@ -830,7 +837,7 @@ export async function runZoteroLiteratureFilter({
     };
   }
   const finalStatus = deriveWorkflowStatus({
-    explicitStatus: stage4Ok && ["sent", "skipped"].includes(stage5Notification.status) ? "completed" : stage4Ok ? "failed_stage5_notification" : "failed_stage4_export",
+    explicitStatus: stage4Ok && stage5Notification.channels ? stage5Notification.notificationStatus === 'completed' ? 'completed' : 'completed_with_warnings' : stage4Ok && ["sent", "skipped"].includes(stage5Notification.status) ? "completed" : stage4Ok ? "failed_stage5_notification" : "failed_stage4_export",
     stages,
     artifacts,
   });

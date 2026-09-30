@@ -248,7 +248,10 @@ export async function runPreflight(options, dependencies = {}) {
       readiness.push({ name: "smtp", status: "ready" });
     } else {
       const names = smtp.missing.length ? smtp.missing : ["SMTP configuration"];
-      for (const name of names) requiredMissing.push({ ...missing(name, "发送明确请求的 Stage5 邮件", "在 common.email.smtp 或本地环境中配置", "configuration"), section: "common" });
+      for (const name of names) {
+        if (Number(env.PAPERECHO_CONFIG_SCHEMA_VERSION) >= 5) featureMissing.push(optional(name, '邮箱通知；业务与其他渠道继续运行', '在 common.email.smtp 或 SecretService 中配置'));
+        else requiredMissing.push({ ...missing(name, "发送明确请求的 Stage5 邮件", "在 common.email.smtp 或本地环境中配置", "configuration"), section: "common" });
+      }
     }
   } else optionalMissing.push(optional("Stage5 recipient", "启用邮件通知", "使用 --email、PAPERFLOW_REPORT_TO 或 NOTIFICATION_EMAIL"));
 
