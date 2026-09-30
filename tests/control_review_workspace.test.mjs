@@ -494,6 +494,7 @@ test('QQ disabled configuration is collapsed; explicit test, Replace/Clear prese
   const setting = (id, type, value, validation = {}) => ({ id, type, value, validation, category: 'Notifications', description: id, available: true });
   const settings = [setting('qq.enabled', 'boolean', false), setting('qq.appId', 'string', 'fixture-app'), setting('qq.targetType', 'enum', 'user', { values: ['user', 'group'] }), setting('qq.targetId', 'string', 'fixture-openid')];
   app.setApi(async (url, input) => {
+    if (url === '/api/qq-remote') return { configured: false, enabled: false, authorized: 'incomplete', runtimeSupported: true, connection: 'not_running' };
     if (url === '/api/settings') return settings;
     if (url === '/api/credentials' && !input) return [credential];
     if (url === '/api/notifications') return { channels: [channel] };
@@ -525,6 +526,36 @@ test('QQ disabled configuration is collapsed; explicit test, Replace/Clear prese
   assert.equal(channel.enabled, false);
   assert.equal(calls.some(([url]) => url === '/api/settings'), false);
   assert.equal(card.textContent.includes('typed-fixture-secret'), false);
+});
+
+for (const [runtimeSupported, connection] of [[false, 'error'], [true, 'not_running'], [true, 'connecting'], [true, 'reconnecting'], [true, 'online'], [true, 'error']]) test(`QQ remote UI separates configuration/enable/runtime/connection ${runtimeSupported}/${connection}`, async () => {
+  const app = ui(); const calls = [];
+  const credential = { id: 'QQ_BOT_APP_SECRET', configured: true, writable: true };
+  const channel = { id: 'qq', enabled: false, readiness: 'configured', missing: [], credential, lastDelivery: { status: 'none' } };
+  const field = (id, type, value) => ({ id, type, value, validation: {}, category: 'Notifications', description: id, available: true, configured: true });
+  const settings = [field('qq.enabled', 'boolean', false), field('qq.remote.enabled', 'boolean', false), field('qq.remote.authorizedUser', 'string', null)];
+  const remote = { configured: true, enabled: false, authorized: 'configured', runtimeSupported, connection: 'not_running' };
+  app.setApi(async (url, input) => {
+    if (url === '/api/qq-remote') return remote;
+    if (url === '/api/notifications') return { channels: [channel] };
+    if (url === '/api/credentials') return [credential];
+    if (url === '/api/settings' && !input) return settings;
+    calls.push([url, input]);
+    if (url === '/api/settings') { remote.enabled = true; remote.connection = runtimeSupported ? 'connecting' : 'error'; return { saved: true }; }
+    throw new Error('unexpected request');
+  });
+  await app.settings('connections', 'qq');
+  const section = app.main.querySelector('.qq-remote');
+  assert.match(section.textContent, /仅在 Control Center 运行期间监听/); assert.match(section.textContent, /配置：完整 · 开关：关闭/); assert.match(section.textContent, /连接：未运行/);
+  assert.equal(section.dataset.featureCollapsed, 'true');
+  await byText(section, '配置授权用户（保持远程交互关闭）').click(); assert.equal(section.dataset.featureCollapsed, 'false');
+  const textInput = section.querySelectorAll('input').find(input => input.type === 'text'); assert.equal(textInput.value, ''); assert.match(section.textContent, /原标识不回显/);
+  const toggle = section.querySelectorAll('input').find(input => input.type === 'checkbox'); toggle.checked = true; await toggle.listeners.change(); await byText(section, '保存远程交互设置').click();
+  assert.equal(calls.length, 1); assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1].updates)), [{ id: 'qq.remote.enabled', value: true }]); assert.equal(channel.enabled, false);
+  assert.equal(/连接：在线/.test(section.textContent), false);
+  remote.connection = connection; await byText(section, '刷新连接状态').click();
+  const names = { error: '错误', not_running: '未运行', connecting: '连接中', reconnecting: '重连中', online: '在线' }; assert.match(section.textContent, new RegExp(`连接：${names[connection]}`));
+  if (!runtimeSupported) assert.match(section.textContent, /不支持，需要 Node.js 22.4\+/);
 });
 test('zero results, missing identifier, completed queue and neutral selection stay usable', async () => {
   const app = ui(); app.setApi(async () => ({ runId: null, total: 0, items: [] })); await app.paperReview(); assert.match(app.main.textContent, /此队列暂无文献/);

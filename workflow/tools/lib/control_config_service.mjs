@@ -4,7 +4,7 @@ import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { buildPubMedQueryFromKeywordGroups } from './literature_config.mjs';
 import { readApplicationConfig, applicationConfigPath, DOMAIN_SECTIONS } from './application_config.mjs';
-import { migrateApplicationConfig, upgradeNotificationConfig, upgradeNotificationChannelsConfig } from './application_config_migration.mjs';
+import { migrateApplicationConfig, upgradeNotificationConfig, upgradeNotificationChannelsConfig, upgradeRemoteInteractionConfig } from './application_config_migration.mjs';
 import { isValidSmtpHost } from '../stage5/email_sender.mjs';
 
 const INITIAL_OWNER_VALUES = Object.freeze({
@@ -20,7 +20,7 @@ const OWNER_PATH_ENV = Object.freeze({
 
 const definitions = [];
 function setting(id, category, file, key, type, description, validation = {}) {
-  definitions.push({ id, category, file, key, type, description, validation, secret: false, advanced: category === 'Advanced', reload: 'next_run' });
+  definitions.push({ id, category, file, key, type, description, validation, secret: false, advanced: category === 'Advanced', reload: id.startsWith('qq.remote.') ? 'control_center' : 'next_run' });
 }
 setting('preference.enabled', 'Models', 'review-workflow-rules.json', 'llm_review.preference_learning_enabled', 'boolean', '启用偏好学习');
 setting('review.master', 'Models', 'review-workflow-rules.json', 'llm_review.enabled', 'boolean', '启用智能评审总开关');
@@ -57,6 +57,8 @@ for (const [id, category, key, type, description, validation] of [
   ['qq.appId', 'Notifications', 'common.notifications.channels.qq.appId', 'string', '机器人 AppID', { maxLength: 200 }],
   ['qq.targetType', 'Notifications', 'common.notifications.channels.qq.targetType', 'enum', '发送目标类型', { values: ['user', 'group'] }],
   ['qq.targetId', 'Notifications', 'common.notifications.channels.qq.targetId', 'string', '目标 OpenID', { maxLength: 200 }],
+  ['qq.remote.enabled', 'Notifications', 'common.notifications.channels.qq.remoteInteraction.enabled', 'boolean', '开启 QQ 只读远程交互'],
+  ['qq.remote.authorizedUser', 'Notifications', 'common.notifications.channels.qq.remoteInteraction.authorizedUser', 'string', '授权单聊用户 OpenID', { maxLength: 200, pattern: '^[A-Za-z0-9_-]+$' }],
   ['email.recipient', 'Notifications', 'common.email.recipient', 'email', '收件人'],
   ['smtp.host', 'Notifications', 'common.email.smtp.host', 'string', 'SMTP 主机', { maxLength: 253 }],
   ['smtp.port', 'Notifications', 'common.email.smtp.port', 'integer', 'SMTP 端口', { min: 1, max: 65535 }],
@@ -159,12 +161,13 @@ export class ConfigService {
         if (definition.id === 'smtp.port' && value == null) value = 465;
         if (definition.id === 'smtp.secure' && value == null) value = Number(owner.value.common?.email?.smtp?.port ?? 465) === 465;
         if (definition.id === 'email.enabled' && value == null) value = true;
-        if (definition.id === 'qq.enabled' && value == null) value = false;
+        if (['qq.enabled', 'qq.remote.enabled'].includes(definition.id) && value == null) value = false;
         ownerPresent = owner.present;
       }
       catch (error) { if (error.code !== 'ENOENT') throw error; available = false; }
       const { file, key, ...publicDefinition } = definition;
-      result.push({ ...publicDefinition, value, available, ownerPresent, effectiveValue: definition.id === 'runtime.mode' ? this.runtimeMode || value : undefined });
+      const privateIdentity = definition.id === 'qq.remote.authorizedUser';
+      result.push({ ...publicDefinition, value: privateIdentity ? null : value, ...(privateIdentity ? { configured: Boolean(value) } : {}), available, ownerPresent, effectiveValue: definition.id === 'runtime.mode' ? this.runtimeMode || value : undefined });
     }
     result.push({ id: 'weekly.interval', category: 'Weekly', type: 'integer', value: Number(owners.get('paperecho.config.json')?.value?.weekly?.intervalDays || this.env.review_results_RUN_INTERVAL_DAYS || 7), default: 7, available: true, readOnly: true, description: '默认 7 天；由调度配置管理', validation: { min: 1 }, secret: false, advanced: true, reload: 'scheduler' });
     return result;
@@ -196,7 +199,8 @@ export class ConfigService {
       const target = applicationConfigPath({ root: this.root, env: this.env, configPath: this.configPath });
       return withAtomicJsonLock(target, async () => {
         const current = readApplicationConfig({ root: this.root, env: this.env, configPath: target });
-        const candidate = qqEdit ? upgradeNotificationChannelsConfig(current) : notificationEdit ? upgradeNotificationConfig(current) : current;
+        const remoteEdit = resolved.some(({ id }) => id.startsWith('qq.remote.'));
+        const candidate = remoteEdit ? upgradeRemoteInteractionConfig(current) : qqEdit ? upgradeNotificationChannelsConfig(current) : notificationEdit ? upgradeNotificationConfig(current) : current;
         for (const { id, value, definition } of resolved) {
           const section = DOMAIN_SECTIONS[definition.file];
           const owner = section ? (candidate[section] ||= {}) : candidate;

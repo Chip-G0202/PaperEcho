@@ -1,6 +1,6 @@
 # PaperEcho 配置指南
 
-v2.5 的 schema v3 将非敏感配置收敛到 `config/paperecho.config.json`，v4 增加独立 Radar/Weekly 通知偏好，v5 增加默认关闭的 QQ outbound 渠道。日常使用 Control Center Settings → 通知与推送配置 Email/QQ 与事件偏好；QQ AppSecret 归 SecretService，token 仅在内存中。迁移命令、渠道字段、产品长度预算与未验证的 provider 边界、shared resolver、单次 capability override 与 secret/runtime 边界以 [Config map](../config/README.md) 为准。本文以下领域文件和环境优先级表继续描述 v1/v2 compatibility 及既有字段语义；迁移后，旧领域文件不再是正常保存目标，旧模型 env 不再覆盖 Settings。
+v2.5 的 schema v3 将非敏感配置收敛到 `config/paperecho.config.json`，v4 增加独立 Radar/Weekly 通知偏好，v5 增加默认关闭的 QQ outbound 渠道，v6 增加默认关闭、显式单聊授权的 QQ Remote Interaction。PaperEcho Core（含 QQ outbound）保持 Node >=18；只有 Remote Interaction 要求 Node >=22.4 且 built-in stable WebSocket 可用，低版本不启动 listener。日常使用 Control Center Settings → 通知与推送配置 Email/QQ 与事件偏好；QQ AppSecret 归 SecretService，token 仅在内存中。迁移命令、渠道字段、产品长度预算与未验证的 provider 边界、Gateway/Control Center 生命周期与只读命令、shared resolver、单次 capability override 与 secret/runtime 边界以 [Config map](../config/README.md) 为准。本文以下领域文件和环境优先级表继续描述 v1/v2 compatibility 及既有字段语义；迁移后，旧领域文件不再是正常保存目标，旧模型 env 不再覆盖 Settings。
 
 ## 用户实际需要处理的文件
 

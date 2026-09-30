@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 
-export const APPLICATION_SCHEMA_VERSION = 5;
+export const APPLICATION_SCHEMA_VERSION = 6;
 export const DOMAIN_SECTIONS = Object.freeze({
   'source_selection.json': 'sources',
   'rss_sources.json': 'rss',
@@ -47,7 +47,7 @@ export function readApplicationConfig(options = {}) {
   let config;
   try { config = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return null; throw new Error('APPLICATION_CONFIG_UNREADABLE'); }
-  if (![1, 2, 3, 4, 5].includes(config?.schemaVersion)) throw new Error('APPLICATION_CONFIG_SCHEMA_UNSUPPORTED');
+  if (![1, 2, 3, 4, 5, 6].includes(config?.schemaVersion)) throw new Error('APPLICATION_CONFIG_SCHEMA_UNSUPPORTED');
   if (config.schemaVersion < 3) return null;
   return validateRunnerConfigObject(config);
 }

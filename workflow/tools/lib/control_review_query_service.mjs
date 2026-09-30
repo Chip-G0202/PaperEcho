@@ -142,6 +142,31 @@ export class ReviewQueryService {
       rules: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
     };
   }
+  async latestRadarData() {
+    for (const run of await this.runs()) {
+      const pipeline = this.pipeline(run);
+      if (!pipeline) continue;
+      const report = await this.read(path.join(pipeline, 'run_report.json'));
+      if (report?.profile !== 'radar' && report?.runtime_profile !== 'radar') continue;
+      const audit = await this.read(path.join(pipeline, 'radar_audit.json'));
+      if (!audit || audit.zoteroWriteCount !== 0 || audit.xlsxWriteCount !== 0) continue;
+      return { run, audit };
+    }
+    return null;
+  }
+  async radarSummary() {
+    const data = await this.latestRadarData();
+    return data ? { at: data.run.startedAt, candidateCount: data.audit.candidateCount, urgentCount: data.audit.urgentCount } : null;
+  }
+  async weeklySummary() {
+    const data = await this.latestWeeklyData();
+    return data ? { at: data.run.startedAt, total: data.items.length, items: data.items.slice(0, 3) } : null;
+  }
+  async latestLiteratureSummary() {
+    // The same existing read model used by Control Center; no retrieval or export.
+    const page = await this.weekly({ limit: 3 });
+    return page.total ? { total: page.total, items: page.items } : null;
+  }
   async status() {
     const runs = await this.runs();
     const weekly = await this.latestWeeklyData();

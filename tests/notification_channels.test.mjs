@@ -32,13 +32,13 @@ async function fixture(t, { enabled = true, complete = true, env = {}, transport
 }
 const channel = async (f) => (await f.services.notifications.settings()).channels[0];
 
-test('v3 to v5 migration preserves Email/other configuration and never reads legacy inputs', async (t) => {
+test('v3 to v6 migration preserves Email/other configuration and never reads legacy inputs', async (t) => {
   const f = await fixture(t, { enabled: false, schemaVersion: 3 });
   await fs.writeFile(path.join(f.root, '.env'), 'BROKEN legacy input must not be read');
-  assert.equal((await migrateApplicationConfig({ root: f.root })).schemaVersion, 5);
+  assert.equal((await migrateApplicationConfig({ root: f.root })).schemaVersion, 6);
   const after = await f.read();
   assert.deepEqual(after.common.email, f.value.common.email);
-  assert.deepEqual(after.common.notifications, { radar: { enabled: true }, weekly: { enabled: true }, channels: { qq: { enabled: false } } });
+  assert.deepEqual(after.common.notifications, { radar: { enabled: true }, weekly: { enabled: true }, channels: { qq: { enabled: false, remoteInteraction: { enabled: false } } } });
   assert.deepEqual(JSON.parse(await fs.readFile(`${f.configPath}.v3-backup`, 'utf8')), f.value);
   assert.equal((await migrateApplicationConfig({ root: f.root })).migrated, false);
   assert.deepEqual(await f.read(), after);

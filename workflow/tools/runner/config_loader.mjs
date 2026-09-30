@@ -126,7 +126,16 @@ function validateCommon(common, schemaVersion = 1) {
     notifications = validateKeys(value.notifications, "notifications", schemaVersion);
     if (schemaVersion >= 5) {
       const channels = validateKeys(notifications.channels, 'channels');
-      const qq = validateKeys(channels.qq, 'qq');
+      const qqValue = channels.qq ?? {};
+      if (!isObject(qqValue)) fail('CONFIG_SECTION_INVALID', 'qq must be an object', { section: 'qq' });
+      const { remoteInteraction, ...outbound } = qqValue;
+      if (remoteInteraction !== undefined && schemaVersion < 6) fail('CONFIG_FIELD_UNKNOWN', 'remote interaction requires schema 6', { field: 'remoteInteraction' });
+      const qq = validateKeys(outbound, 'qq');
+      if (remoteInteraction !== undefined) {
+        if (!isObject(remoteInteraction) || Object.keys(remoteInteraction).some(key => !['enabled', 'authorizedUser'].includes(key))) fail('CONFIG_FIELD_UNKNOWN', 'unsupported remote interaction field', { field: 'remoteInteraction' });
+        optionalBoolean(remoteInteraction.enabled, 'remoteInteraction.enabled');
+        if (remoteInteraction.authorizedUser !== undefined && (typeof remoteInteraction.authorizedUser !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(remoteInteraction.authorizedUser))) fail('CONFIG_VALUE_INVALID', 'invalid authorized user identifier', { field: 'remoteInteraction.authorizedUser' });
+      }
       optionalBoolean(qq.enabled, 'common.notifications.channels.qq.enabled');
       for (const field of ['appId', 'targetId', 'targetType']) optionalString(qq[field], `common.notifications.channels.qq.${field}`);
       if (qq.targetType != null && !['user', 'group'].includes(qq.targetType)) fail('CONFIG_VALUE_INVALID', 'QQ targetType must be user or group', { field: 'targetType' });
@@ -226,7 +235,7 @@ async function loadConfigFile({ requestedPath, source, fsApi, cwd }) {
 
 export function validateRunnerConfigObject(config) {
   if (!isObject(config)) fail("CONFIG_ROOT_INVALID", "PaperEcho config root must be an object");
-  if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1, 2, 3, 4 or 5", { schemaVersion: config.schemaVersion ?? null });
+  if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1, 2, 3, 4, 5 or 6", { schemaVersion: config.schemaVersion ?? null });
   for (const key of Object.keys(config)) {
     if (!new Set(["schemaVersion", "mode", "profile", "common", "desktop", "web", "local", ...(config.schemaVersion >= 3 ? [...Object.values(DOMAIN_SECTIONS), 'weekly', 'migration'] : [])]).has(key)) fail("CONFIG_FIELD_UNKNOWN", `top-level field ${key} is not supported`, { field: key });
   }

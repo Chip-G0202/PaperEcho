@@ -83,6 +83,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       const cookie = String(req.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
       if (!equal(cookie, session)) return send(403, { error: 'SESSION_REQUIRED' });
       if (req.method === 'GET') {
+        if (decoded === '/api/qq-remote') return send(200, await services.remote.settings());
         if (decoded === '/api/schedule-status') return send(200, await services.schedule.status());
         if (decoded === '/api/status') return send(200, await services.review.status());
         if (decoded === '/api/weekly') return send(200, await services.review.weekly({ offset: Number(url.searchParams.get('offset') || 0), limit: Number(url.searchParams.get('limit') || 50) }));
@@ -102,14 +103,17 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       if (decoded === '/api/notifications/test') return send(200, await services.notifications.test(input));
       if (decoded === '/api/shutdown') {
         res.once('finish', () => {
+          void services.remote?.stop();
           const timer = setTimeout(() => server.closeAllConnections(), 2000); timer.unref();
           server.close(() => clearTimeout(timer)); server.closeIdleConnections?.();
         });
         return send(202, { status: 'stopping' });
       }
       if (decoded === '/api/credentials') {
-        if (input.action === 'replace') return send(200, await services.secrets.replace(input.id, input.value));
-        if (input.action === 'clear') return send(200, await services.secrets.clear(input.id));
+        if (['replace', 'clear'].includes(input.action)) {
+          const result = input.action === 'replace' ? await services.secrets.replace(input.id, input.value) : await services.secrets.clear(input.id);
+          void services.remote?.reconcile(); return send(200, result);
+        }
         return send(400, { error: 'CREDENTIAL_ACTION_NOT_SUPPORTED' });
       }
       if (decoded === '/api/feedback') {
@@ -119,7 +123,10 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       }
       if (decoded === '/api/research') return send(200, await services.feedback.submit({ kind: 'research_evaluation', text: input.text, requestId: input.requestId }));
       if (decoded === '/api/decision') return send(200, await services.feedback.submit({ kind: 'rule_decision', id: input.id, decision: input.decision, revisedRule: input.revisedRule, humanApproval: input.humanApproval }));
-      if (decoded === '/api/settings') return send(200, Array.isArray(input.updates) ? await services.config.updateMany(input.updates) : await services.config.update(input.id, input.value));
+      if (decoded === '/api/settings') {
+        const result = Array.isArray(input.updates) ? await services.config.updateMany(input.updates) : await services.config.update(input.id, input.value);
+        void services.remote?.reconcile(); return send(200, result);
+      }
       return send(404, { error: 'NOT_FOUND' });
     } catch (error) {
       if (res.headersSent) { res.end(); return; }
@@ -131,6 +138,8 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
   server.headersTimeout = 10000;
   server.maxHeadersCount = 40;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
+  server.once('close', () => { void services.remote?.stop(); });
+  void services.remote?.reconcile();
   return { server, url: `http://${host === '::1' ? '[::1]' : host}:${server.address().port}` };
 }
 

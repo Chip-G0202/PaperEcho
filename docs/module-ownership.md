@@ -38,7 +38,11 @@ Control Center application boundary：
 | schedule / interval gate | `workflow/tools/lib/schedule_support.mjs` | 无 | 独立 lib 模块 |
 | notification content | `workflow/tools/stage5/notification_content.mjs` | 无 | 从现有 Radar/Weekly 业务结果构建内容，不检索、不重新评级 |
 | email rendering | `stage5/radar_report.mjs`、`stage5/report_summary.mjs`、`stage5/test_notification_report.mjs` | 无 | 共用 `stage5/email_layout.mjs` 的品牌布局与 HTML escaping；HTML/text 使用同一内容模型 |
-| QQ rendering / transport | `notification/qq_renderer.mjs`、`notification/qq_transport.mjs` | 无 | 同一 content 的有界纯文本；官方单聊/群聊主动发送，内存 token，无 inbound；5000 UTF-8 字节为产品预算，provider 硬上限未验证 |
+| QQ rendering / transport | `notification/qq_renderer.mjs`、`notification/qq_transport.mjs` | 无 | 同一 content 的有界纯文本；官方主动发送及被动回复共用 HTTP/内存 token cache；5000 UTF-8 字节为 outbound 产品预算，provider 硬上限未验证 |
+| QQ Gateway / capability | `remote/qq_gateway.mjs` | Control Center lifecycle | Remote only Node >=22.4 + built-in WebSocket；Core/outbound >=18；最小 bundled intent bit 25，业务只分发 C2C；完成 sequence Resume，bounded backoff |
+| remote authorization / lifecycle | `remote/qq_remote_service.mjs` | `web/server.mjs` | ConfigService 的默认关闭开关/显式单聊 user_openid，SecretService 凭据；配置/开启/运行支持/连接分开，不提供公网入站路由 |
+| read-only remote actions / reply | `remote/actions.mjs` | 无 | 五个确定命令，仅调用既有 ReviewQueryService / ControlScheduleStatusService；无参数、无写操作，脱敏短被动回复 |
+| inbound receipt | `remote/inbound_receipt.mjs` | 无 | atomic JSON/lock；provider/AppID/user/message-id 摘要；先持久化再执行/回复，重复与不确定状态 hold；独立于 notification receipt |
 | business channel fan-out | `notification/channel_delivery.mjs` | Stage5 / Radar 入口 | 共用事件偏好，各渠道独立 receipt/ledger；v5 通知部分失败保持业务成功，不建立平行 QQ 服务 |
 | notification delivery / recovery | `notification/delivery.mjs`、`stage5/email_receipt.mjs`、`recovery/notification_recovery.mjs`（均在 `workflow/tools/`） | 原 Runner `--resume` | SMTP 仍归 `stage5/email_sender.mjs`；已成功业务不重跑，原回执和 ledger 完成恢复 |
 | triage policy | `workflow/tools/stage1/rule_classifier.mjs` | `workflow/tools/stage1/main.mjs` | Stage1-local rule classifier；旧 `workflow_classifier.mjs` / `triage_policy.mjs` 兼容入口已删除 |

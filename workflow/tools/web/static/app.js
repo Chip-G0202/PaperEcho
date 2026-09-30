@@ -512,6 +512,7 @@ function visibleSetting(setting) {
   return setting.category !== 'Advanced';
 }
 function currentSettingText(setting) {
+  if (setting.id === 'qq.remote.authorizedUser') return setting.configured || setting.value ? '已配置（原标识不回显）' : '未配置';
   if (setting.value === null || setting.value === undefined || setting.value === '') return '未配置';
   const prefix = setting.ownerPresent === false ? '默认值 · ' : '';
   if (setting.type === 'url') { try { return `${prefix || '已配置 · '}${new URL(setting.value).hostname}`; } catch { return prefix ? `${prefix}已提供` : '已配置'; } }
@@ -682,7 +683,7 @@ async function settings(group = settingsGroup, view = settingsView) {
         else if (value !== undefined && entry.input.dataset?.replacement === 'true') { entry.setting.value = value; entry.setting.sourceEntry.value = value; entry.input.value = ''; if (entry.setting.currentValue) entry.setting.currentValue.textContent = `当前：${currentSettingText(entry.setting)}`; }
       }
       await featureOptions.refresh?.(); syncFeatureStatus();
-      notice.textContent = `“${saveName}”已保存，下次运行生效。`;
+      notice.textContent = featureOptions.savedNotice || `“${saveName}”已保存，下次运行生效。`;
     }); save.className = 'primary'; actions.append(save); container.append(actions);
   };
   const active = (views.find(([key]) => key === settingsView) || settingViews[settingsGroup][0]);
@@ -748,12 +749,13 @@ async function settings(group = settingsGroup, view = settingsView) {
     const credential = channel.credential;
     const readinessLabels = { configured: '配置完整', incomplete: '配置不完整', invalid: '配置错误' };
     const channelStatus = el('p', undefined, 'channel-status'); const recent = el('p', undefined, 'meta delivery-status');
+    let refreshRemote;
     const syncStatus = () => { channelStatus.textContent = `${channel.enabled ? '已启用' : '未启用'} · ${readinessLabels[channel.readiness]}`; recent.textContent = emailDeliveryText(channel.lastDelivery); };
-    const refresh = async () => { const next = (await api('/api/notifications')).channels.find((entry) => entry.id === channel.id); Object.assign(channel, next); Object.assign(credential, next.credential); syncStatus(); };
+    const refresh = async () => { const next = (await api('/api/notifications')).channels.find((entry) => entry.id === channel.id); Object.assign(channel, next); Object.assign(credential, next.credential); syncStatus(); await refreshRemote?.(); };
     syncStatus();
     const emailSection = el('section', undefined, 'settings-section section channel-card');
     emailSection.append(el('h3', name, 'section-header'), channelStatus, el('p', '关闭后保留配置和凭据，Radar 与周报仍正常运行。', 'meta'), recent);
-    const emailEntries = data.filter((entry) => entry.category === 'Notifications' && (channel.id === 'email' ? entry.id.startsWith('email.') || entry.id.startsWith('smtp.') : entry.id.startsWith('qq.')));
+    const emailEntries = data.filter((entry) => entry.category === 'Notifications' && (channel.id === 'email' ? entry.id.startsWith('email.') || entry.id.startsWith('smtp.') : entry.id.startsWith('qq.') && !entry.id.startsWith('qq.remote.')));
     if (settingsView === 'notifications') {
       appendSettingsControls(emailSection, emailEntries.filter((entry) => entry.id === toggleId), `${name}渠道`, `保存${name}开关`, [toggleId], { refresh });
       emailSection.append(button(`${name}配置与测试`, () => navigate(`settings/connections/${channel.id}`))); body.append(emailSection);
@@ -769,6 +771,19 @@ async function settings(group = settingsGroup, view = settingsView) {
       }); testPanel.append(test, testState, el('p', '测试使用已保存的设置；修改参数后请先保存。', 'meta'));
       if (channel.id === 'qq') emailSection.append(el('p', '使用 QQ 开放平台机器人 AppID / AppSecret；目标填写该机器人对应的用户或群 OpenID，不是 QQ 号码。', 'meta'));
       appendSettingsControls(emailSection, emailEntries, `${name}配置`, `保存${name}配置`, [toggleId], { statusText: emailStatus, credentials: [credential], refresh, extraContent: testPanel, allowDisabledEditing: true, diagnosticLabel: `配置与测试${name}（不启用通知）` }); body.append(emailSection);
+      if (channel.id === 'qq') {
+        const remoteSection = el('section', undefined, 'settings-section section qq-remote');
+        const remoteStatus = el('p', undefined, 'remote-status'); remoteStatus.setAttribute('role', 'status');
+        refreshRemote = async () => {
+          const remote = await api('/api/qq-remote');
+          const states = { not_running: '未运行', connecting: '连接中', online: '在线', reconnecting: '重连中', error: '错误' };
+          remoteStatus.textContent = `配置：${remote.configured ? '完整' : '不完整'} · 开关：${remote.enabled ? '开启' : '关闭'} · 授权用户：${remote.authorized === 'configured' ? '已配置' : '未配置'} · 环境：${remote.runtimeSupported ? '支持' : '不支持，需要 Node.js 22.4+'} · 连接：${states[remote.connection] || '未运行'}`;
+        };
+        await refreshRemote();
+        remoteSection.append(el('h3', 'QQ 只读远程交互', 'section-header'), remoteStatus, el('p', '仅在 Control Center 运行期间监听；保存或启用不代表已连接。QQ 通知开关独立，远程交互需要 Node.js 22.4+。', 'meta'), el('p', '仅支持 /help /status /latest /radar /weekly；显式授权一个单聊用户 OpenID。发送目标不会自动获得权限。', 'meta'));
+        appendSettingsControls(remoteSection, data.filter(entry => entry.id.startsWith('qq.remote.')), '只读远程交互', '保存远程交互设置', ['qq.remote.enabled'], { refresh: refreshRemote, allowDisabledEditing: true, diagnosticLabel: '配置授权用户（保持远程交互关闭）', savedNotice: '远程交互设置已保存；监听仅在 Control Center 运行期间可用，请刷新连接状态确认。' });
+        remoteSection.append(button('刷新连接状态', refreshRemote)); body.append(remoteSection);
+      }
     }
     }
     if (settingsView === 'notifications') {
