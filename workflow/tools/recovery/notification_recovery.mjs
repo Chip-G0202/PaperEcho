@@ -47,7 +47,7 @@ async function resumeOneNotification({ store, recipient = "", transport, qqTrans
   if (!CHANNEL_IDS.includes(channel)) return blocked('notification_operation_ambiguous');
   if (channel !== 'email') {
     const configuration = channelConfiguration(channel, { env });
-    recipient = channelRecipient(channel, configuration);
+    recipient = channelRecipient(channel, configuration, env);
     transport = channelTransports[channel] || (channel === 'qq' ? qqTransport : null) || createChannelTransport(channel, configuration, env);
   }
   const expectedType = ledger.profile === "radar" ? "radar_business" : "run_summary";

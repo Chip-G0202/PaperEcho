@@ -409,7 +409,8 @@ test('notification UI saves event preferences separately and protects test in-fl
   });
   await app.settings('connections', 'notifications');
   assert.match(app.main.textContent, /微信/);
-  assert.doesNotMatch(app.main.textContent, /飞书|Weekly 完成后发送邮件/);
+  assert.match(app.main.textContent, /飞书/);
+  assert.doesNotMatch(app.main.textContent, /Weekly 完成后发送邮件/);
   await byText(app.main, '保存通知偏好').click();
   assert.deepEqual(Array.from(calls[0][1].updates, (entry) => entry.id), ['notification.radar', 'notification.weekly']);
   app.main.replaceChildren(); await app.settings('connections', 'email');

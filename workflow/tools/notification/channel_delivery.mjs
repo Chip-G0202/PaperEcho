@@ -26,7 +26,7 @@ export async function deliverBusinessChannels({ content, emailDelivery, env = {}
     const businessSubject = event === 'radar' ? 'urgent_a_aggregate' : content.runId;
     const identity = notificationIdentity({ notificationType, businessSubject, eventEpoch: content.runId, payload, channel });
     const receiptPath = notificationReceiptPathFor(path.resolve(runStateRoot), identity.receiptId);
-    const recipient = channelRecipient(channel, configuration);
+    const recipient = channelRecipient(channel, configuration, env);
     operation = recoveryCoordinator ? await recoveryCoordinator.prepareFileOperation({ type: 'notification', targetId: recipientHash(recipient, channel), targetPath: receiptPath,
       input: { runId: content.runId, channel, payloadHash: identity.payloadHash }, retryable: false,
       intent: { notificationType, eventEpoch: content.runId, channel, ...(radarCompletionHash ? { radarCompletionHash } : {}) } }) : null;

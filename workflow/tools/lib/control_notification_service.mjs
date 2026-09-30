@@ -11,6 +11,7 @@ import { createQqTransport } from '../notification/qq_transport.mjs';
 import { qqRecipient } from '../notification/channel_delivery.mjs';
 import { CHANNEL_IDS, CHANNEL_CREDENTIALS, channelRecipient, renderChannelNotification, createChannelTransport } from '../notification/channels.mjs';
 import { validWxUid } from '../notification/wxpusher_transport.mjs';
+import { validFeishuWebhook, validFeishuSigningSecret } from '../notification/feishu_transport.mjs';
 
 export function publicEmailDelivery(receipt) {
   if (!receipt) return { status: 'none', at: null, kind: null, error: null };
@@ -48,7 +49,7 @@ export class NotificationChannelService {
     const credential = credentials[0]; const missing = [];
     if (!credential?.configured) missing.push(`${channel}.secret`);
     if (channel === 'wechat' && !value.uid) missing.push('wechat.uid');
-    const valid = channel === 'wechat' ? (!value.uid || validWxUid(value.uid)) && await this.secrets.withCredential('WXPUSHER_APP_TOKEN', token => !token || /^AT_[A-Za-z0-9]{1,200}$/.test(token)) : false;
+    const valid = channel === 'wechat' ? (!value.uid || validWxUid(value.uid)) && await this.secrets.withCredential('WXPUSHER_APP_TOKEN', token => !token || /^AT_[A-Za-z0-9]{1,200}$/.test(token)) : channel === 'feishu' && await this.secrets.withCredential('FEISHU_WEBHOOK_URL', url => !url || validFeishuWebhook(url)) && await this.secrets.withCredential('FEISHU_SIGNING_SECRET', validFeishuSigningSecret);
     return { readiness: !valid ? 'invalid' : missing.length ? 'incomplete' : 'configured', missing, credential, credentials };
   }
   async qqReadiness(qq) {
@@ -111,7 +112,7 @@ export class NotificationChannelService {
       ...qqReadiness, testAvailable: qqReadiness.readiness === 'configured', lastDelivery: await this.latestDelivery(receiptRoot, 'qq') }];
     for (const id of CHANNEL_IDS.filter(id => !['email','qq'].includes(id))) {
       const value = owner.common?.notifications?.channels?.[id] || { enabled: false }; const state = await this.platformReadiness(id, value);
-      channels.push({ id, displayName: { wechat: '微信' }[id], availability: 'available', enabled: value.enabled === true, ...state, testAvailable: state.readiness === 'configured', lastDelivery: await this.latestDelivery(receiptRoot, id) });
+      channels.push({ id, displayName: { wechat: '微信', feishu: '飞书' }[id], availability: 'available', enabled: value.enabled === true, ...state, testAvailable: state.readiness === 'configured', lastDelivery: await this.latestDelivery(receiptRoot, id) });
     }
     return { channels,
     preferences: { radar: owner.common?.notifications?.radar?.enabled !== false, weekly: owner.common?.notifications?.weekly?.enabled !== false,
@@ -137,7 +138,7 @@ export class NotificationChannelService {
         payload, recipient, recoveryData: { content }, env, transport, clock: this.clock, channel: input.channel });
       const platformDelivery = async () => {
         const credentials = {}; for (const name of CHANNEL_CREDENTIALS[input.channel]) await this.secrets.withCredential(name, secret => { credentials[name] = secret; });
-        return deliver({}, this.channelTransports[input.channel] || createChannelTransport(input.channel, value, credentials), channelRecipient(input.channel, value));
+        return deliver({}, this.channelTransports[input.channel] || createChannelTransport(input.channel, value, credentials), channelRecipient(input.channel, value, credentials));
       };
       const delivered = input.channel !== 'email' && input.channel !== 'qq' ? await platformDelivery() : input.channel === 'qq' ? await this.secrets.withCredential('QQ_BOT_APP_SECRET', secret => deliver({}, this.qqTransport || createQqTransport({ ...qq, clientSecret: secret }), qqRecipient(qq))) : await this.secrets.withSmtpEnvironment(email.smtp, async (env) => {
         if (!emailTransportConfig(env).configured) return null;
