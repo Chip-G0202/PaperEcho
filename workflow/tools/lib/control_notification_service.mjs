@@ -12,6 +12,7 @@ import { qqRecipient } from '../notification/channel_delivery.mjs';
 import { CHANNEL_IDS, CHANNEL_CREDENTIALS, channelRecipient, renderChannelNotification, createChannelTransport } from '../notification/channels.mjs';
 import { validWxUid } from '../notification/wxpusher_transport.mjs';
 import { validFeishuWebhook, validFeishuSigningSecret } from '../notification/feishu_transport.mjs';
+import { validWecomWebhook } from '../notification/wecom_transport.mjs';
 
 export function publicEmailDelivery(receipt) {
   if (!receipt) return { status: 'none', at: null, kind: null, error: null };
@@ -49,7 +50,7 @@ export class NotificationChannelService {
     const credential = credentials[0]; const missing = [];
     if (!credential?.configured) missing.push(`${channel}.secret`);
     if (channel === 'wechat' && !value.uid) missing.push('wechat.uid');
-    const valid = channel === 'wechat' ? (!value.uid || validWxUid(value.uid)) && await this.secrets.withCredential('WXPUSHER_APP_TOKEN', token => !token || /^AT_[A-Za-z0-9]{1,200}$/.test(token)) : channel === 'feishu' && await this.secrets.withCredential('FEISHU_WEBHOOK_URL', url => !url || validFeishuWebhook(url)) && await this.secrets.withCredential('FEISHU_SIGNING_SECRET', validFeishuSigningSecret);
+    const valid = channel === 'wechat' ? (!value.uid || validWxUid(value.uid)) && await this.secrets.withCredential('WXPUSHER_APP_TOKEN', token => !token || /^AT_[A-Za-z0-9]{1,200}$/.test(token)) : channel === 'feishu' ? await this.secrets.withCredential('FEISHU_WEBHOOK_URL', url => !url || validFeishuWebhook(url)) && await this.secrets.withCredential('FEISHU_SIGNING_SECRET', validFeishuSigningSecret) : channel === 'wecom' && await this.secrets.withCredential('WECOM_WEBHOOK_URL', url => !url || validWecomWebhook(url));
     return { readiness: !valid ? 'invalid' : missing.length ? 'incomplete' : 'configured', missing, credential, credentials };
   }
   async qqReadiness(qq) {
@@ -112,7 +113,7 @@ export class NotificationChannelService {
       ...qqReadiness, testAvailable: qqReadiness.readiness === 'configured', lastDelivery: await this.latestDelivery(receiptRoot, 'qq') }];
     for (const id of CHANNEL_IDS.filter(id => !['email','qq'].includes(id))) {
       const value = owner.common?.notifications?.channels?.[id] || { enabled: false }; const state = await this.platformReadiness(id, value);
-      channels.push({ id, displayName: { wechat: '微信', feishu: '飞书' }[id], availability: 'available', enabled: value.enabled === true, ...state, testAvailable: state.readiness === 'configured', lastDelivery: await this.latestDelivery(receiptRoot, id) });
+      channels.push({ id, displayName: { wechat: '微信', feishu: '飞书', wecom: '企业微信群机器人' }[id], availability: 'available', enabled: value.enabled === true, ...state, testAvailable: state.readiness === 'configured', lastDelivery: await this.latestDelivery(receiptRoot, id) });
     }
     return { channels,
     preferences: { radar: owner.common?.notifications?.radar?.enabled !== false, weekly: owner.common?.notifications?.weekly?.enabled !== false,

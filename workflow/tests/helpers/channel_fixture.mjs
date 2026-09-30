@@ -23,6 +23,7 @@ export async function businessChannelsFixture(t, { profile = 'standard', enabled
   const emailOperation = enabled.includes('email') ? await coordinator.prepareFileOperation({ type: 'notification', targetId: recipientHash(recipient), targetPath: receiptPath, input: { runId }, retryable: false, intent: { notificationType: type, eventEpoch: runId } }) : null;
   const env = { PAPERECHO_CONFIG_SCHEMA_VERSION: '6', PAPERECHO_EMAIL_ENABLED: String(enabled.includes('email')) };
   env.FEISHU_WEBHOOK_URL = new URL('/open-apis/bot/v2/hook/' + '0'.repeat(8) + '-0000-0000-0000-' + '0'.repeat(12), 'https://open.feishu.cn').href;
+  env.WECOM_WEBHOOK_URL = new URL('/cgi-bin/webhook/send?key=' + 'generated-key', 'https://qyapi.weixin.qq.com').href;
   for (const id of CHANNEL_IDS.filter(id => id !== 'email')) env[`PAPERECHO_${id.toUpperCase()}_CHANNEL`] = JSON.stringify({ enabled: enabled.includes(id), appId: 'fixture', targetType: 'user', targetId: 'fixture-recipient', uid: 'UID_' + 'generatedFixture' });
   const messages = Object.fromEntries(CHANNEL_IDS.map(id => [id, []]));
   const send = (id, resume = false) => async message => { messages[id].push(message); return !resume && unknown.includes(id) ? {} : { accepted: resume || !failed.includes(id), category: 'provider_rejected' }; };

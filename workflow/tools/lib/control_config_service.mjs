@@ -59,6 +59,7 @@ for (const [id, category, key, type, description, validation] of [
   ['qq.targetId', 'Notifications', 'common.notifications.channels.qq.targetId', 'string', '目标 OpenID', { maxLength: 200 }],
   ['wechat.enabled', 'Notifications', 'common.notifications.channels.wechat.enabled', 'boolean', '启用微信通知'],
   ['feishu.enabled', 'Notifications', 'common.notifications.channels.feishu.enabled', 'boolean', '启用飞书通知'],
+  ['wecom.enabled', 'Notifications', 'common.notifications.channels.wecom.enabled', 'boolean', '启用企业微信群机器人通知'],
   ['wechat.uid', 'Notifications', 'common.notifications.channels.wechat.uid', 'string', 'WxPusher 接收用户 UID（留空不变）', { maxLength: 132, pattern: '^UID_[A-Za-z0-9]+$' }],
   ['email.recipient', 'Notifications', 'common.email.recipient', 'email', '收件人'],
   ['smtp.host', 'Notifications', 'common.email.smtp.host', 'string', 'SMTP 主机', { maxLength: 253 }],
@@ -162,7 +163,7 @@ export class ConfigService {
         if (definition.id === 'smtp.port' && value == null) value = 465;
         if (definition.id === 'smtp.secure' && value == null) value = Number(owner.value.common?.email?.smtp?.port ?? 465) === 465;
         if (definition.id === 'email.enabled' && value == null) value = true;
-        if (['qq.enabled','wechat.enabled','feishu.enabled'].includes(definition.id) && value == null) value = false;
+        if (['qq.enabled','wechat.enabled','feishu.enabled','wecom.enabled'].includes(definition.id) && value == null) value = false;
         ownerPresent = owner.present;
       }
       catch (error) { if (error.code !== 'ENOENT') throw error; available = false; }

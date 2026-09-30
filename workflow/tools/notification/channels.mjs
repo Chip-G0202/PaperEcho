@@ -5,8 +5,10 @@ import { createWxpusherTransport } from './wxpusher_transport.mjs';
 import { createHash } from 'node:crypto';
 import { renderFeishuNotification } from './feishu_renderer.mjs';
 import { createFeishuTransport } from './feishu_transport.mjs';
-export const CHANNEL_IDS = Object.freeze(['email', 'qq', 'wechat', 'feishu']);
-export const CHANNEL_CREDENTIALS = Object.freeze({ qq: ['QQ_BOT_APP_SECRET'], wechat: ['WXPUSHER_APP_TOKEN'], feishu: ['FEISHU_WEBHOOK_URL', 'FEISHU_SIGNING_SECRET'] });
+import { renderWecomNotification } from './wecom_renderer.mjs';
+import { createWecomTransport } from './wecom_transport.mjs';
+export const CHANNEL_IDS = Object.freeze(['email', 'qq', 'wechat', 'feishu', 'wecom']);
+export const CHANNEL_CREDENTIALS = Object.freeze({ qq: ['QQ_BOT_APP_SECRET'], wechat: ['WXPUSHER_APP_TOKEN'], feishu: ['FEISHU_WEBHOOK_URL', 'FEISHU_SIGNING_SECRET'], wecom: ['WECOM_WEBHOOK_URL'] });
 export function channelConfiguration(channel, { config, env = {} } = {}) {
   if (config) return config.common?.notifications?.channels?.[channel] || { enabled: false };
   try { return JSON.parse(env[`PAPERECHO_${channel.toUpperCase()}_CHANNEL`] || '{"enabled":false}'); } catch { return { enabled: false }; }
@@ -21,11 +23,13 @@ export function renderChannelNotification(channel, content) {
   if (channel === 'qq') return renderQqNotification(content);
   if (channel === 'wechat') return renderWechatNotification(content);
   if (channel === 'feishu') return renderFeishuNotification(content);
+  if (channel === 'wecom') return renderWecomNotification(content);
   throw new Error('NOTIFICATION_CHANNEL_INVALID');
 }
 export function createChannelTransport(channel, value, env) {
   if (channel === 'qq') return createQqTransport({ ...value, clientSecret: env.QQ_BOT_APP_SECRET || '' });
   if (channel === 'wechat') return createWxpusherTransport({ ...value, appToken: env.WXPUSHER_APP_TOKEN || '' });
   if (channel === 'feishu') return createFeishuTransport({ webhookUrl: env.FEISHU_WEBHOOK_URL || '', signingSecret: env.FEISHU_SIGNING_SECRET || '' });
+  if (channel === 'wecom') return createWecomTransport({ webhookUrl: env.WECOM_WEBHOOK_URL || '' });
   throw new Error('NOTIFICATION_CHANNEL_INVALID');
 }

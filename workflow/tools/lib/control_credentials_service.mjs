@@ -4,7 +4,7 @@ import { parseEnvFile } from './env_file_parser.mjs';
 import { writeAtomicText, withAtomicJsonLock } from './atomic_json.mjs';
 
 export const CONTROL_SECRET_NAMES = Object.freeze([
-  'TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY', 'EASYSCHOLAR_SECRET_KEY', 'SMTP_PASS', 'ZOTERO_API_KEY', 'QQ_BOT_APP_SECRET', 'WXPUSHER_APP_TOKEN', 'FEISHU_WEBHOOK_URL', 'FEISHU_SIGNING_SECRET',
+  'TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY', 'EASYSCHOLAR_SECRET_KEY', 'SMTP_PASS', 'ZOTERO_API_KEY', 'QQ_BOT_APP_SECRET', 'WXPUSHER_APP_TOKEN', 'FEISHU_WEBHOOK_URL', 'FEISHU_SIGNING_SECRET', 'WECOM_WEBHOOK_URL',
 ]);
 
 // Editing supports a strict subset of the existing loader's single-line format.
