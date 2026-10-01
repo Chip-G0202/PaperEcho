@@ -1,9 +1,16 @@
 import { resolveCachedTranslation } from "../lib/title_translation_support.mjs";
 import {
   buildStage1WritebackCorrelationKey,
+  buildWritebackReadyItems,
   filterDesktopReviewSourceByWritebackSummary,
   resolveVerifiedWritebackItems,
 } from "../lib/pipeline_stage_support.mjs";
+
+// Stage1 safety holds are not user tasks. Before an export exists, derive only
+// the prospective final source through the pipeline's existing pure owners.
+export function buildProspectiveStage4ExportSource(items = []) {
+  return buildFinalExportPayload({ allAbcItems: buildWritebackReadyItems(items) }).triaged;
+}
 
 export function buildStage4StandaloneExportSource({
   desktopSource = null,

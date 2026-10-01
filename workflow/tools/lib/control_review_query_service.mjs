@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { buildStage4StandaloneExportSource } from '../stage4/finalize_exports_support.mjs';
+import { buildStage4StandaloneExportSource, buildProspectiveStage4ExportSource, buildFinalExportPayload } from '../stage4/finalize_exports_support.mjs';
 import { buildRunSummary } from './run_summary.mjs';
 import { feedbackIdentity } from './control_feedback_service.mjs';
 import { loadSourceSelectionConfig } from './literature_config.mjs';
@@ -96,13 +96,21 @@ export class ReviewQueryService {
       // A date pipeline can be reused: do not attach a different run's output.
       if (report.skipped || (report.run_id && report.run_id !== run.runId)
         || (report.started_at && Date.parse(report.started_at) < Date.parse(run.startedAt))) continue;
+      // A completed final source owns membership; never append Stage1-only holds.
+      if (weekly?.run.runId === run.runId) return { run, type: 'weekly', items: buildFinalExportPayload({ allAbcItems: weekly.items, writebackSummary: weekly.writeback || {} }).triaged };
+      if (report.steps?.stage4_export_audit?.stage4_export_status === 'success'
+        || report.steps?.med_weekly_synthesis?.completed === true) {
+        const desktopSource = await this.read(path.join(pipeline, 'desktop_daily_review_source.json'));
+        const writebackSummary = await this.read(path.join(pipeline, 'zotero_writeback_summary.json'));
+        const source = buildStage4StandaloneExportSource({ desktopSource, writebackSummary });
+        return { run, type: 'stage4', items: buildFinalExportPayload({ allAbcItems: source.allAbcItems, writebackSummary: writebackSummary || {} }).triaged };
+      }
       const items = await this.read(path.join(pipeline, 'triaged_items.json'));
       if (items === null) {
-        if (weekly?.run.runId === run.runId) return { run, type: 'weekly', items: weekly.items };
         continue;
       }
       if (!Array.isArray(items)) throw new Error('REVIEW_SCOPE_INVALID');
-      return { run, type: 'held_stage1', items };
+      return { run, type: 'prospective_stage4', items: buildProspectiveStage4ExportSource(items) };
     }
     return weekly && (this.localRepository || !runs.length) ? { run: weekly.run, type: 'weekly', items: weekly.items } : null;
   }
@@ -132,7 +140,7 @@ export class ReviewQueryService {
       admittedReviews.add(matches[0]);
       return { ...item, _activeManualItem: matches[0] };
     });
-    const held = active.filter((item) => !identityKeys(item).some((key) => admittedKeys.has(key))).map((item) => ({ ...item, _heldReview: true, _activeManualItem: item }));
+    const held = active.filter((item) => !identityKeys(item).some((key) => admittedKeys.has(key))).map((item) => ({ ...item, _heldReview: scope.type === 'prospective_stage4', _activeManualItem: item }));
     return {
       ...(weekly || { run: scope.run, report: {}, writeback: null }),
       reviewScope: scope, scopeItems, items: [...weeklyItems, ...held],

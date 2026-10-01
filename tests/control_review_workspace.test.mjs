@@ -90,7 +90,7 @@ test('manual queue scopes 142 historical records to two actionable items and kee
   const source = papers(142).map((item, i) => ({ ...item, final_grade: 'B', rule_grade: 'B', llm_review_grade: 'A', semantic_mismatch: i % 2 === 0, semantic_rescue: i % 2 === 1, needsHumanReview: i < 10 }));
   await finalizePendingPaperReview({ reviewRoot: root, items: source.map((item) => ({ ...item, review_required: true })) });
   await feedback.submitPaperBatch(source.slice(0, 10).map((paper, i) => ({ kind: 'manual_grade', paper, manualGrade: 'B', requestId: `historic-${i}` })));
-  const held = ['first', 'second', 'processed'].map((name) => ({ title: `Synthetic pending ${name}`, doi: `10.1234/pending-${name}`, grade: 'D', final_grade: 'D', rule_grade: 'D', llm_review_grade: 'C', review_required: true }));
+  const held = ['first', 'second', 'processed'].map((name) => ({ title: `Synthetic pending ${name}`, doi: `10.1234/pending-${name}`, grade: 'C', final_grade: 'C', rule_grade: 'C', llm_review_grade: 'C', review_required: true }));
   await finalizePendingPaperReview({ reviewRoot: root, items: held });
   await feedback.submit({ kind: 'manual_grade', paper: held[2], manualGrade: 'D', requestId: 'already-d' });
   const query = new ReviewQueryService({ root, reviewRoot: root, feedback, rules: { list: async () => [] } });
@@ -98,7 +98,7 @@ test('manual queue scopes 142 historical records to two actionable items and kee
   const write = async (file, value) => { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(value)); };
   await write(path.join(query.runRoot, 'current-held', 'run_group.json'), { schemaVersion: 1, runId: 'current-held', pipelineMode: 'desktop', startedAt: '2026-10-01T05:00:00Z', artifacts: [{ kind: 'pipeline', rootKey: 'research', path: 'pipeline/current-held' }] });
   await write(path.join(query.researchRoot, 'pipeline/current-held/run_report.json'), { run_id: 'current-held' });
-  await write(path.join(query.researchRoot, 'pipeline/current-held/triaged_items.json'), held.slice(0, 2));
+  await write(path.join(query.researchRoot, 'pipeline/current-held/triaged_items.json'), held.slice(0, 2).map(item => ({ ...item, pre_llm_skip_writeback: false })));
   const app = ui();
   app.setApi(async (url, payload) => {
     if (url === '/api/pending-summary') return query.pendingSummary();
@@ -110,6 +110,7 @@ test('manual queue scopes 142 historical records to two actionable items and kee
   assert.equal(before.items.filter((item) => item.legacyReviewEvidence).length, 142);
   assert.equal(before.items.filter((item) => item.manualReviewPending).length, 2);
   assert.equal((await query.pendingSummary()).manual, 2);
+  assert.equal((await app.loadPendingSummary()).manual, 2);
   await app.paperReview(true, 'manual');
   assert.match(app.main.textContent, /本次已处理 0 \/ 共 2 · 待处理 2/);
   await byText(app.main, 'A 1').click();
@@ -125,6 +126,9 @@ test('manual queue scopes 142 historical records to two actionable items and kee
   await byText(app.main, 'D 4').click();
   assert.match(app.main.textContent, /本次已处理 1 \/ 共 1 · 待处理 0/);
   assert.equal((await query.pendingSummary()).manual, 0);
+  const completedSummary = await app.loadPendingSummary();
+  assert.equal(completedSummary.manual, 0);
+  assert.equal(app.completionPlan('normal', completedSummary).actions.some(action => action.route === 'feedback/rating/manual'), false);
   assert.equal((await readPendingPaperReview(root)).records.length, 145);
   assert.equal((await readCanonicalFeedback(root)).history.length, 14);
   app.main.replaceChildren(); await app.paperReview(true, 'manual');
