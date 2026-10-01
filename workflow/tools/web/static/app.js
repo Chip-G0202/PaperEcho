@@ -154,7 +154,7 @@ function pendingPaperCounts(items = []) {
   const visible = displayablePapers(items);
   return {
     normal: visible.filter((item) => !item.needsReview && item.feedbackAllowed && !item.feedback).length,
-    manual: items.filter((item) => item.needsReview && (item.pendingReview || ['A', 'B', 'C'].includes(displayGrade(item))) && item.feedbackAllowed && !item.manualGrade).length,
+    manual: items.filter((item) => item.manualReviewPending && item.feedbackAllowed && !item.manualGrade).length,
   };
 }
 const pendingRuleCount = (rows = []) => rows.filter((entry) => ['pending', 'candidate'].includes(entry.status)).length;
@@ -308,7 +308,7 @@ async function paperReview(showIntro = true, section = reviewSection) {
   const visibleItems = displayablePapers(data.items);
   const groups = {
     normal: visibleItems.filter((item) => !item.needsReview),
-    manual: data.items.filter((item) => item.needsReview && (item.pendingReview || ['A', 'B', 'C'].includes(displayGrade(item)))),
+    manual: data.items.filter((item) => item.manualReviewPending && item.feedbackAllowed && !item.manualGrade),
   };
   const queues = Object.fromEntries(Object.entries(groups).map(([key, items]) => [key, createReviewQueue(items, (item) => Boolean(key === 'manual' ? item.manualGrade : item.feedback), (item) => item.feedbackAllowed)]));
   let queue = queues[reviewSection]; let message = ''; let messageKind = 'success';
@@ -323,10 +323,10 @@ async function paperReview(showIntro = true, section = reviewSection) {
       ? [['1', '评为 A 级'], ['2', '评为 B 级'], ['3', '评为 C 级'], ['4', '评为 D 级'], ['↑', '返回上一篇'], ['↓', '前往下一篇']]
       : [['1', '升级当前文献'], ['2', '保持当前评级'], ['3', '降低当前评级'], ['4', '排除当前文献'], ['↑', '返回上一篇'], ['↓', '前往下一篇']];
     context.replaceChildren(
-      contextCard(manual ? '人工复核' : '文献评级', [`已处理 ${processed} / ${queue.items.length}`, `待处理 ${queue.items.length - processed}`, manual ? '直接选择你确认的 A / B / C / D 等级。' : '用相对反馈校准当前文献的最终评级。']),
+      contextCard(manual ? '人工复核' : '文献评级', [`${manual ? '本次已处理' : '已处理'} ${processed} / ${queue.items.length}`, `待处理 ${queue.items.length - processed}`, manual ? '直接选择你确认的 A / B / C / D 等级。' : '用相对反馈校准当前文献的最终评级。']),
       keyboardHelp('数字键快速审阅', shortcuts, '可使用主键盘或小键盘数字键；在输入框中输入时快捷键会自动暂停。'),
     );
-    workspace.append(el('p', `已处理 ${processed} / 共 ${queue.items.length} · 待处理 ${queue.items.length - processed}`, 'queue-progress'));
+    workspace.append(el('p', `${manual ? '本次已处理' : '已处理'} ${processed} / 共 ${queue.items.length} · 待处理 ${queue.items.length - processed}`, 'queue-progress'));
     if (message) { const receipt = el('p', message, `queue-receipt ${messageKind}`); receipt.setAttribute('role', 'status'); workspace.append(receipt); }
     if (processed === queue.items.length) workspace.append(el('p', '本队列已完成。可用上 / 下一篇回看并修改已记录反馈。', 'completion'));
     const item = queue.items[queue.index]; const card = el('article', undefined, 'focused-card paper-card'); paperHeading(card, item, { showGrade: false });

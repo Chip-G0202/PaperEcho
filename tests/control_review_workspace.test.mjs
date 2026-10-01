@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { FeedbackService, PAPER_FEEDBACK, readCanonicalFeedback } from '../workflow/tools/lib/control_feedback_service.mjs';
 import { ReviewQueryService } from '../workflow/tools/lib/control_review_query_service.mjs';
 import { getWeeklyReviewEvidence } from '../workflow/tools/stage4/spreadsheet_adapter.mjs';
+import { finalizePendingPaperReview, readPendingPaperReview } from '../workflow/tools/lib/pending_paper_review.mjs';
 
 const script = await fs.readFile(new URL('../workflow/tools/web/static/app.js', import.meta.url), 'utf8');
 // Minimal DOM test double for event wiring, not layout or browser conformance.
@@ -57,7 +58,7 @@ function ui() {
   vm.runInContext(script + '\nglobalThis.testing = { createReviewQueue, shortcutAction, gradeCounts, pendingPaperCounts, completionPlan, showCompletionModal, loadWeekly, loadPendingSummary, home, weekly, paperReview, research, suggestions, settings, settingGroups, settingViews, parseRoute, setApi: (value) => { api = value; } };', context);
   return { ...context.testing, main, notice, body, location: context.location };
 }
-const papers = (count = 100) => Array.from({ length: count }, (_, i) => ({ id: String(i), title: `English ${i} — ${'long title '.repeat(i === 0 ? 80 : 1)}`, translatedTitle: `中文副标题 ${i}`, authors: ['测试作者'], finalGrade: ['A', 'B', 'C'][i % 3], ruleGrade: 'B', semanticGrade: 'A', needsReview: i === count - 1, reviewReason: i === count - 1 ? '既有等级复审依据' : '', source: 'PubMed', journal: 'Journal', year: '2026', doi: i ? '' : '10.1234/test', pmid: String(1000 + i), zotero: 'not_used_local', feedbackAllowed: true, feedback: null }));
+const papers = (count = 100) => Array.from({ length: count }, (_, i) => ({ id: String(i), title: `English ${i} — ${'long title '.repeat(i === 0 ? 80 : 1)}`, translatedTitle: `中文副标题 ${i}`, authors: ['测试作者'], finalGrade: ['A', 'B', 'C'][i % 3], ruleGrade: 'B', semanticGrade: 'A', needsReview: i === count - 1, manualReviewPending: i === count - 1, reviewReason: i === count - 1 ? '既有等级复审依据' : '', source: 'PubMed', journal: 'Journal', year: '2026', doi: i ? '' : '10.1234/test', pmid: String(1000 + i), zotero: 'not_used_local', feedbackAllowed: true, feedback: null }));
 const byText = (root, text) => root.querySelectorAll('button').find((node) => node.textContent === text);
 const work = (root) => root.querySelector('.review-workspace');
 const currentTitle = (root) => root.querySelector('article')?.querySelector('h3')?.textContent;
@@ -77,7 +78,57 @@ test('Weekly view model reuses exporter grade precedence and every legacy manual
   assert.equal(data.items[0].ruleGrade, 'B'); assert.equal(data.items[0].semanticGrade, 'A'); assert.equal(data.items[0].finalGrade, 'C'); assert.equal(data.items[0].grade, 'C');
   assert.equal(data.items[0].reviewReason, '原有依据'); assert.equal(JSON.stringify(source), before);
   query.rules = { list: async () => [{ status: 'pending' }, { status: 'candidate' }, { status: 'accepted' }] };
-  assert.deepEqual({ ...(await query.pendingSummary()) }, { normal: 2, manual: 8, rules: 2 });
+  assert.equal(data.items.filter((item) => item.manualReviewPending).length, 6);
+  assert.deepEqual({ ...(await query.pendingSummary()) }, { normal: 2, manual: 6, rules: 2 });
+});
+test('manual queue scopes 142 historical records to two actionable items and keeps only this session results', async (t) => {
+  const base = new URL('./runs/control-review/', import.meta.url); await fs.mkdir(base, { recursive: true });
+  const root = await fs.mkdtemp(path.join(fileURLToPath(base), 'pending-queue-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const feedback = new FeedbackService({ reviewRoot: root });
+  const source = papers(142).map((item, i) => ({ ...item, final_grade: 'B', rule_grade: 'B', llm_review_grade: 'A', semantic_mismatch: i % 2 === 0, semantic_rescue: i % 2 === 1, needsHumanReview: i < 10 }));
+  await finalizePendingPaperReview({ reviewRoot: root, items: source.map((item) => ({ ...item })) });
+  await feedback.submitPaperBatch(source.slice(0, 10).map((paper, i) => ({ kind: 'manual_grade', paper, manualGrade: 'B', requestId: `historic-${i}` })));
+  const held = ['first', 'second', 'processed'].map((name) => ({ title: `Synthetic pending ${name}`, doi: `10.1234/pending-${name}`, grade: 'D', final_grade: 'D', rule_grade: 'D', llm_review_grade: 'C' }));
+  await finalizePendingPaperReview({ reviewRoot: root, items: held });
+  await feedback.submit({ kind: 'manual_grade', paper: held[2], manualGrade: 'D', requestId: 'already-d' });
+  const query = new ReviewQueryService({ root, reviewRoot: root, feedback, rules: { list: async () => [] } });
+  query.latestWeeklyData = async () => ({ run: { runId: 'fixture' }, report: {}, items: source });
+  const write = async (file, value) => { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(value)); };
+  await write(path.join(query.runRoot, 'current-held', 'run_group.json'), { schemaVersion: 1, runId: 'current-held', pipelineMode: 'desktop', startedAt: '2026-10-01T05:00:00Z', artifacts: [{ kind: 'pipeline', rootKey: 'research', path: 'pipeline/current-held' }] });
+  await write(path.join(query.researchRoot, 'pipeline/current-held/run_report.json'), { run_id: 'current-held' });
+  await write(path.join(query.researchRoot, 'pipeline/current-held/triaged_items.json'), held.slice(0, 2));
+  const app = ui();
+  app.setApi(async (url, payload) => {
+    if (url === '/api/pending-summary') return query.pendingSummary();
+    if (!payload) { const params = new URL(url, 'http://local').searchParams; return query.weekly({ offset: Number(params.get('offset') || 0), limit: Number(params.get('limit') || 50) }); }
+    return feedback.submit({ kind: 'manual_grade', paper: await query.resolvePaper(payload.runId, payload.paperId), ...payload });
+  });
+  const before = await query.weekly({ limit: 200 });
+  assert.equal(before.items.filter((item) => item.needsReview && !item.pendingReview).length, 142);
+  assert.equal(before.items.filter((item) => item.manualReviewPending).length, 2);
+  assert.equal((await query.pendingSummary()).manual, 2);
+  await app.paperReview(true, 'manual');
+  assert.match(app.main.textContent, /本次已处理 0 \/ 共 2 · 待处理 2/);
+  await byText(app.main, 'A 1').click();
+  assert.match(app.main.textContent, /本次已处理 1 \/ 共 2 · 待处理 1/);
+  assert.equal((await query.pendingSummary()).manual, 1);
+  const remaining = await query.weekly({ limit: 200 });
+  assert.equal(remaining.items.find((item) => item.manualReviewPending).id, before.items.at(-1).id);
+  await key(work(app.main), 'ArrowUp');
+  assert.match(app.main.textContent, /已人工评级：A/);
+  await byText(app.main, 'B 2').click(); // Just-decided ID still resolves for a revision.
+  app.main.replaceChildren(); await app.paperReview(true, 'manual');
+  assert.match(app.main.textContent, /本次已处理 0 \/ 共 1 · 待处理 1/);
+  await byText(app.main, 'D 4').click();
+  assert.match(app.main.textContent, /本次已处理 1 \/ 共 1 · 待处理 0/);
+  assert.equal((await query.pendingSummary()).manual, 0);
+  assert.equal((await readPendingPaperReview(root)).records.length, 145);
+  assert.equal((await readCanonicalFeedback(root)).history.length, 14);
+  app.main.replaceChildren(); await app.paperReview(true, 'manual');
+  assert.match(app.main.textContent, /此队列暂无文献/);
+  const denied = ui(); denied.setApi(async () => ({ runId: 'denied', total: 1, items: [{ ...papers(1)[0], manualReviewPending: true, feedbackAllowed: false }] }));
+  await denied.paperReview(true, 'manual'); assert.match(denied.main.textContent, /此队列暂无文献/);
 });
 test('Literature shows only compact A/B/C cards and filters without feedback actions', async () => {
   const app = ui(); const items = papers(101); items[100].finalGrade = 'D';
@@ -149,7 +200,7 @@ test('manual review saves direct A/B/C/D grades, advances on success and preserv
   const root = await fs.mkdtemp(path.join(fileURLToPath(base), 'manual-grade-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const service = new FeedbackService({ reviewRoot: root }); const items = papers(3);
-  items.forEach((item, index) => { item.needsReview = true; item.finalGrade = ['B', 'C', 'A'][index]; });
+  items.forEach((item, index) => { item.needsReview = item.manualReviewPending = true; item.finalGrade = ['B', 'C', 'A'][index]; });
   const before = items.map((item) => [item.ruleGrade, item.semanticGrade, item.finalGrade]);
   const calls = []; const app = ui();
   app.setApi(async (url, payload) => {
@@ -170,7 +221,7 @@ test('manual review saves direct A/B/C/D grades, advances on success and preserv
   assert.deepEqual(items.map((item) => [item.ruleGrade, item.semanticGrade, item.finalGrade]), before);
 });
 test('manual review failure stays on the paper and editor focus suppresses direct-grade shortcuts', async () => {
-  const app = ui(); const items = papers(2); items.forEach((item) => { item.needsReview = true; }); const calls = [];
+  const app = ui(); const items = papers(2); items.forEach((item) => { item.needsReview = item.manualReviewPending = true; }); const calls = [];
   app.setApi(async (url, payload) => { if (!payload) return { runId: 'manual-fail', total: 2, items }; calls.push(payload); throw new Error('保存失败'); });
   await app.paperReview(true, 'manual'); const title = currentTitle(app.main);
   const textarea = new Element('textarea'); const event = await key(work(app.main), '2', textarea); assert.equal(event.defaultPrevented, undefined); assert.equal(calls.length, 0);

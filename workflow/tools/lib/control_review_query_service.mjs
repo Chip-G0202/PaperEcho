@@ -8,9 +8,26 @@ import { loadSourceSelectionConfig } from './literature_config.mjs';
 import { buildRuntimeConfig } from './runtime_config.mjs';
 import { buildLocalStage4ExportSource } from '../stage4/export_source_step.mjs';
 import { getWeeklyReviewEvidence } from '../stage4/spreadsheet_adapter.mjs';
-import { listPendingPaperReview } from './pending_paper_review.mjs';
+import { readPendingPaperReview, matchPendingPaperRecord, manualDecisionForRecord } from './pending_paper_review.mjs';
 
 const inside = (root, candidate) => { const rel = path.relative(root, candidate); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
+const paperId = (runId, item, index, keys = []) => createHash('sha256').update(item._reviewScopeRunId ? `${runId}:scope:${item._reviewScopeRunId}:${keys[0] || ''}` : `${runId}:${index}:${keys[0] || ''}`).digest('hex');
+const identityKeys = (item) => { try { return feedbackIdentity(item); } catch { return []; } };
+
+// Current artifact evidence owns actionability; durable pending status alone
+// never makes a historical record a current task. Canonical decisions win.
+export function isActiveManualReview(item, current = []) {
+  const explicit = item?.needs_human_review || item?.needsHumanReview || item?.review_required || item?.reviewRequired
+    || item?.semantic_review?.needs_human_review || item?.semantic_review?.review_required || item?.manual_review_state === 'pending';
+  if (!explicit || !identityKeys(item).length || item.pre_llm_zotero_existing_duplicate === true
+    || ['auto_d', 'manual_abc', 'manual_d'].includes(item.manual_review_state)) return false;
+  const evidence = getWeeklyReviewEvidence(item);
+  // Pending review uses current business grades; original_grade is display history.
+  const ruleGrade = String(item.rule_grade || item.grade || evidence.ruleGrade).slice(0, 1).toUpperCase();
+  const semanticGrade = String(item.llm_review_grade || evidence.semanticGrade).slice(0, 1).toUpperCase();
+  if (ruleGrade && ruleGrade === semanticGrade) return false;
+  return !manualDecisionForRecord({ id: item.pending_review_id || '', keys: identityKeys(item) }, current);
+}
 export class ReviewQueryService {
   constructor({ root, context = buildRuntimeConfig({ cwd: root, env: {}, argv: [] }), reviewRoot = context.reviewRoot, feedback, rules }) {
     Object.assign(this, { root: path.resolve(root), reviewRoot, feedback, rules });
@@ -73,21 +90,59 @@ export class ReviewQueryService {
     }
     return null;
   }
+  async currentReviewScope(weekly) {
+    const seen = new Set();
+    const runs = await this.runs();
+    if (!this.localRepository) for (const run of runs) {
+      const pipeline = this.pipeline(run);
+      if (!pipeline || !['desktop', 'web'].includes(run.pipelineMode)) continue;
+      if (seen.has(pipeline)) continue;
+      seen.add(pipeline);
+      const report = await this.read(path.join(pipeline, 'run_report.json'));
+      if (!report || report.profile === 'radar' || report.runtime_profile === 'radar') continue;
+      // A date pipeline can be reused: do not attach a different run's output.
+      if (report.skipped || (report.run_id && report.run_id !== run.runId)
+        || (report.started_at && Date.parse(report.started_at) < Date.parse(run.startedAt))) continue;
+      const items = await this.read(path.join(pipeline, 'triaged_items.json'));
+      if (items === null) {
+        if (weekly?.run.runId === run.runId) return { run, type: 'weekly', items: weekly.items };
+        continue;
+      }
+      if (!Array.isArray(items)) throw new Error('REVIEW_SCOPE_INVALID');
+      return { run, type: 'held_stage1', items };
+    }
+    return weekly && (this.localRepository || !runs.length) ? { run: weekly.run, type: 'weekly', items: weekly.items } : null;
+  }
   async reviewData() {
     const weekly = await this.latestWeeklyData();
+    const scope = await this.currentReviewScope(weekly);
+    if (!scope && !weekly) return null;
     const current = await this.feedback.current();
-    const queued = this.localRepository ? [] : await listPendingPaperReview({ reviewRoot: this.reviewRoot, current });
-    const admittedKeys = new Set((weekly?.items || []).flatMap((item) => {
-      try { return feedbackIdentity(item); } catch { return []; }
-    }));
-    const pending = queued.filter((item) => {
-      const keys = feedbackIdentity(item).filter((key) => !key.startsWith('review:'));
-      return !keys.some((key) => admittedKeys.has(key));
+    const state = this.localRepository ? { records: [] } : await readPendingPaperReview(this.reviewRoot);
+    const seen = new Set();
+    const scopeItems = [];
+    for (const item of scope?.items || []) {
+      const record = matchPendingPaperRecord(item, state.records);
+      const scoped = { ...item, ...(record ? { pending_review_id: record.id } : {}), _reviewScopeRunId: scope.run.runId };
+      const keys = identityKeys(scoped);
+      if (!keys.length || keys.some((key) => seen.has(key))) continue;
+      keys.forEach((key) => seen.add(key)); scopeItems.push(scoped);
+    }
+    const active = scopeItems.filter((item) => isActiveManualReview(item, current));
+    const admittedKeys = new Set((weekly?.items || []).flatMap(identityKeys));
+    const admittedReviews = new Set();
+    const weeklyItems = (weekly?.items || []).map((item) => {
+      const keys = identityKeys(item);
+      const matches = active.filter((entry) => identityKeys(entry).some((key) => keys.includes(key)));
+      if (matches.length > 1) throw new Error('FEEDBACK_IDENTITY_AMBIGUOUS');
+      if (!matches.length || admittedReviews.has(matches[0])) return item;
+      admittedReviews.add(matches[0]);
+      return { ...item, _activeManualItem: matches[0] };
     });
-    if (!weekly && !pending.length) return null;
+    const held = active.filter((item) => !identityKeys(item).some((key) => admittedKeys.has(key))).map((item) => ({ ...item, _heldReview: true, _activeManualItem: item }));
     return {
-      ...(weekly || { run: { runId: 'pending-review' }, report: {}, writeback: null, items: [] }),
-      items: [...(weekly?.items || []), ...pending],
+      ...(weekly || { run: scope.run, report: {}, writeback: null }),
+      reviewScope: scope, scopeItems, items: [...weeklyItems, ...held],
     };
   }
   async weekly({ offset = 0, limit = 50 } = {}) {
@@ -98,17 +153,18 @@ export class ReviewQueryService {
     const items = data.items.slice(offset, offset + limit).map((item, index) => {
       let keys = [];
       try { keys = feedbackIdentity(item); } catch {}
-      const id = createHash('sha256').update(`${data.run.runId}:${offset + index}:${keys[0] || ''}`).digest('hex');
+      const id = paperId(data.run.runId, item, offset + index, keys);
       const evidence = getWeeklyReviewEvidence(item);
       const currentEntry = current.find((entry) => entry.keys.some((key) => keys.includes(key)));
+      const pendingReview = item._heldReview === true;
       return {
         id, feedbackAllowed: keys.length > 0, title: String(item.title || ''),
         translatedTitle: String(item.translatedTitle || item.translated_title || item.title_translation || item['标题翻译'] || item['中文标题'] || item.shortTitle || ''),
         authors: (Array.isArray(item.authors) ? item.authors : [item.authors || '']).map((author) => typeof author === 'string' ? author : [author?.firstName, author?.lastName].filter(Boolean).join(' ')), journal: String(item.journal || item.publicationTitle || ''), year: String(item.year || ''),
         doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), source: String(item.source || item.source_type || ''),
         ...evidence,
-        grade: evidence.finalGrade, zotero: item.pending_review_id ? 'not_written' : this.localRepository ? 'not_used_local' : 'admitted',
-        pendingReview: Boolean(item.pending_review_id),
+        grade: evidence.finalGrade, zotero: pendingReview ? 'not_written' : this.localRepository ? 'not_used_local' : 'admitted',
+        pendingReview, manualReviewPending: Boolean(item._activeManualItem && isActiveManualReview(item._activeManualItem, current)),
         abstract: typeof item.abstract === 'string' ? item.abstract : '',
         integrity: item.integrity_status || null,
         feedback: currentEntry?.value || null,
@@ -120,10 +176,12 @@ export class ReviewQueryService {
   async resolvePaper(runId, id) {
     const data = await this.reviewData();
     if (!data || data.run.runId !== runId) throw new Error('WEEKLY_CHANGED_RELOAD');
-    const matches = data.items.filter((item, index) => {
+    const matches = (data?.items || []).filter((item, index) => {
       let keys = []; try { keys = feedbackIdentity(item); } catch {}
-      return createHash('sha256').update(`${runId}:${index}:${keys[0] || ''}`).digest('hex') === id;
+      return paperId(runId, item, index, keys) === id;
     });
+    // Resolve this scope's just-decided items for retries/revisions, never all history.
+    if (!matches.length) matches.push(...data.scopeItems.filter((item) => isActiveManualReview(item) && paperId(runId, item, 0, identityKeys(item)) === id));
     if (matches.length !== 1) throw new Error('PAPER_NOT_FOUND');
     feedbackIdentity(matches[0]);
     return matches[0];
@@ -138,7 +196,7 @@ export class ReviewQueryService {
     const visible = items.filter((item) => ['A', 'B', 'C'].includes(item.finalGrade ?? item.grade) || item.pendingReview);
     return {
       normal: visible.filter((item) => !item.pendingReview && !item.needsReview && item.feedbackAllowed && !item.feedback).length,
-      manual: visible.filter((item) => item.needsReview && item.feedbackAllowed && !item.manualGrade).length,
+      manual: items.filter((item) => item.manualReviewPending && item.feedbackAllowed && !item.manualGrade).length,
       rules: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
     };
   }

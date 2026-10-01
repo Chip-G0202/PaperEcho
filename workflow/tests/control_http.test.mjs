@@ -94,6 +94,7 @@ test('held D disagreement appears only in manual review and accepts a durable gr
   const app = await setup(t);
   const item = { title: '罕见疾病机制研究与临床证据', grade: 'D', rule_grade: 'D', llm_review_grade: 'C', final_grade: 'D' };
   await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items: [item] });
+  await app.write(path.join(app.pipeline, 'triaged_items.json'), [item]);
   const page = (await app.get('/api/weekly')).json;
   assert.equal(page.total, 1);
   assert.equal(page.items[0].pendingReview, true);
@@ -110,13 +111,21 @@ test('held D disagreement appears only in manual review and accepts a durable gr
 test('held paper remains reviewable when no Weekly export completed', async (t) => {
   const app = await setup(t);
   await fs.rm(path.join(app.reviewRoot, 'runs', 'weekly-1', 'run_group.json'));
-  await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items: [
+  const items = [
     { title: '中文标题与跨次待审文献', doi: '10.1234/no-weekly', grade: 'C', rule_grade: 'C', llm_review_grade: 'D', final_grade: 'C' },
-  ] });
+  ];
+  await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items });
+  await app.write(path.join(app.reviewRoot, 'runs/held-1/run_group.json'), { schemaVersion: 1, runId: 'held-1', pipelineMode: 'desktop', startedAt: '2026-09-13T05:00:00Z', artifacts: [{ kind: 'pipeline', rootKey: 'research', path: 'pipeline/fixture' }] });
+  await app.write(path.join(app.pipeline, 'run_report.json'), { run_id: 'held-1' });
+  await app.write(path.join(app.pipeline, 'triaged_items.json'), items);
   const page = (await app.get('/api/weekly')).json;
-  assert.equal(page.runId, 'pending-review');
+  assert.equal(page.runId, 'held-1');
   assert.equal(page.total, 1);
   assert.equal((await app.get('/api/pending-summary')).json.manual, 1);
+  const decision = { runId: page.runId, paperId: page.items[0].id, manualGrade: 'D', requestId: 'no-weekly-d' };
+  assert.equal((await app.post('/api/feedback', decision)).status, 200);
+  assert.equal((await app.post('/api/feedback', decision)).json.duplicate, true);
+  assert.equal((await app.get('/api/pending-summary')).json.manual, 0);
 });
 test('research submit, generated suggestion, accept and replay; settings valid/invalid; no secrets', async (t) => {
   const app = await setup(t);
