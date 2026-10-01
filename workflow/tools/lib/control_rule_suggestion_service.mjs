@@ -5,7 +5,7 @@ import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { writeAtomicJson, writeAtomicText, withAtomicJsonLock } from './atomic_json.mjs';
 import { ruleSuggestionsLogPath, screeningStandardsPath } from './screening_standards_paths.mjs';
 import { normalizeRuleForDedup, syncSuggestionsToScreeningStandardsMd } from './screening_standards_rule_suggestions.mjs';
-import { suggestionContentIssue } from './unified_pending_rule_suggestions.mjs';
+import { suggestionContentIssue, isActiveRuleSuggestion } from './unified_pending_rule_suggestions.mjs';
 import { applyKeywordModifications, buildPubMedQueryFromKeywordGroups, loadPubMedKeywordGroupsFromConfig } from './literature_config.mjs';
 
 const targetOf = (item) => item.target || 'screening_standards.md';
@@ -87,6 +87,7 @@ export class RuleSuggestionService {
     } catch (error) { if (error.code === 'ENOENT') return { suggestions: [] }; throw error; }
   }
   async list() { return (await this.readLog()).suggestions.map((item) => ({ ...item, content_issue: suggestionContentIssue(item.rule_text || item.suggested_rule), can_apply: applicable(item) && !this.noFormalRuleApply })); }
+  async listPending() { return (await this.list()).filter(isActiveRuleSuggestion); }
   async decideWithReceipt(input) { return this.decide(input); }
   async decide({ id, decision, revisedRule = '', humanApproval = false }) {
     if (!['accepted', 'rejected', 'revised'].includes(decision)) throw new Error('SUGGESTION_DECISION_INVALID');
@@ -98,7 +99,7 @@ export class RuleSuggestionService {
       if (matches.length !== 1) throw new Error('SUGGESTION_ID_INVALID');
       const suggestion = matches[0];
       if (suggestion.status === decision && (decision !== 'revised' || suggestion.revised_rule === revisedRule)) return { id, status: decision, duplicate: true };
-      if (!['pending', 'candidate'].includes(suggestion.status)) throw new Error('SUGGESTION_NOT_PENDING');
+      if (!isActiveRuleSuggestion(suggestion)) throw new Error('SUGGESTION_NOT_PENDING');
       const rule = decision === 'revised' ? revisedRule : suggestion.rule_text || suggestion.suggested_rule;
       if (decision === 'revised' && (typeof revisedRule !== 'string' || !revisedRule.trim() || revisedRule.length > 4000 || /[\r\n\u0000]/.test(revisedRule))) throw new Error('SUGGESTION_RULE_INVALID');
       if (decision !== 'rejected') {

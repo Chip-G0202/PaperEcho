@@ -11,6 +11,9 @@ export function suggestionContentIssue(text) {
   return null;
 }
 
+// Active user queue is a projection; the durable log retains every decision.
+export const isActiveRuleSuggestion = (item) => ['pending', 'candidate'].includes(item.status);
+
 export const PENDING_SUGGESTION_STATUSES = new Set([
   "candidate",
   "pending",

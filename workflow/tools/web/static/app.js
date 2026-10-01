@@ -425,7 +425,7 @@ async function suggestions(showIntro = true) {
       contextCard('建议概览', [`待确认 ${pendingRuleCount(rows)} 条`, `当前风险：${riskLabels[item.risk_level] || '待核对'}`, '接受成功后立即写入正式规则，下一次运行会读取。']),
       keyboardHelp('数字键快速处理', [['1', '接受当前建议'], ['2', '拒绝当前建议'], ['3', '修改当前建议'], ['↑', '返回上一条'], ['↓', '前往下一条']], '可使用主键盘或小键盘数字键；编辑建议时快捷键会自动暂停。'),
     );
-    workspace.append(el('p', `共 ${rows.length} 条 · 待确认 ${pendingRuleCount(rows)}`, 'queue-progress'));
+    workspace.append(el('p', `本次已处理 ${rows.length - pendingRuleCount(rows)} / 共 ${rows.length} · 待处理 ${pendingRuleCount(rows)}`, 'queue-progress'));
     if (message) { const state = el('p', message, `queue-receipt ${messageKind}`); state.setAttribute('role', 'status'); workspace.append(state); }
     const card = el('article', undefined, 'focused-card rule-card');
     const badges = el('div', undefined, 'badge-row'); badges.append(el('span', statusLabels[item.status] || '状态未提供', 'badge'), el('span', `风险：${riskLabels[item.risk_level] || '待核对'}`, item.risk_level === 'high' ? 'badge warning' : 'badge'));
@@ -459,15 +459,19 @@ async function suggestions(showIntro = true) {
     const pendingBefore = rows.filter(pending).length;
     const work = queue.submit(action + (action === 'revised' ? ':' + draft : ''),
       (entry) => api('/api/decision', { id: idOf(entry), decision: action, revisedRule: action === 'revised' ? draft : '', humanApproval: true }),
-      (entry, result) => { entry.status = result.status; if (action === 'revised') entry.rule_text = draft; delete entry.decision_receipt; decisionReceipts.delete(idOf(entry)); });
+      (entry, result) => {
+        if (['pending', 'candidate', 'accepted', 'rejected', 'revised', 'superseded', 'expired'].includes(result.status)) entry.status = result.status;
+        if (pending(entry)) { entry.decision_receipt = result; decisionReceipts.set(idOf(entry), result); }
+        else { if (action === 'revised') entry.rule_text = draft; delete entry.decision_receipt; decisionReceipts.delete(idOf(entry)); }
+      });
     draw();
     let saved = null;
     try {
       saved = await work;
       if (saved) {
         editing = false;
-        messageKind = 'success';
-        message = action === 'rejected' ? '已记录：拒绝。' : '已写入正式规则，下一次运行会读取。';
+        messageKind = pending(saved.item) ? 'error' : 'success';
+        message = pending(saved.item) ? '处理尚未完成，建议仍在待处理队列，请核对后重试。' : action === 'rejected' ? '已记录：拒绝。' : '已写入正式规则，下一次运行会读取。';
       }
     } catch (error) {
       const explanations = {

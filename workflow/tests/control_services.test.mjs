@@ -28,6 +28,28 @@ async function fixture(t) {
 }
 const paper = { doi: '10.1234/example', title: '中文 & 特殊字符 <script> — 文献' };
 
+test('rule active projection preserves all 36 history records, metadata and decision replay', async (t) => {
+  const root = await fixture(t);
+  const history = ['accepted', 'rejected', 'revised'].flatMap((status, group) => Array.from({ length: [20, 10, 3][group] }, (_, i) => ({ id: `${status}-${i}`, status, rule_text: '历史筛选规则', processed_at: '2026-09-01', decision_history: [{ decision: status }] })));
+  const active = ['pending', 'pending', 'candidate'].map((status, i) => ({ id: `active-${i}`, status, rule_text: `优先关注合成研究方向${i}`, target: 'screening_standards.md', change_type: 'add_rule' }));
+  const file = ruleSuggestionsLogPath(root);
+  await fs.writeFile(file, JSON.stringify({ suggestions: [...history, ...active] }));
+  const before = await fs.readFile(file, 'utf8');
+  const service = new RuleSuggestionService({ reviewRoot: root });
+  assert.equal((await service.list()).length, 36);
+  assert.deepEqual((await service.listPending()).map(item => item.id), active.map(item => item.id));
+  assert.equal(await fs.readFile(file, 'utf8'), before);
+  const input = { id: 'active-0', decision: 'accepted', humanApproval: true };
+  await service.decide(input);
+  assert.equal((await service.decide(input)).duplicate, true);
+  assert.equal((await service.listPending()).length, 2);
+  assert.equal((await service.list()).length, 36);
+  assert.deepEqual((await service.readLog()).suggestions.slice(0, history.length), history);
+  await fs.writeFile(file, JSON.stringify({ suggestions: [{ id: 'old', status: 'superseded', processed_at: 'preserved' }, { id: 'expired', status: 'expired', decision_history: ['preserved'] }] }));
+  assert.equal((await service.listPending()).length, 0);
+  assert.equal((await service.list()).length, 2);
+});
+
 test('unsupported accept fails without recording success; reject remains available', async (t) => {
   const root = await fixture(t);
   const service = new RuleSuggestionService({ reviewRoot: root });
@@ -243,6 +265,7 @@ test('suggestion accept/reject/revise use formal owner; high-risk add applies an
   await assert.rejects(service.decide({ id: 'e', decision: 'accepted', humanApproval: true }), /UNVERIFIED/);
   const blocked = new RuleSuggestionService({ reviewRoot: root, noFormalRuleApply: true });
   await assert.rejects(blocked.decide({ id: 'e', decision: 'accepted', humanApproval: true }), /NO_FORMAL/);
+  assert.deepEqual((await blocked.listPending()).map(item => item.id), ['e']);
   const result = await processUserSuggestionDecisions({ suggestions_table: [['建议ID', '状态'], ['e', 'accept']] }, { reviewRoot: root });
   assert.equal(result.receipts[0].status, 'blocked');
   await writeUnifiedPendingRuleSuggestions(ruleSuggestionsLogPath(root), { suggestions });

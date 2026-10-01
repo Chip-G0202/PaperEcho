@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { startControlCenter, MAX_BODY_BYTES, safeLink } from '../tools/web/server.mjs';
 import { createControlServices } from '../tools/lib/control_application_services.mjs';
 import { finalizePendingPaperReview } from '../tools/lib/pending_paper_review.mjs';
+import { ruleSuggestionsLogPath } from '../tools/lib/screening_standards_paths.mjs';
 const base = fileURLToPath(new URL('./.control-test-tmp/', import.meta.url));
 const mockLlm = async () => ({ rules_added: ['优先关注中文机制研究'], rules_deleted: [], rules_changed: [], keywords_added: { required: [], optional: [], negative: [] }, keywords_removed: [], negative_keywords_added: [], unmapped_feedback: [] });
 async function setup(t, count = 0) {
@@ -39,6 +40,27 @@ async function setup(t, count = 0) {
   const post = (route, value, headers = {}) => request(route, { method: 'POST', headers: { ...auth, ...headers }, data: JSON.stringify(value) });
   return { ...running, root, reviewRoot, pipeline, request, auth, get, post, write, services };
 }
+
+test('suggestions API and all counters expose only active rules while durable history stays complete', async (t) => {
+  const app = await setup(t);
+  const history = ['accepted', 'rejected', 'revised'].flatMap((status, group) => Array.from({ length: [20, 10, 3][group] }, (_, i) => ({ id: `${status}-${i}`, status, rule_text: '历史合成建议', processed_at: 'preserved', decision_history: [{ decision: status }] })));
+  const active = ['pending', 'pending', 'candidate'].map((status, i) => ({ id: `active-${i}`, status, rule_text: `优先关注合成研究方向${i}`, target: 'screening_standards.md', change_type: 'add_rule', risk_level: i ? 'low' : 'high' }));
+  await app.write(ruleSuggestionsLogPath(app.reviewRoot), { suggestions: [...history, ...active] });
+  assert.equal((await app.services.rules.list()).length, 36);
+  assert.deepEqual((await app.get('/api/suggestions')).json.map(item => item.id), active.map(item => item.id));
+  assert.equal((await app.get('/api/pending-summary')).json.rules, 3);
+  assert.equal((await app.get('/api/status')).json.pendingSuggestions, 3);
+  for (const [i, decision] of ['accepted', 'rejected', 'revised'].entries()) {
+    const input = { id: active[i].id, decision, revisedRule: decision === 'revised' ? '修订后的合成研究方向' : '', humanApproval: true };
+    assert.equal((await app.post('/api/decision', input)).status, 200);
+    assert.equal((await app.post('/api/decision', input)).json.duplicate, true);
+    assert.deepEqual((await app.get('/api/suggestions')).json.map(item => item.id), active.slice(i + 1).map(item => item.id));
+    assert.equal((await app.get('/api/pending-summary')).json.rules, 2 - i);
+    assert.equal((await app.get('/api/status')).json.pendingSuggestions, 2 - i);
+  }
+  assert.equal((await app.services.rules.list()).length, 36);
+  assert.deepEqual((await app.services.rules.readLog()).suggestions.slice(0, history.length), history);
+});
 test('loopback default, Host/Origin/CSRF/session rejection, traversal, CSP and size limit', async (t) => {
   await assert.rejects(startControlCenter({ host: '0.0.0.0' }), /LOOPBACK/);
   const app = await setup(t);
@@ -174,7 +196,8 @@ test('credential HTTP replace/clear and high-risk decisions apply only validated
   assert.match(await fs.readFile(path.join(app.root, 'config', 'pubmed_pmc_search.json'), 'utf8'), /中文机制/);
   assert.equal(JSON.parse(await fs.readFile(log, 'utf8')).suggestions[0].status, 'accepted');
   const savedHigh = (await app.get('/api/suggestions')).json.find((entry) => entry.id === 'high');
-  assert.equal(savedHigh.decision_receipt, undefined);
+  assert.equal(savedHigh, undefined);
+  assert.equal((await app.services.rules.list()).find(entry => entry.id === 'high').decision_receipt, undefined);
   assert.equal((await app.get('/api/suggestions')).json.find((entry) => entry.id === 'unclear').status, 'pending');
   const low = await app.post('/api/decision', { id: 'low', decision: 'accepted', humanApproval: true });
   assert.equal(low.json.status, 'accepted'); assert.equal(low.json.formal_rules_modified, true);

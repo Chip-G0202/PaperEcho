@@ -91,7 +91,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
         if (decoded === '/api/credentials') return send(200, await services.secrets.list());
         if (decoded === '/api/notifications') return send(200, await services.notifications.settings());
         if (decoded === '/api/suggestions') {
-          const list = await services.rules.list();
+          const list = await services.rules.listPending();
           return send(200, list.map((entry) => Object.fromEntries(['id', 'suggestion_id', 'target', 'change_type', 'rule_text', 'suggested_rule', 'rationale', 'evidence_titles', 'evidence_text_excerpt', 'risk_level', 'status', 'content_issue', 'can_apply', 'decision_receipt'].map((key) => [key, entry[key]]))));
         }
       }

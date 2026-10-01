@@ -9,6 +9,8 @@ import { FeedbackService, PAPER_FEEDBACK, readCanonicalFeedback } from '../workf
 import { ReviewQueryService } from '../workflow/tools/lib/control_review_query_service.mjs';
 import { getWeeklyReviewEvidence } from '../workflow/tools/stage4/spreadsheet_adapter.mjs';
 import { finalizePendingPaperReview, readPendingPaperReview } from '../workflow/tools/lib/pending_paper_review.mjs';
+import { RuleSuggestionService } from '../workflow/tools/lib/control_rule_suggestion_service.mjs';
+import { ruleSuggestionsLogPath } from '../workflow/tools/lib/screening_standards_paths.mjs';
 
 const script = await fs.readFile(new URL('../workflow/tools/web/static/app.js', import.meta.url), 'utf8');
 // Minimal DOM test double for event wiring, not layout or browser conformance.
@@ -244,6 +246,54 @@ test('rule focused queue retries an old unapplied receipt; successful accept app
   await key(work(app.main), '1'); await key(work(app.main), 'ArrowUp'); assert.equal(calls.length, 1); assert.equal(currentTitle(app.main), rows[1].rule_text);
   await byText(app.main, '提交修改并接受').click(); assert.equal(calls[1].decision, 'revised'); assert.equal(rows[1].status, 'revised');
   await key(work(app.main), 'ArrowUp'); assert.equal(rows[0].status, 'accepted');
+});
+
+test('Rules queue loads active items, retains only session results, and reload excludes processed history', async (t) => {
+  const base = new URL('./runs/control-review/', import.meta.url); await fs.mkdir(base, { recursive: true });
+  const root = await fs.mkdtemp(path.join(fileURLToPath(base), 'rules-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const history = ['accepted', 'rejected', 'revised'].flatMap((status, group) => Array.from({ length: [20, 10, 3][group] }, (_, i) => ({ id: `${status}-${i}`, status, rule_text: '历史合成建议', processed_at: 'preserved', decision_history: [{ decision: status }] })));
+  const active = ['pending', 'pending', 'candidate'].map((status, i) => ({ id: `active-${i}`, status, rule_text: `优先关注合成研究方向${i}`, target: 'screening_standards.md', change_type: 'add_rule' }));
+  await fs.writeFile(ruleSuggestionsLogPath(root), JSON.stringify({ suggestions: [...history, ...active] }));
+  await fs.writeFile(path.join(root, 'screening_standards.md'), '# 标准\n\n## 优先关注\n\n## 相对降权\n');
+  const service = new RuleSuggestionService({ reviewRoot: root });
+  const app = ui();
+  app.setApi(async (url, input) => input ? service.decide(input) : url === '/api/pending-summary' ? { normal: 0, manual: 0, rules: (await service.listPending()).length } : service.listPending());
+  await app.suggestions();
+  assert.match(app.main.textContent, /本次已处理 0 \/ 共 3 · 待处理 3/);
+  assert.doesNotMatch(app.main.textContent, /历史合成建议/);
+  await byText(app.main, '接受 1').click();
+  assert.match(app.main.textContent, /本次已处理 1 \/ 共 3 · 待处理 2/);
+  assert.equal(currentTitle(app.main), active[1].rule_text);
+  await key(work(app.main), 'ArrowUp');
+  assert.match(app.main.textContent, /已接受/);
+  app.main.replaceChildren(); await app.suggestions();
+  assert.match(app.main.textContent, /本次已处理 0 \/ 共 2 · 待处理 2/);
+  assert.equal(currentTitle(app.main), active[1].rule_text);
+  assert.doesNotMatch(app.main.textContent, /合成研究方向0/);
+  await byText(app.main, '拒绝 2').click();
+  await byText(app.main, '修改后接受 3').click();
+  await byText(app.main, '提交修改并接受').click();
+  assert.equal((await service.list()).length, 36);
+  assert.deepEqual((await service.readLog()).suggestions.slice(0, history.length), history);
+  assert.match(app.body.textContent, /已完成/);
+  app.main.replaceChildren(); await app.suggestions();
+  assert.match(app.main.textContent, /目前没有规则建议/);
+});
+
+test('unapplied rule responses never count a click as terminal and remain visible on reload', async () => {
+  for (const status of ['pending', 'candidate', 'requires_manual_action', 'retry_required']) {
+    const app = ui(); const persisted = { id: 'retry', status: 'pending', rule_text: '优先关注合成机制研究', target: 'screening_standards.md', can_apply: true };
+    app.setApi(async (url, input) => input ? { status, application_status: 'requires_manual_action' } : [{ ...persisted }]);
+    await app.suggestions(); await byText(app.main, '接受 1').click();
+    assert.match(app.main.textContent, /本次已处理 0 \/ 共 1 · 待处理 1/);
+    assert.match(app.main.textContent, /处理尚未完成/);
+    app.main.replaceChildren(); await app.suggestions();
+    assert.equal(currentTitle(app.main), persisted.rule_text);
+  }
+  const app = ui(); app.setApi(async () => [{ id: 'blocked', status: 'pending', rule_text: '不可自动应用的合成建议', can_apply: false }]);
+  await app.suggestions(); assert.equal(byText(app.main, '接受 1').disabled, true);
+  assert.match(app.main.textContent, /待处理 1/);
 });
 test('route parser restores L1/L2/L3 state and Settings keeps credentials write-only', async () => {
   const app = ui(); app.setApi(async (url) => url === '/api/credentials' ? [{ id: 'SMTP_PASS', configured: true, writable: true }] : [{ category: 'General', available: true, id: 'mode', description: '运行模式', type: 'enum', value: 'local', validation: { values: ['local', 'desktop'] } }, { category: 'Sources', available: true, id: 'source', description: '启用来源', type: 'boolean', value: true, validation: {} }]);

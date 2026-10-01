@@ -10,6 +10,7 @@ import { buildLocalStage4ExportSource } from '../stage4/export_source_step.mjs';
 import { getWeeklyReviewEvidence } from '../stage4/spreadsheet_adapter.mjs';
 import { readPendingPaperReview, matchPendingPaperRecord, manualDecisionForRecord } from './pending_paper_review.mjs';
 import { isManualReviewEligible } from '../stage1/semantic_grade_synthesis.mjs';
+import { isActiveRuleSuggestion } from './unified_pending_rule_suggestions.mjs';
 
 const inside = (root, candidate) => { const rel = path.relative(root, candidate); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
 const paperId = (runId, item, index, keys = []) => createHash('sha256').update(item._reviewScopeRunId ? `${runId}:scope:${item._reviewScopeRunId}:${keys[0] || ''}` : `${runId}:${index}:${keys[0] || ''}`).digest('hex');
@@ -198,7 +199,7 @@ export class ReviewQueryService {
     return {
       normal: visible.filter((item) => !item.pendingReview && !item.needsReview && item.feedbackAllowed && !item.feedback).length,
       manual: items.filter((item) => item.manualReviewPending && item.feedbackAllowed && !item.manualGrade).length,
-      rules: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
+      rules: (await this.rules.list()).filter(isActiveRuleSuggestion).length,
     };
   }
   async status() {
@@ -218,7 +219,7 @@ export class ReviewQueryService {
       sources: loadSourceSelectionConfig({ root: this.root }).enabled_sources,
       counts: summary?.counts || null, integrity: summary?.integrity || null,
       needsReview: (await this.pendingSummary()).manual,
-      pendingSuggestions: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
+      pendingSuggestions: (await this.rules.list()).filter(isActiveRuleSuggestion).length,
     };
   }
 }
