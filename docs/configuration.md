@@ -2,16 +2,20 @@
 
 v2.5 的 schema v3 收敛非敏感配置，v4 增加 Radar/Weekly 通知偏好，v5 增加 QQ outbound，v6 一次增加默认关闭的微信、飞书、企业微信群机器人渠道。Settings → 通知与推送可独立多选五个渠道；凭据由 SecretService 管理。迁移、字段、产品长度预算与 provider 边界以 [Config map](../config/README.md) 为准。本文以下表格继续描述 v1/v2 compatibility；迁移后旧领域文件不再是保存目标，旧模型 env 不再覆盖 Settings。
 
+**日常首选 Control Center → Settings。当前 schemaVersion 为 6，非敏感应用配置的唯一 canonical 文件是 `config/paperecho.config.json`；密钥通过 Credentials、本机 `.env` 或外部环境维护，不进入 JSON。** 长期研究规则正文 `screening_standards.md` 由 Research Feedback / Rule Suggestions 或正式编辑入口维护；它不是第二份应用配置。pending/feedback/规则建议及决策历史、runtime/schedule state、ledger、receipts、reports、history、logs 都是运行数据，不应手工编辑来配置应用。
+
+迁移后的安装无需同步旧领域 JSON；尚未迁移的 v1/v2 安装仍走这些文件的 compatibility 读取和保存。canonical section 缺失时不会回读旧文件。完整 A–F 文件分类见 [配置职责](../config/README.md)。示例与 prompt Markdown 是模板/高级入口，普通使用无需额外维护模型参数 JSON。
+
 ## 用户实际需要处理的文件
 
-### 必须查看
+### 可选初始化参考
 
 - [`docs/paperecho-setup-template.md`](paperecho-setup-template.md)：交给用户填写、再交给 Codex 应用的问卷；不是运行时配置。
 - 本文档：字段、优先级、缺失行为、文件职责和模板映射的事实来源。
 
 ### 复制后填写
 
-- [`config/paperecho.config.example.json`](../config/paperecho.config.example.json) -> `config/paperecho.config.json`：Runner 支持 schema v1/v2/v3/v4；提交的示例仍使用 v2，通过集中迁移升级为 v4。实际配置只保存在本机且已被 Git 忽略。
+- [`config/paperecho.config.example.json`](../config/paperecho.config.example.json) -> `config/paperecho.config.json`：Runner 支持 schema v1–v6；提交的示例仍使用 v2，通过集中迁移升级为当前 v6（见 [迁移说明](../config/README.md)）。实际配置只保存在本机且已被 Git 忽略。
 
 ### 本地 Secret
 
@@ -20,10 +24,12 @@ v2.5 的 schema v3 收敛非敏感配置，v4 增加 Radar/Weekly 通知偏好�
 ### 按路径提供
 
 - Desktop：Zotero executable（无法自动发现时）和可用的 CLI/JS bridge。
-- Web：本机环境中的 Zotero API key；user ID 可选。
+- Web：本机环境中的 Zotero API key 和配置中的 user ID 均必需。
 - Local：可读的 JSON/JSONL input 和安全、可写的 output root；feedback JSONL 可选。
 
-### 共享领域配置
+### Canonical section 与旧领域文件对照
+
+以下 JSON 名称仅用于兼容/迁移对照；schema v3–v6 日常读取与保存的是主配置中的 `sources`、`rss`、`pubmed`、`openalex`、`review`、`translation`、`preference` section。只有无 canonical 配置时才使用旧 JSON。两个 prompt 仍是独立模板。
 
 - `config/source_selection.json`、`rss_sources.json`、`pubmed_pmc_search.json`、`openalex_search.json`：检索源和检索策略。
 - `config/review-workflow-rules.json`：分级、期刊质量、LLM review 与反馈策略。
@@ -40,7 +46,9 @@ v2.5 的 schema v3 收敛非敏感配置，v4 增加 Radar/Weekly 通知偏好�
 
 - Runner/config loader/preflight、三个 launcher、Stage1-Stage5 源码、四个 PaperEcho Skills 和生成的 manifest。它们定义行为，不承载个人配置。
 
-## 真实配置来源清单
+## 配置来源与 compatibility 缺失行为
+
+下表的旧领域 JSON 行描述未迁移安装的兼容行为，不表示迁移后仍需用户分别编辑。`screening_standards.md` 是规则正文，prompt 是模板；两者均不合并进 application config。
 
 | 路径/来源 | Git | 用户创建或编辑 | 可存 Secret | 读取者/适用路径 | 必需与缺失行为 |
 |---|---|---|---|---|---|
@@ -61,15 +69,15 @@ v2.5 的 schema v3 收敛非敏感配置，v4 增加 Radar/Weekly 通知偏好�
 | Zotero Web API key | 本机环境 | 是 | 是 | Web preflight/backend | 缺失 blocked；preflight 只查存在性、不访问网络 |
 | Local input/output/feedback | 外部或本地数据 | 是 | 不应 | Local preflight/repository | input/output 必需且失败 blocked；feedback 可选但提供后必须是可读 JSONL |
 
-将 [`config/paperecho.config.example.json`](../config/paperecho.config.example.json) 复制为本机的 `config/paperecho.config.json`，只填写 `common` 和要使用的一条路径。真实配置已被 `.gitignore` 精确忽略。也可用 `--config <path>` 或 `PAPERECHO_CONFIG` 指向其他 JSON 文件；配置中的相对路径均相对于该 JSON 所在目录解析。
+旧版本初始化可将 [`config/paperecho.config.example.json`](../config/paperecho.config.example.json) 复制为本机的 `config/paperecho.config.json`，填写 `common` 和要使用的一条路径后通过集中迁移进入 v6。已有 v6 配置直接使用 Settings，不必再次复制示例。真实配置已被 `.gitignore` 精确忽略。也可用 `--config <path>` 或 `PAPERECHO_CONFIG` 指向其他 JSON 文件；配置中的相对路径均相对于该 JSON 所在目录解析。
 
-统一配置只负责 Runner、路径选择和跨路径运行参数。检索源、筛选规则、翻译与偏好学习的领域参数仍由 `config/rss_sources.json`、`config/pubmed_pmc_search.json`、`config/review-workflow-rules.json`、`config/title_translation.config.json` 和 `config/preference_learning.config.json` 各自管理，不在统一文件中复制。
+当前统一配置同时管理 Runner、路径和上述七个领域 section；领域 owner 通过共享解析层取得各自的内存配置。旧领域 JSON 保留为 compatibility / migration source，不是迁移后的 runtime owner。显式 `--preference-config` / `--translation-config` 仅覆盖当次 invocation，不写回 Settings。
 
 ## 1. 通用/共用配置
 
 | 配置项 | 配置文件字段 | 环境变量 | 必需条件 | 默认值 | Secret | 说明 |
 |---|---|---|---|---|---|---|
-| schema | `schemaVersion` | - | 始终 | 示例为 `2` | 否 | 支持整数 `1`（兼容）和 `2`（可靠性能力） |
+| schema | `schemaVersion` | - | 始终 | 兼容示例为 `2`；当前为 `6` | 否 | 支持整数 `1`–`6`；下列环境变量/旧参数路径以 compatibility 语义为准 |
 | profile | `profile` | - | 可选 | `standard` | 否 | `standard` 或 `complete` |
 | 项目/共享根 | `common.projectRoot` | `ZOTERO_PROJECT_ROOT` | Desktop/Web 输出或 Local 共享索引需要覆盖时 | 当前项目根 | 否 | JSON 值优先于环境变量 |
 | LLM 开关 | `common.llm.enabled` | - | 可选 | 路径现有默认 | 否 | `false` 强制禁用；Local 未声明时保持旧默认 `disabled` |
@@ -77,7 +85,7 @@ v2.5 的 schema v3 收敛非敏感配置，v4 增加 Radar/Weekly 通知偏好�
 | 强制真实 LLM | `common.llm.requireRealModel` | CLI `--require-llm` | 明确要求真实模型时 | `false` | 否 | 缺 key 时 preflight 阻塞 |
 | 偏好学习 key 引用 | `common.llm.preferenceApiKeyEnv` | 指向的变量，通常 `PREFERENCE_LEARNING_API_KEY` | 真实偏好学习 | - | 引用否/值是 | JSON 只保存环境变量名 |
 | 翻译 key 引用 | `common.llm.translationApiKeyEnv` | 指向的变量，通常 `TITLE_TRANSLATION_API_KEY` | 真实标题翻译 | - | 引用否/值是 | JSON 只保存环境变量名 |
-| LLM 参数文件 | `common.llm.preferenceConfig` / `translationConfig` | `PREFERENCE_LEARNING_CONFIG_PATH` / `TITLE_TRANSLATION_CONFIG_PATH` | 覆盖默认文件时 | `config/*.config.json` | 否 | 领域参数仍由对应 JSON 管理 |
+| Legacy LLM 参数文件 | `common.llm.preferenceConfig` / `translationConfig` | `PREFERENCE_LEARNING_CONFIG_PATH` / `TITLE_TRANSLATION_CONFIG_PATH` | 未迁移安装覆盖默认文件时 | `config/*.config.json` | 否 | 当前由 canonical `preference` / `translation` 管理；迁移移除旧路径字段，显式 CLI 参数仅覆盖当次调用 |
 | 期刊质量 key 引用 | `common.journalQualityApiKeyEnv` | 指向的变量，通常 `EASYSCHOLAR_SECRET_KEY` | 启用相关 gate 时 | - | 引用否/值是 | 只报告是否存在 |
 | 邮件开关 | `common.email.enabled` | - | 可选 | 未请求 | 否 | `false` 禁用配置及遗留 recipient |
 | 收件人 | `common.email.recipient` | `PAPERFLOW_REPORT_TO` / `NOTIFICATION_EMAIL` | 请求 Stage5 邮件时 | 无 | 否 | CLI `--email` 优先 |

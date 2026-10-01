@@ -2,6 +2,17 @@
 
 日常配置推荐使用 [PaperEcho Control Center](../docs/control-center.md) 的 Settings。schemaVersion 3/4/5/6 的 `config/paperecho.config.json` 是非敏感 application configuration 的 canonical owner。Settings 的固定字段 registry 仍由 `workflow/tools/lib/control_config_service.mjs` 管理，共享解析层为 `workflow/tools/lib/application_config.mjs`；Runner 继续由 `workflow/tools/runner/config_loader.mjs` 解析运行路径。保存只更新 canonical owner，不同步写回旧领域 JSON。
 
+当前 schemaVersion 为 **6**。普通用户日常使用 Settings；需要手工编辑时，非敏感应用参数只维护 `config/paperecho.config.json`，密钥另由 Credentials / `.env` / external secret environment 管理。迁移后的安装无需手工同步七个旧领域 JSON。尚未迁移的 v1/v2 安装仍读取、保存旧领域文件；本指南不会自动执行迁移。
+
+| 类别 | 正式职责 |
+|---|---|
+| A：非敏感应用配置 | `config/paperecho.config.json`；普通入口为 Settings，高级字段可手工编辑 canonical section |
+| B：Secrets | SecretService 管理的本机 `.env` 或外部环境；值不得进入主配置 |
+| C：长期研究规则正文 | review root 下的 `screening_standards.md`；通过 Research Feedback / Rule Suggestions 或正式编辑入口维护，不是第二个 application config |
+| D：Runtime / state / history | pending paper review、feedback、规则建议及决策历史、runtime/schedule state、operation ledger、notification receipts、run reports、history、logs；不是待配置文件，不应手工同步或清空 |
+| E：Legacy compatibility / migration source | 下表七个旧领域 JSON；仅无 canonical 配置时作为兼容读取/保存入口，迁移时作为来源。canonical section 缺失也不会回读旧 JSON；领域 adapter 使用内存对象，不生成另一份配置 |
+| F：内部默认 / template | 配置示例、代码默认值、独立 prompt Markdown。提示词可按高级需要编辑，普通使用无需维护额外模型参数 JSON |
+
 ## v6 与旧版本迁移
 
 translation（标题翻译）与 preference（智能评审/偏好学习）仍是独立 capability，可分别设置模型、endpoint、temperature 等。Research Feedback 与普通 Runner 使用同一 Settings 配置。单次 Runner 调用可显式传入 `--preference-config <file>` 或 `--translation-config <file>`；覆盖只影响该 invocation，不写回 Settings，下一次普通调用恢复 canonical 配置。
@@ -47,8 +58,6 @@ Hermes / Agent / Scheduler 只启动固定 launcher 的 `--run --scheduled-daily
 | Config | Purpose | 领域 owner | Control Center section | User-editable? | Secret? | Compatibility notes |
 |---|---|---|---|---|---|---|
 | `paperecho.config.example.json` → 本地 `paperecho.config.json` | mode、运行根、Radar/Integrity、邮件与 Zotero 非密钥参数 | `runner/config_loader.mjs`、`lib/runtime_config.mjs` | 常规、Radar、Weekly、Integrity、Zotero、通知 | 是；示例不作为实际配置保存目标 | 否 | 使用启动时解析的配置路径；mode/根路径属高级设置，Weekly 间隔只读 |
-
-每日计划入口 `--run --scheduled-daily` 仅适用于 Desktop/Web。`profile: standard` 或 `complete` 指定到期 Weekly 的执行模式；是否到期由成功 Weekly 的北京时间 15:00 计划时隙决定。`common.radar.enabled` 只在 Radar 日检查，关闭 Radar 不会把当天改成 Weekly。正式间隔为 7 天；手动运行、force 参数和本地 Local 路径不属于此入口。
 | `source_selection.json` | 研究领域与来源策略 | `stage1/source_selection_step.mjs` | 研究与检索 / 来源 | 是 | 否 | 网页管理 domain/override；高级策略字段随 section 迁移 |
 | `pubmed_pmc_search.json` | 检索词组、时间和数量限制 | `lib/literature_config.mjs`、`stage1/retrieval_sources.mjs` | 研究与检索 / 检索条件 | 是 | 否 | keyword groups 由 owner 生成 query，不绕过现有规则 |
 | `openalex_search.json` | query、启用、时间与分页限制 | `stage1/retrieval_sources.mjs` | 研究与检索 / 检索条件 | 是 | 否 | 额外 filters/select 等高级字段仍保留 |
@@ -58,7 +67,9 @@ Hermes / Agent / Scheduler 只启动固定 launcher 的 `--run --scheduled-daily
 | `preference_learning.config.json` | 研究评价/偏好模型参数 | `lib/preference_learning_support.mjs` | 模型、高级 | 是 | 否 | Web 文本和 DOCX 评价共享核心；复审/综述复用该模型配置 |
 | `prompt-title-translation.md`、`prompt-preference-learning.md` | 提示词模板 | 对应 translation/preference owner | 未开放 | 高级手动编辑 | 否 | 保留模板变量与既有格式，不填 API key |
 | `example-force-run.cmd` | 历史强制运行命令示例 | 直接调用 `stage0/main.mjs` | 未开放 | 仅维护参考 | 否 | 绕过 Runner，非推荐交互入口；维护调用者须自行承担预检/验证，普通运行走路径 launcher |
-| 根 `.env.example` → `.env` | 本机凭据与环境覆盖 | `lib/env_file_bootstrap.mjs`、`lib/control_credentials_service.mjs` | 凭据 | allowlist Replace/Clear；外部覆盖只读 | 本地 `.env` 是；示例不含真实值 | 不回显；不进入 git，Test 暂不开放 |
+| 根 `.env.example` → `.env` | 本机凭据与环境覆盖 | `lib/env_file_bootstrap.mjs`、`lib/control_credentials_service.mjs` | 凭据 | allowlist Replace/Clear；外部覆盖只读 | 本地 `.env` 是；示例不含真实值 | 不回显；不进入 git，仅正式通知渠道提供显式测试 |
+
+每日计划入口 `--run --scheduled-daily` 仅适用于 Desktop/Web。`profile: standard` 或 `complete` 指定到期 Weekly 的执行模式；是否到期由成功 Weekly 的北京时间 15:00 计划时隙决定。`common.radar.enabled` 只在 Radar 日检查，关闭 Radar 不会把当天改成 Weekly。正式间隔为 7 天；手动运行、force 参数和本地 Local 路径不属于此入口。
 
 以下是 legacy 字段参考；v3 日常配置以 Settings 和对应 canonical section 为准。
 
