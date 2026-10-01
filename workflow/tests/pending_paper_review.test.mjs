@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FeedbackService } from '../tools/lib/control_feedback_service.mjs';
 import { isWritebackEligibleItem } from '../tools/lib/pipeline_stage_support.mjs';
+import { synthesizeFinalGrade } from '../tools/stage1/semantic_grade_synthesis.mjs';
 import {
   attachPendingPaperReview, finalizePendingPaperReview, listPendingPaperReview,
   preparePendingPaperReview, readPendingPaperReview,
@@ -17,11 +18,13 @@ async function fixture(t) {
   t.after(async () => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
-const paper = (doi, rule, semantic, title = `Clinical mechanism study of ${doi}`) => ({
-  doi, title, grade: rule, rule_grade: rule, llm_review_grade: semantic, final_grade: rule,
-});
+const paper = (doi, rule, semantic, title = `Clinical mechanism study of ${doi}`) => {
+  const decision = synthesizeFinalGrade({ ruleGrade: rule, semanticGrade: semantic });
+  return { doi, title, grade: decision.finalGrade, rule_grade: rule, llm_review_grade: semantic,
+    final_grade: decision.finalGrade, needs_human_review: decision.needsHumanReview };
+};
 
-test('double D is excluded without review; every disagreement and missing semantic is held', async (t) => {
+test('pending storage holds upstream review decisions, not every disagreement or missing semantic', async (t) => {
   const root = await fixture(t);
   const items = [
     paper('10.1234/dd', 'D', 'D'), paper('10.1234/dc', 'D', 'C'),
@@ -29,22 +32,21 @@ test('double D is excluded without review; every disagreement and missing semant
     paper('10.1234/no-semantic', 'B', ''), paper('10.1234/bb', 'B', 'B'),
   ];
   const result = await finalizePendingPaperReview({ reviewRoot: root, items });
-  assert.deepEqual([result.pending, result.autoD], [4, 1]);
+  assert.deepEqual([result.pending, result.autoD], [1, 1]);
   assert.equal(items[0].needs_human_review, false);
   assert.equal(isWritebackEligibleItem(items[0]), false);
-  for (const item of items.slice(1, 5)) {
-    assert.equal(item.needs_human_review, true);
-    assert.equal(isWritebackEligibleItem(item), false);
-  }
+  assert.equal(items[2].needs_human_review, true);
+  assert.equal(isWritebackEligibleItem(items[2]), false);
+  for (const item of [items[1], items[3], items[4]]) assert.equal(isWritebackEligibleItem(item), true);
   assert.equal(isWritebackEligibleItem(items[5]), true);
   const current = await new FeedbackService({ reviewRoot: root }).current();
-  assert.equal((await listPendingPaperReview({ reviewRoot: root, current })).length, 4);
-  assert.equal((await readPendingPaperReview(root)).records.length, 5);
+  assert.equal((await listPendingPaperReview({ reviewRoot: root, current })).length, 1);
+  assert.equal((await readPendingPaperReview(root)).records.length, 2);
 });
 
 test('pending review survives a later run, and manual A/B/C is replayed before writeback', async (t) => {
   const root = await fixture(t);
-  const first = paper('10.1234/revisit', 'D', 'C');
+  const first = { ...paper('10.1234/revisit', 'D', 'C'), review_required: true };
   await finalizePendingPaperReview({ reviewRoot: root, items: [first] });
   const feedback = new FeedbackService({ reviewRoot: root });
   await feedback.submit({ kind: 'manual_grade', paper: first, manualGrade: 'B', requestId: 'approve-b' });

@@ -246,3 +246,35 @@ export function synthesizeFinalGrade({ ruleGrade, semanticGrade, semanticReason 
     disagreementType: `semantic_${direction}`,
   };
 }
+
+export function synthesizeLlmReview({ ruleGrade, llmGrade, confidence, llmNeedsHumanReview, semanticReason, flags }) {
+  const ruleNorm = normalizeGradeLetter(ruleGrade);
+  const llmNorm = normalizeGradeLetter(llmGrade);
+  if (!llmNorm) return { finalGrade: ruleNorm, needsHumanReview: false, disagreementType: "" };
+  if (ruleNorm === 'D' && llmNorm === 'D') return synthesizeFinalGrade({ ruleGrade: ruleNorm, semanticGrade: llmNorm });
+  if (llmNeedsHumanReview) return { finalGrade: ruleNorm, needsHumanReview: true, disagreementType: "llm_requested_review" };
+  if (confidence === "low" && ruleNorm && llmNorm !== ruleNorm) {
+    return { finalGrade: ruleNorm, needsHumanReview: true, disagreementType: "llm_low_confidence_conflict" };
+  }
+  return synthesizeFinalGrade({ ruleGrade: ruleNorm, semanticGrade: llmNorm, semanticReason, flags });
+}
+
+// Grade review owns eligibility. Old pending artifacts overwrote its boolean,
+// so recover the decision from their preserved LLM result, never disagreement alone.
+export function isManualReviewEligible(item = {}) {
+  const rule = normalizeGradeLetter(item.rule_grade || item.ruleGrade || item.grade);
+  const semantic = normalizeGradeLetter(item.llm_review_grade || item.llmReviewGrade || item.semantic_grade || item.semanticGrade || item.semantic_review?.grade);
+  if ((rule === 'D' && semantic === 'D') || ['auto_d', 'manual_abc', 'manual_d'].includes(item.manual_review_state)) return false;
+  if (item.review_required || item.reviewRequired || item.semantic_review?.review_required) return true;
+  if (item.llm_review?.llm_review_grade) {
+    return synthesizeLlmReview({ ruleGrade: rule, llmGrade: item.llm_review.llm_review_grade,
+      confidence: item.llm_review.confidence, llmNeedsHumanReview: item.llm_review.needs_human_review }).needsHumanReview;
+  }
+  if (item.semantic_source === 'llm_title_review_failed') return true;
+  if (item.semantic_source === 'llm_title_review_missing') return false;
+  if (item.review_consensus_required === true && item.manual_review_state === 'pending') {
+    return ['llm_requested_review', 'llm_low_confidence_conflict', 'semantic_downgrade_review',
+      'semantic_major_divergence', 'semantic_extreme_divergence', 'llm_review_failed'].includes(item.disagreement_type);
+  }
+  return Boolean(item.needs_human_review || item.needsHumanReview || item.semantic_review?.needs_human_review);
+}

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { getLiteratureIdentityKeys } from './literature_identity.mjs';
 import { readCanonicalFeedback, currentPaperFeedback } from './control_feedback_service.mjs';
 import { withAtomicJsonLock, writeAtomicJson } from './atomic_json.mjs';
+import { isManualReviewEligible } from '../stage1/semantic_grade_synthesis.mjs';
 
 const STRONG = /^(doi|pmid|pmcid|arxiv|openalex|url):/;
 const GRADES = new Set(['A', 'B', 'C', 'D']);
@@ -105,7 +106,6 @@ export async function finalizePendingPaperReview({ reviewRoot, items, now = new 
   const current = currentPaperFeedback(await readCanonicalFeedback(reviewRoot));
   const candidates = [];
   for (const item of items) {
-    item.review_consensus_required = true;
     const rule = String(item.rule_grade || item.grade || '').slice(0, 1).toUpperCase();
     const semantic = String(item.llm_review_grade || '').slice(0, 1).toUpperCase();
     const confirmed = item.pending_review_id
@@ -121,8 +121,17 @@ export async function finalizePendingPaperReview({ reviewRoot, items, now = new 
       continue;
     }
     const bothD = rule === 'D' && semantic === 'D';
-    const pending = !bothD && (!semantic || rule !== semantic || item.pending_review_state === 'pending');
-    if (!bothD && !pending) continue;
+    const pending = isManualReviewEligible(item);
+    // Compatibility only: grade equality no longer gates automatic adjustments.
+    item.review_consensus_required = false;
+    if (!bothD && !pending) {
+      item.needs_human_review = false;
+      if (item.manual_review_state === 'pending') {
+        delete item.manual_review_state;
+        if (!item.pre_llm_zotero_existing_duplicate) delete item.pre_llm_skip_writeback;
+      }
+      continue;
+    }
     if (item.pre_llm_zotero_existing_duplicate === true) continue;
     item.needs_human_review = pending;
     item.manual_review_state = pending ? 'pending' : 'auto_d';

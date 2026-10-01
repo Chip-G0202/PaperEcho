@@ -54,7 +54,7 @@ test('current artifacts admit re-seen identities once and release consensus, dou
   const app = await fixture(t);
   const historical = Array.from({ length: 5 }, (_, i) => paper(i));
   await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items: historical });
-  const items = [historical[0], { ...historical[0] }, { ...historical[1], rule_grade: '', grade: 'B', original_grade: 'C', llm_review_grade: 'B' }, { ...historical[2], rule_grade: '', grade: 'D', original_grade: 'C', llm_review_grade: 'D' }, { ...historical[3], needs_human_review: false, manual_review_state: 'manual_abc' }, { title: 'No reliable identifier', needs_human_review: true }];
+  const items = [historical[0], { ...historical[0] }, { ...historical[1], rule_grade: '', grade: 'B', original_grade: 'C', llm_review_grade: 'B', needs_human_review: false }, { ...historical[2], rule_grade: '', grade: 'D', original_grade: 'C', llm_review_grade: 'D' }, { ...historical[3], needs_human_review: false, manual_review_state: 'manual_abc' }, { title: 'No reliable identifier', needs_human_review: true }];
   await app.run('current', '2026-10-01T05:00:00Z', items);
   const page = await app.query.weekly();
   assert.equal(page.items.length, 1);

@@ -4,7 +4,7 @@ import path from "node:path";
 import { callJsonLlm, hashText, resolveLlmRuntime } from "../lib/llm_json_support.mjs";
 import { createServiceConcurrencyController } from "../lib/adaptive_concurrency.mjs";
 import { normalizeGradeLetter } from "../lib/grade_primitives.mjs";
-import { synthesizeFinalGrade } from "./semantic_grade_synthesis.mjs";
+import { synthesizeLlmReview } from "./semantic_grade_synthesis.mjs";
 
 const DEFAULT_ELIGIBLE_RULE_GRADES = ["A", "B", "C"];
 
@@ -170,19 +170,6 @@ function ruleContextForGradeReview(ruleContextSummary = null) {
   };
 }
 
-function synthesizeLlmReview({ ruleGrade, llmGrade, confidence, llmNeedsHumanReview, semanticReason, flags }) {
-  const ruleNorm = normalizeGradeLetter(ruleGrade);
-  const llmNorm = normalizeGradeLetter(llmGrade);
-  if (!llmNorm) return { finalGrade: ruleNorm, needsHumanReview: false, disagreementType: "" };
-  if (llmNeedsHumanReview) {
-    return { finalGrade: ruleNorm, needsHumanReview: true, disagreementType: "llm_requested_review" };
-  }
-  if (confidence === "low" && ruleNorm && llmNorm !== ruleNorm) {
-    return { finalGrade: ruleNorm, needsHumanReview: true, disagreementType: "llm_low_confidence_conflict" };
-  }
-  return synthesizeFinalGrade({ ruleGrade: ruleNorm, semanticGrade: llmNorm, semanticReason, flags });
-}
-
 export function applyReviewToItems(reviewItems, llmItems, { failedReviewItemIds = new Set() } = {}) {
   const byId = new Map(llmItems.map((entry) => [entry.id, entry]));
   const stats = {
@@ -200,9 +187,11 @@ export function applyReviewToItems(reviewItems, llmItems, { failedReviewItemIds 
     const llm = byId.get(reviewItem.id);
     target.rule_grade = reviewItem.rule_grade;
     if (!llm) {
+      delete target.llm_review;
       target.llm_review_grade = "";
       target.semantic_grade = "";
       target.final_grade = reviewItem.rule_grade;
+      target.grade = reviewItem.rule_grade;
       target.semantic_reason = failedReviewItemIds.has(reviewItem.id)
         ? "LLM复审批次失败，保持规则等级并进入人工复核"
         : "LLM复审未返回该条目，保持规则等级";
@@ -230,6 +219,7 @@ export function applyReviewToItems(reviewItems, llmItems, { failedReviewItemIds 
     target.semantic_source = "llm_title_review";
     target.llm_review = llm;
     target.final_grade = synthesized.finalGrade;
+    target.grade = synthesized.finalGrade;
     target.needs_human_review = synthesized.needsHumanReview;
     target.disagreement_type = synthesized.disagreementType;
     stats.items_with_semantic_grade += 1;

@@ -74,12 +74,13 @@ test('Weekly view model reuses exporter grade precedence and every legacy manual
   query.latestWeeklyData = async () => ({ run: { runId: 'fixture' }, items: source });
   const data = await query.weekly();
   assert.deepEqual(data.items.map((item) => item.needsReview), source.map((item) => getWeeklyReviewEvidence(item).needsReview));
-  assert.equal(data.items.filter((item) => item.needsReview).length, 8);
+  assert.equal(data.items.filter((item) => item.needsReview).length, 6);
+  assert.equal(data.items.filter((item) => item.legacyReviewEvidence).length, 2);
   assert.equal(data.items[0].ruleGrade, 'B'); assert.equal(data.items[0].semanticGrade, 'A'); assert.equal(data.items[0].finalGrade, 'C'); assert.equal(data.items[0].grade, 'C');
   assert.equal(data.items[0].reviewReason, '原有依据'); assert.equal(JSON.stringify(source), before);
   query.rules = { list: async () => [{ status: 'pending' }, { status: 'candidate' }, { status: 'accepted' }] };
   assert.equal(data.items.filter((item) => item.manualReviewPending).length, 6);
-  assert.deepEqual({ ...(await query.pendingSummary()) }, { normal: 2, manual: 6, rules: 2 });
+  assert.deepEqual({ ...(await query.pendingSummary()) }, { normal: 4, manual: 6, rules: 2 });
 });
 test('manual queue scopes 142 historical records to two actionable items and keeps only this session results', async (t) => {
   const base = new URL('./runs/control-review/', import.meta.url); await fs.mkdir(base, { recursive: true });
@@ -87,9 +88,9 @@ test('manual queue scopes 142 historical records to two actionable items and kee
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const feedback = new FeedbackService({ reviewRoot: root });
   const source = papers(142).map((item, i) => ({ ...item, final_grade: 'B', rule_grade: 'B', llm_review_grade: 'A', semantic_mismatch: i % 2 === 0, semantic_rescue: i % 2 === 1, needsHumanReview: i < 10 }));
-  await finalizePendingPaperReview({ reviewRoot: root, items: source.map((item) => ({ ...item })) });
+  await finalizePendingPaperReview({ reviewRoot: root, items: source.map((item) => ({ ...item, review_required: true })) });
   await feedback.submitPaperBatch(source.slice(0, 10).map((paper, i) => ({ kind: 'manual_grade', paper, manualGrade: 'B', requestId: `historic-${i}` })));
-  const held = ['first', 'second', 'processed'].map((name) => ({ title: `Synthetic pending ${name}`, doi: `10.1234/pending-${name}`, grade: 'D', final_grade: 'D', rule_grade: 'D', llm_review_grade: 'C' }));
+  const held = ['first', 'second', 'processed'].map((name) => ({ title: `Synthetic pending ${name}`, doi: `10.1234/pending-${name}`, grade: 'D', final_grade: 'D', rule_grade: 'D', llm_review_grade: 'C', review_required: true }));
   await finalizePendingPaperReview({ reviewRoot: root, items: held });
   await feedback.submit({ kind: 'manual_grade', paper: held[2], manualGrade: 'D', requestId: 'already-d' });
   const query = new ReviewQueryService({ root, reviewRoot: root, feedback, rules: { list: async () => [] } });
@@ -105,7 +106,8 @@ test('manual queue scopes 142 historical records to two actionable items and kee
     return feedback.submit({ kind: 'manual_grade', paper: await query.resolvePaper(payload.runId, payload.paperId), ...payload });
   });
   const before = await query.weekly({ limit: 200 });
-  assert.equal(before.items.filter((item) => item.needsReview && !item.pendingReview).length, 142);
+  assert.equal(before.items.filter((item) => item.needsReview && !item.pendingReview).length, 10);
+  assert.equal(before.items.filter((item) => item.legacyReviewEvidence).length, 142);
   assert.equal(before.items.filter((item) => item.manualReviewPending).length, 2);
   assert.equal((await query.pendingSummary()).manual, 2);
   await app.paperReview(true, 'manual');

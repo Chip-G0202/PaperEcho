@@ -1,13 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { exportAllResearchOsXlsxWithNodeFallback } from "../tools/stage4/spreadsheet_adapter.mjs";
 
 async function exportRows(triaged) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "spreadsheet_compat_"));
+  const base = path.resolve('tests/runs/spreadsheet-compat');
+  await fs.mkdir(base, { recursive: true });
+  const root = await fs.mkdtemp(path.join(base, "case-"));
   const sourcePath = path.join(root, "source.json");
   const reviewDayDir = path.join(root, "review");
   await fs.mkdir(reviewDayDir, { recursive: true });
@@ -57,7 +58,7 @@ describe("spreadsheet_adapter llm_review_grade compatibility", () => {
     assert.deepEqual(exported.dailyRows.map((row) => row[3]), ["B", "A", "B", "A"]);
   });
 
-  it("keeps Daily and Human Review sheets mutually exclusive while preserving existing human-review conditions", async () => {
+  it("keeps explicit review separate from legacy disagreement evidence", async () => {
     const exported = await exportRows([
       { title: "daily item", rule_grade: "C", llm_review_grade: "B", final_grade: "B", semantic_source: "llm_title_review_grade", journal: "Journal A" },
       { title: "explicit review", rule_grade: "C", llm_review_grade: "D", final_grade: "C", needs_human_review: true, disagreement_type: "semantic_downgrade_review", journal: "Journal B" },
@@ -67,11 +68,11 @@ describe("spreadsheet_adapter llm_review_grade compatibility", () => {
     const dailyTitles = exported.dailyRows.map((row) => row[0]);
     const reviewTitles = exported.reviewRows.map((row) => row[0]);
 
-    assert.deepEqual(dailyTitles, ["daily item"]);
-    assert.deepEqual(reviewTitles, ["explicit review", "legacy mismatch"]);
+    assert.deepEqual(dailyTitles, ["daily item", "legacy mismatch"]);
+    assert.deepEqual(reviewTitles, ["explicit review"]);
     assert.equal(dailyTitles.some((title) => reviewTitles.includes(title)), false);
     assert.equal(exported.dailyRows[0][3], "B");
-    assert.deepEqual(exported.reviewRows.map((row) => row[4]), ["C", "B"]);
+    assert.deepEqual(exported.reviewRows.map((row) => row[4]), ["C"]);
   });
 
   it("writes the canonical translatedTitle to the XLSX translation column", async () => {

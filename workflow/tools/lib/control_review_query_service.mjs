@@ -9,6 +9,7 @@ import { buildRuntimeConfig } from './runtime_config.mjs';
 import { buildLocalStage4ExportSource } from '../stage4/export_source_step.mjs';
 import { getWeeklyReviewEvidence } from '../stage4/spreadsheet_adapter.mjs';
 import { readPendingPaperReview, matchPendingPaperRecord, manualDecisionForRecord } from './pending_paper_review.mjs';
+import { isManualReviewEligible } from '../stage1/semantic_grade_synthesis.mjs';
 
 const inside = (root, candidate) => { const rel = path.relative(root, candidate); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
 const paperId = (runId, item, index, keys = []) => createHash('sha256').update(item._reviewScopeRunId ? `${runId}:scope:${item._reviewScopeRunId}:${keys[0] || ''}` : `${runId}:${index}:${keys[0] || ''}`).digest('hex');
@@ -17,15 +18,7 @@ const identityKeys = (item) => { try { return feedbackIdentity(item); } catch { 
 // Current artifact evidence owns actionability; durable pending status alone
 // never makes a historical record a current task. Canonical decisions win.
 export function isActiveManualReview(item, current = []) {
-  const explicit = item?.needs_human_review || item?.needsHumanReview || item?.review_required || item?.reviewRequired
-    || item?.semantic_review?.needs_human_review || item?.semantic_review?.review_required || item?.manual_review_state === 'pending';
-  if (!explicit || !identityKeys(item).length || item.pre_llm_zotero_existing_duplicate === true
-    || ['auto_d', 'manual_abc', 'manual_d'].includes(item.manual_review_state)) return false;
-  const evidence = getWeeklyReviewEvidence(item);
-  // Pending review uses current business grades; original_grade is display history.
-  const ruleGrade = String(item.rule_grade || item.grade || evidence.ruleGrade).slice(0, 1).toUpperCase();
-  const semanticGrade = String(item.llm_review_grade || evidence.semanticGrade).slice(0, 1).toUpperCase();
-  if (ruleGrade && ruleGrade === semanticGrade) return false;
+  if (!isManualReviewEligible(item) || !identityKeys(item).length || item.pre_llm_zotero_existing_duplicate === true) return false;
   return !manualDecisionForRecord({ id: item.pending_review_id || '', keys: identityKeys(item) }, current);
 }
 export class ReviewQueryService {

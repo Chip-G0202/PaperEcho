@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { isManualReviewEligible } from '../stage1/semantic_grade_synthesis.mjs';
 import path from "node:path";
 import { buildStandardSummary } from "../stage1/preference_refinement.mjs";
 import { cleanJournalName } from "../lib/journal_name_cleaner.mjs";
@@ -127,16 +128,7 @@ function cleanJournalSource(item) {
 }
 
 function isHumanReviewItem(item) {
-  return Boolean(
-    item?.needs_human_review
-      || item?.needsHumanReview
-      || item?.review_required
-      || item?.reviewRequired
-      || item?.semantic_review?.needs_human_review
-      || item?.semantic_review?.review_required
-      || item?.semantic_mismatch
-      || item?.semantic_rescue
-  );
+  return isManualReviewEligible(item);
 }
 
 // Shared read-only Weekly evidence for XLSX and the Control Center. Keep the
@@ -147,6 +139,7 @@ export function getWeeklyReviewEvidence(item) {
     semanticGrade: extractGradeLetter(item, ["llm_review_grade", "llmReviewGrade", "semantic_grade", "semanticGrade", "semantic_review.grade", "semanticPreference.grade"]),
     finalGrade: extractGradeLetter(item, ["final_grade", "finalGrade", "adjusted_grade", "grade"]),
     needsReview: isHumanReviewItem(item),
+    legacyReviewEvidence: Boolean(item?.semantic_mismatch || item?.semantic_rescue),
     reviewReason: String(item?.semantic_reason || item?.semanticReason || item?.semantic_review?.reason || item?.semantic_adjustment_reason || "").trim(),
   };
 }
