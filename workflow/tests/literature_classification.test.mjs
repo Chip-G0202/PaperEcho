@@ -47,7 +47,7 @@ test('canonical manual replay wins and legacy queue inference cannot manufacture
   assert.equal(classifyLiterature(inferred).reviewBucket,'feedback');
 });
 test('display labels cannot veto rescue; final boundary and disjoint buckets remain separate', () => {
-  const source=[item('D','C',{'推荐等级':'D无关'}),item('D','A'),item('D','B'),item('D','D')];
+  const source=[item('D','C',{'推荐等级':'D无关'}),item('D','A',{title:'Synthetic strong rescue A',doi:'10.1234/rescue-a'}),item('D','B',{title:'Synthetic strong rescue B',doi:'10.1234/rescue-b'}),item('D','D')];
   const membership=buildFinalReviewMembership(source);
   assert.equal(membership.feedback.length,1);
   assert.equal(membership.manual.length,2);
@@ -57,7 +57,7 @@ test('display labels cannot veto rescue; final boundary and disjoint buckets rem
   }
   const held=item('D','C',{pre_llm_skip_writeback:true});
   assert.equal(classifyLiterature(held).reviewBucket,'feedback');
-  assert.equal(buildProspectiveStage4ExportSource([held,item('D','A',{pre_llm_skip_writeback:true})]).length,0);
+  assert.equal(buildProspectiveStage4ExportSource([held,{...source[1],pre_llm_skip_writeback:true}]).length,1);
 });
 
 test('provider stage failure stays retryable; successful stage omission is isolated manual evidence', async () => {

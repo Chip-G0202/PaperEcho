@@ -12,7 +12,7 @@ async function exportRows(triaged) {
   const sourcePath = path.join(root, "source.json");
   const reviewDayDir = path.join(root, "review");
   await fs.mkdir(reviewDayDir, { recursive: true });
-  await fs.writeFile(sourcePath, JSON.stringify({ triaged, reportContext: {} }), "utf8");
+  await fs.writeFile(sourcePath, JSON.stringify({ triaged: triaged.map((item,index)=>({doi:`10.1234/compat-${index}`,...item})), reportContext: {} }), "utf8");
   const result = await exportAllResearchOsXlsxWithNodeFallback({
     sourcePath,
     reviewRootDir: root,

@@ -233,7 +233,7 @@ export async function runLocalPipeline(options = {}, dependencies = {}) {
     const preferenceAudit = JSON.parse(await fs.readFile(path.join(stage1Result.pipeDir, "preference_learning_audit.json"), "utf8"));
     const { prepareLocalStage4ExportSource } = await import("../stage4/export_source_step.mjs");
     localSourceRegistration = registerEphemeral({ path: sourcePath, ownerStage: "local_stage4", cleanupWhen: "after_use", preserveOnFailure: true }, ephemeralRegistry);
-    const source = await prepareLocalStage4ExportSource({ papers: repository.papers, sourcePath, runReport: stage1Result.report, preferenceLearningAudit: preferenceAudit });
+    const source = await prepareLocalStage4ExportSource({ papers: repository.papers, sourcePath, runReport: stage1Result.report, preferenceLearningAudit: preferenceAudit, runId });
     localSourceRegistration.markClosed();
     const paths = { sourcePath, reviewRoot: repository.exportsDir, reviewMonthDir: repository.exportsDir, reviewDayDir: exportDayDir, requestedOutputPath: path.join(exportDayDir, "周报.xlsx"), exportInputFiles: [sourcePath] };
     const labels = { dateStr: new Date().toISOString().slice(0, 10), reviewMonthLabel: "Local", reviewDayLabel: runId };

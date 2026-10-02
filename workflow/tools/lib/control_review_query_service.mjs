@@ -1,15 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { buildStage4StandaloneExportSource, buildProspectiveStage4ExportSource, buildFinalExportPayload, buildFinalReviewMembership } from '../stage4/finalize_exports_support.mjs';
+import { buildStage4StandaloneExportSource, buildProspectiveStage4ExportSource, buildFinalExportPayload, buildFinalReviewMembership, isManualReviewReachable, buildReviewProjectionContext } from '../stage4/finalize_exports_support.mjs';
 import { buildRunSummary } from './run_summary.mjs';
 import { feedbackIdentity } from './control_feedback_service.mjs';
 import { loadSourceSelectionConfig } from './literature_config.mjs';
 import { buildRuntimeConfig } from './runtime_config.mjs';
 import { buildLocalStage4ExportSource } from '../stage4/export_source_step.mjs';
 import { getWeeklyReviewEvidence } from '../stage4/spreadsheet_adapter.mjs';
-import { readPendingPaperReview, matchPendingPaperRecord, manualDecisionForRecord } from './pending_paper_review.mjs';
-import { isManualReviewEligible } from '../stage1/semantic_grade_synthesis.mjs';
+import { readPendingPaperReview, matchPendingPaperRecord } from './pending_paper_review.mjs';
 import { isActiveRuleSuggestion } from './unified_pending_rule_suggestions.mjs';
 
 const inside = (root, candidate) => { const rel = path.relative(root, candidate); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
@@ -19,8 +18,7 @@ const identityKeys = (item) => { try { return feedbackIdentity(item); } catch { 
 // Current artifact evidence owns actionability; durable pending status alone
 // never makes a historical record a current task. Canonical decisions win.
 export function isActiveManualReview(item, current = []) {
-  if (!isManualReviewEligible(item) || !identityKeys(item).length || item.pre_llm_zotero_existing_duplicate === true) return false;
-  return !manualDecisionForRecord({ id: item.pending_review_id || '', keys: identityKeys(item) }, current);
+  return isManualReviewReachable(item, { current });
 }
 export class ReviewQueryService {
   constructor({ root, context = buildRuntimeConfig({ cwd: root, env: {}, argv: [] }), reviewRoot = context.reviewRoot, feedback, rules }) {
@@ -69,22 +67,25 @@ export class ReviewQueryService {
         if (snapshot.schema_version !== 1 || !Array.isArray(snapshot.papers)) throw new Error('LOCAL_PAPERS_SCHEMA_UNSUPPORTED');
         const pipeline = this.pipeline(run);
         const report = pipeline ? await this.read(path.join(pipeline, 'run_report.json')) : null;
-        const source = buildLocalStage4ExportSource({ papers: snapshot.papers, runReport: report || {} });
+        const source = buildLocalStage4ExportSource({ papers: snapshot.papers, runReport: report || {}, runId: run.runId });
         return { run, report: report || {}, writeback: null, items: source.finalPayload.triaged };
       }
       const pipeline = this.pipeline(run);
       if (!pipeline) continue;
       const report = await this.read(path.join(pipeline, 'run_report.json'));
       if (report?.steps?.med_weekly_synthesis?.completed !== true) continue;
+      if (report.skipped || report.profile === 'radar' || report.runtime_profile === 'radar'
+        || (report.run_id && report.run_id !== run.runId)
+        || (report.started_at && Date.parse(report.started_at) < Date.parse(run.startedAt))) continue;
       const source = await this.read(path.join(pipeline, 'desktop_daily_review_source.json'));
       const writeback = await this.read(path.join(pipeline, 'zotero_writeback_summary.json'));
       const filtered = buildStage4StandaloneExportSource({ desktopSource: source, writebackSummary: writeback });
       if (!['ok', 'no_new_writeback_items'].includes(filtered.filter.status)) continue;
-      return { run, report, writeback, items: buildFinalExportPayload({ allAbcItems: filtered.allAbcItems, writebackSummary: writeback }).triaged };
+      return { run, report, writeback, items: buildFinalExportPayload({ allAbcItems: filtered.allAbcItems, writebackSummary: writeback, reviewContext: buildReviewProjectionContext(report) }).triaged };
     }
     return null;
   }
-  async currentReviewScope(weekly) {
+  async currentReviewScope(weekly, { pendingRecords = [] } = {}) {
     const seen = new Set();
     const runs = await this.runs();
     if (!this.localRepository) for (const run of runs) {
@@ -97,30 +98,33 @@ export class ReviewQueryService {
       // A date pipeline can be reused: do not attach a different run's output.
       if (report.skipped || (report.run_id && report.run_id !== run.runId)
         || (report.started_at && Date.parse(report.started_at) < Date.parse(run.startedAt))) continue;
-      // A completed final source owns membership; never append Stage1-only holds.
-      if (weekly?.run.runId === run.runId) return { run, type: 'weekly', items: buildFinalExportPayload({ allAbcItems: weekly.items, writebackSummary: weekly.writeback || {} }).triaged };
+      const candidates = await this.read(path.join(pipeline, 'triaged_items.json'));
+      if (candidates !== null && !Array.isArray(candidates)) throw new Error('REVIEW_SCOPE_INVALID');
+      const reviewContext = buildReviewProjectionContext(report, { pendingRecords });
+      const manualCandidates = candidates || [];
+      // Both completed and prospective views use the same current-run Manual
+      // reachability owner; durable historical pending records are not a source.
+      if (weekly?.run.runId === run.runId) return { run, type: 'weekly', items: buildFinalExportPayload({ allAbcItems: weekly.items, writebackSummary: weekly.writeback || {}, manualCandidates, reviewContext }).triaged };
       if (report.steps?.stage4_export_audit?.stage4_export_status === 'success'
         || report.steps?.med_weekly_synthesis?.completed === true) {
         const desktopSource = await this.read(path.join(pipeline, 'desktop_daily_review_source.json'));
         const writebackSummary = await this.read(path.join(pipeline, 'zotero_writeback_summary.json'));
         const source = buildStage4StandaloneExportSource({ desktopSource, writebackSummary });
-        return { run, type: 'stage4', items: buildFinalExportPayload({ allAbcItems: source.allAbcItems, writebackSummary: writebackSummary || {} }).triaged };
+        return { run, type: 'stage4', items: buildFinalExportPayload({ allAbcItems: source.allAbcItems, writebackSummary: writebackSummary || {}, manualCandidates, reviewContext }).triaged };
       }
-      const items = await this.read(path.join(pipeline, 'triaged_items.json'));
-      if (items === null) {
+      if (candidates === null) {
         continue;
       }
-      if (!Array.isArray(items)) throw new Error('REVIEW_SCOPE_INVALID');
-      return { run, type: 'prospective_stage4', items: buildProspectiveStage4ExportSource(items) };
+      return { run, type: 'prospective_stage4', items: buildProspectiveStage4ExportSource(candidates, reviewContext) };
     }
     return weekly && (this.localRepository || !runs.length) ? { run: weekly.run, type: 'weekly', items: weekly.items } : null;
   }
   async reviewData() {
     const weekly = await this.latestWeeklyData();
-    const scope = await this.currentReviewScope(weekly);
+    const state = this.localRepository ? { records: [] } : await readPendingPaperReview(this.reviewRoot);
+    const scope = await this.currentReviewScope(weekly, { pendingRecords: state.records });
     if (!scope && !weekly) return null;
     const current = await this.feedback.current();
-    const state = this.localRepository ? { records: [] } : await readPendingPaperReview(this.reviewRoot);
     const seen = new Set();
     const scopeItems = [];
     for (const item of scope?.items || []) {
@@ -143,7 +147,7 @@ export class ReviewQueryService {
       admittedReviews.add(matches[0]);
       return { ...item, _activeManualItem: matches[0] };
     });
-    const held = active.filter((item) => !identityKeys(item).some((key) => admittedKeys.has(key))).map((item) => ({ ...item, _heldReview: scope.type === 'prospective_stage4', _activeManualItem: item }));
+    const held = active.filter((item) => !identityKeys(item).some((key) => admittedKeys.has(key))).map((item) => ({ ...item, _heldReview: item['写回状态'] !== '已写回', _activeManualItem: item }));
     return {
       ...(weekly || { run: scope.run, report: {}, writeback: null }),
       reviewScope: scope, scopeItems, items: [...weeklyItems, ...held],

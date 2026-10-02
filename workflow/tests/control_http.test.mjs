@@ -112,15 +112,20 @@ test('latest Weekly: zero, 1000 items, long title, Chinese, missing DOI, paginat
   assert.equal(status.needsReview, 1);
   assert.equal(status.lastWeekly, '2026-09-12T05:00:00Z');
 });
-test('Stage1-only held D disagreement does not enter the completed manual review boundary', async (t) => {
+test('current held D disagreement reaches completed Manual through its durable review identity', async (t) => {
   const app = await setup(t);
   const item = { title: '罕见疾病机制研究与临床证据', grade: 'D', rule_grade: 'D', llm_review_grade: 'C', final_grade: 'D', review_required: true };
   await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items: [item] });
   await app.write(path.join(app.pipeline, 'triaged_items.json'), [item]);
   const page = (await app.get('/api/weekly')).json;
-  assert.equal(page.total, 0);
-  assert.deepEqual((await app.get('/api/pending-summary')).json, { normal: 0, manual: 0, rules: 0 });
-  assert.equal((await app.get('/api/status')).json.needsReview, 0);
+  assert.equal(page.total, 1);
+  assert.equal(page.items[0].zotero, 'not_written');
+  assert.deepEqual((await app.get('/api/pending-summary')).json, { normal: 0, manual: 1, rules: 0 });
+  assert.equal((await app.get('/api/status')).json.needsReview, 1);
+  const decision={runId:page.runId,paperId:page.items[0].id,manualGrade:'B',requestId:'held-rescue-b'};
+  assert.equal((await app.post('/api/feedback',decision)).status,200);
+  assert.equal((await app.post('/api/feedback',decision)).json.duplicate,true);
+  assert.equal((await app.get('/api/pending-summary')).json.manual,0);
 });
 test('held paper remains reviewable when no Weekly export completed', async (t) => {
   const app = await setup(t);
@@ -129,8 +134,6 @@ test('held paper remains reviewable when no Weekly export completed', async (t) 
     { title: '中文标题与跨次待审文献', doi: '10.1234/no-weekly', grade: 'C', rule_grade: 'C', llm_review_grade: 'C', final_grade: 'C', needs_human_review: true },
   ];
   await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items });
-  // Final-eligible but not yet written: safety holds themselves remain excluded.
-  items[0].pre_llm_skip_writeback = false;
   await app.write(path.join(app.reviewRoot, 'runs/held-1/run_group.json'), { schemaVersion: 1, runId: 'held-1', pipelineMode: 'desktop', startedAt: '2026-09-13T05:00:00Z', artifacts: [{ kind: 'pipeline', rootKey: 'research', path: 'pipeline/fixture' }] });
   await app.write(path.join(app.pipeline, 'run_report.json'), { run_id: 'held-1' });
   await app.write(path.join(app.pipeline, 'triaged_items.json'), items);

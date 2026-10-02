@@ -9,6 +9,7 @@ import { finalizePendingPaperReview, pendingPaperReviewPath, readPendingPaperRev
 import { buildStage4StandaloneExportSource, buildFinalExportPayload, buildProspectiveStage4ExportSource, buildFinalReviewMembership } from '../tools/stage4/finalize_exports_support.mjs';
 import { getWeeklyReviewEvidence, exportAllResearchOsXlsxWithNodeFallback } from '../tools/stage4/spreadsheet_adapter.mjs';
 import { readXlsxSheets } from '../tools/lib/review_workbook_reader.mjs';
+import { prepareStage4ExportSource } from '../tools/stage4/export_source_step.mjs';
 
 const paper = (index) => ({ title: `Synthetic mechanism review paper ${index}`, doi: `10.1234/scope-${index}`, grade: 'C', rule_grade: 'C', llm_review_grade: 'C', needs_human_review: true });
 const finalEligible = (item) => ({ ...item, pre_llm_skip_writeback: false, review_consensus_required: false });
@@ -61,9 +62,9 @@ test('current artifacts admit re-seen identities once and release consensus, dou
   const items = [finalEligible(historical[0]), finalEligible(historical[0]), { ...historical[1], rule_grade: '', grade: 'B', original_grade: 'C', llm_review_grade: 'B', needs_human_review: false }, { ...historical[2], rule_grade: '', grade: 'D', original_grade: 'C', llm_review_grade: 'D' }, { ...historical[3], needs_human_review: false, manual_review_state: 'manual_abc' }, { title: 'No reliable identifier', grade: 'C', needs_human_review: true }];
   await app.run('current', '2026-10-01T05:00:00Z', items);
   const page = await app.query.weekly();
-  assert.equal(page.items.length, 1);
+  assert.equal(page.items.length, 2);
   assert.equal(page.items[0].doi, historical[0].doi);
-  assert.equal((await app.query.pendingSummary()).manual, 1);
+  assert.equal((await app.query.pendingSummary()).manual, 2);
   await app.run('empty-current', '2026-10-02T05:00:00Z', []);
   assert.equal((await app.query.pendingSummary()).manual, 0);
   await assert.rejects(app.query.resolvePaper(page.runId, page.items[0].id), /WEEKLY_CHANGED_RELOAD/);
@@ -80,7 +81,7 @@ test('newer Weekly evidence outranks older held artifacts; Radar does not produc
   assert.equal(data.reviewScope.run.runId, 'weekly-newer');
   assert.equal(data.reviewScope.type, 'weekly');
   assert.equal((await app.query.pendingSummary()).manual, 1);
-  const initial = await app.query.weekly();
+  const initial = await app.query.weekly({limit:200});
   assert.equal(initial.items.filter((item) => item.manualReviewPending).length, 1);
   await app.feedback.submit({ kind: 'manual_grade', paper: paper(1), manualGrade: 'B', requestId: 'weekly-b' });
   const decided = await app.query.weekly();
@@ -108,10 +109,11 @@ test('reused pipeline must not assign stale or skipped Stage1 artifacts to anoth
   }
 });
 
-test('completed final source owns manual identities and canonical decisions, never Stage1 safety holds', async (t) => {
+test('completed export and Control Center share qualified held Manual identities and canonical decisions', async (t) => {
   const app = await fixture(t);
   const holds = Array.from({ length: 62 }, (_, i) => paper(i));
   await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items: holds });
+  holds.forEach((item,index)=>{ if(index<2)Object.assign(item,{rule_grade:'D',llm_review_grade:index?'B':'A',grade:'D',final_grade:'D'});else item.pre_llm_zotero_existing_duplicate=true; });
   const pendingBefore = await fs.readFile(pendingPaperReviewPath(app.reviewRoot), 'utf8');
   const final = Array.from({ length: 49 }, (_, i) => ({ ...paper(100 + i), needs_human_review: i < 2 }));
   const run = await app.run('completed', '2026-10-01T05:00:00Z', [...holds, ...final], { weekly: true, report: { steps: { med_weekly_synthesis: { completed: true } } } });
@@ -120,7 +122,7 @@ test('completed final source owns manual identities and canonical decisions, nev
   await app.write(path.join(pipeline, 'desktop_daily_review_source.json'), { triaged: final });
   await app.write(path.join(pipeline, 'zotero_writeback_summary.json'), writeback);
   const exportedSource = buildStage4StandaloneExportSource({ desktopSource: { triaged: final }, writebackSummary: writeback });
-  const finalPayload = buildFinalExportPayload({ allAbcItems: exportedSource.allAbcItems, writebackSummary: writeback });
+  const finalPayload = buildFinalExportPayload({ allAbcItems: exportedSource.allAbcItems, writebackSummary: writeback, manualCandidates: holds });
   const manual = finalPayload.triaged.filter(item => getWeeklyReviewEvidence(item).needsReview);
   const expected = manual.map(feedbackIdentity);
   assert.deepEqual((await app.query.reviewData()).scopeItems.filter(item => getWeeklyReviewEvidence(item).needsReview).map(feedbackIdentity), expected);
@@ -129,23 +131,23 @@ test('completed final source owns manual identities and canonical decisions, nev
   const exported = await exportAllResearchOsXlsxWithNodeFallback({ sourcePath, reviewRootDir: app.reviewRoot, reviewWeekDir: app.reviewRoot, reviewDayDir: app.reviewRoot, dateStr: '2026-10-01', weekLabel: '26.10', dayLabel: '10.01' });
   const rows = readXlsxSheets(exported.outputs.every_other_day_report).get('需人工复核').slice(1);
   // Workbook titles map back to the same stable identities; count alone is insufficient.
-  assert.deepEqual(rows.map(row => feedbackIdentity(final.find(item => item.title === row[0]))), expected);
-  assert.equal((await app.query.pendingSummary()).manual, 2);
-  assert.equal((await app.query.status()).needsReview, 2);
-  const initial = await app.query.weekly();
+  assert.deepEqual(rows.map(row => feedbackIdentity(finalPayload.triaged.find(item => item.title === row[0]))), expected);
+  assert.equal((await app.query.pendingSummary()).manual, 4);
+  assert.equal((await app.query.status()).needsReview, 4);
+  const initial = await app.query.weekly({limit:200});
   assert.deepEqual(initial.items.filter(item => item.manualReviewPending).map(item => item.doi), manual.map(item => item.doi));
   for (const [index, item] of initial.items.filter(item => item.manualReviewPending).entries()) {
     await app.feedback.submit({ kind: 'manual_grade', paper: await app.query.resolvePaper(initial.runId, item.id), manualGrade: 'B', requestId: item.id });
-    assert.equal((await app.query.pendingSummary()).manual, 1 - index);
-    assert.equal((await app.query.status()).needsReview, 1 - index);
-    assert.equal((await app.query.weekly()).items.filter(item => item.manualReviewPending).length, 1 - index);
+    assert.equal((await app.query.pendingSummary()).manual, 3 - index);
+    assert.equal((await app.query.status()).needsReview, 3 - index);
+    assert.equal((await app.query.weekly({limit:200})).items.filter(item => item.manualReviewPending).length, 3 - index);
     assert.equal((await app.query.resolvePaper(initial.runId, item.id)).doi, item.doi);
   }
   assert.equal((await app.query.weekly()).items.length, 49); // Ordinary Feedback membership is unchanged.
   assert.equal(await fs.readFile(pendingPaperReviewPath(app.reviewRoot), 'utf8'), pendingBefore);
 });
 
-test('unfinished workflow derives only final-eligible manual identities without changing artifacts or pending history', async (t) => {
+test('unfinished workflow admits current decidable holds independently of automatic eligibility without rewriting history', async (t) => {
   const app = await fixture(t);
   const historical = Array.from({ length: 142 }, (_, i) => paper(i));
   await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items: historical });
@@ -163,13 +165,13 @@ test('unfinished workflow derives only final-eligible manual identities without 
   const pipeline = app.query.pipeline(run);
   const pendingBefore = await fs.readFile(pendingPaperReviewPath(app.reviewRoot), 'utf8');
   const artifactBefore = await fs.readFile(path.join(pipeline, 'triaged_items.json'), 'utf8');
-  const expected = historical.slice(60, 62).map(item => item.doi);
+  const expected = [...historical.slice(60,62),...historical.slice(0,60),items[62],items[63],items[65]].map(item => item.doi);
   const data = await app.query.reviewData();
   assert.equal(data.reviewScope.type, 'prospective_stage4');
   assert.deepEqual(data.scopeItems.map(item => item.doi), expected);
-  assert.deepEqual((await app.query.weekly()).items.map(item => item.doi), expected);
-  assert.equal((await app.query.pendingSummary()).manual, 2);
-  assert.equal((await app.query.status()).needsReview, 2);
+  assert.deepEqual((await app.query.weekly({limit:200})).items.map(item => item.doi), expected);
+  assert.equal((await app.query.pendingSummary()).manual, 65);
+  assert.equal((await app.query.status()).needsReview, 65);
   const prospective = buildProspectiveStage4ExportSource(items);
   assert.deepEqual(prospective.filter(item => item.doi).map(item => item.doi), expected);
   assert.equal(JSON.stringify(items), inputBefore);
@@ -179,7 +181,7 @@ test('unfinished workflow derives only final-eligible manual identities without 
   assert.deepEqual((await fs.readdir(pipeline)).sort(), ['run_report.json', 'triaged_items.json']);
 });
 
-test('completed Stage4 source stays authoritative without Weekly manifest and missing evidence fails closed', async (t) => {
+test('completed Stage4 requires normal writeback evidence while current held Manual stays reachable', async (t) => {
   const app = await fixture(t);
   const run = await app.run('stage4', '2026-10-01T05:00:00Z', [paper(0)], { report: { steps: { stage4_export_audit: { stage4_export_status: 'success' } } } });
   const pipeline = app.query.pipeline(run);
@@ -187,12 +189,12 @@ test('completed Stage4 source stays authoritative without Weekly manifest and mi
   await app.write(path.join(pipeline, 'desktop_daily_review_source.json'), { triaged: [paper(1), finalD] });
   await app.write(path.join(pipeline, 'zotero_writeback_summary.json'), { writeback_items: [{ ...paper(1), itemKey: 'KEY1' }, { ...finalD, itemKey: 'KEY2' }] });
   const page = await app.query.weekly();
-  assert.deepEqual(page.items.map(item => item.doi), [paper(1).doi]);
+  assert.deepEqual(page.items.map(item => item.doi), [paper(1).doi,paper(0).doi]);
   assert.equal(page.items[0].zotero, 'admitted');
-  assert.equal((await app.query.pendingSummary()).manual, 1);
+  assert.equal((await app.query.pendingSummary()).manual, 2);
   await app.write(path.join(pipeline, 'zotero_writeback_summary.json'), { writeback_items: [] });
-  assert.equal((await app.query.pendingSummary()).manual, 0);
-  assert.equal((await app.query.weekly()).total, 0);
+  assert.equal((await app.query.pendingSummary()).manual, 1);
+  assert.equal((await app.query.weekly()).total, 1);
 });
 
 test('historical 7/20 projection mismatch shares identities, preserves rescue and canonical history after reload', async (t) => {
@@ -212,21 +214,22 @@ test('historical 7/20 projection mismatch shares identities, preserves rescue an
   await app.write(path.join(pipeline,'desktop_daily_review_source.json'),{triaged:source});
   await app.write(path.join(pipeline,'zotero_writeback_summary.json'),writeback);
   const filtered=buildStage4StandaloneExportSource({desktopSource:{triaged:source},writebackSummary:writeback});
-  const payload=buildFinalExportPayload({allAbcItems:filtered.allAbcItems,writebackSummary:writeback});
+  const payload=buildFinalExportPayload({allAbcItems:filtered.allAbcItems,writebackSummary:writeback,manualCandidates:holds});
   const membership=buildFinalReviewMembership(payload.triaged);
-  const identitySet=items=>items.map(i=>feedbackIdentity(i).sort().join('|')).sort();
+  const identitySet=items=>items.map(i=>feedbackIdentity(i).filter(key=>!key.startsWith('review:')).sort().join('|')).sort();
   const before=await app.query.weekly();
   assert.deepEqual(identitySet(before.items.filter(i=>i.reviewBucket==='feedback')),identitySet(membership.feedback));
   assert.deepEqual(identitySet(before.items.filter(i=>i.reviewBucket==='manual')),identitySet(membership.manual));
   assert.deepEqual(identitySet(membership.feedback),identitySet(normal));
-  assert.deepEqual(identitySet(membership.manual),identitySet([manual]));
-  assert.ok(before.items.every(i=>!holds.some(h=>h.doi===i.doi)&&i.doi!==excluded.doi));
+  assert.deepEqual(identitySet(membership.manual),identitySet([manual,...holds]));
+  assert.ok(before.items.every(i=>i.doi!==excluded.doi));
+  assert.ok(before.items.filter(i=>holds.some(h=>h.doi===i.doi)).every(i=>i.pendingReview&&i.zotero==='not_written'));
   const sourcePath=path.join(pipeline,'workbook_source.json');
   await app.write(sourcePath,payload);
   const exported=await exportAllResearchOsXlsxWithNodeFallback({sourcePath,reviewRootDir:app.reviewRoot,reviewWeekDir:app.reviewRoot,reviewDayDir:app.reviewRoot,dateStr:'2026-10-01',weekLabel:'26.10',dayLabel:'10.01'});
   const sheets=readXlsxSheets(exported.outputs.every_other_day_report);
   for(const[sheet,bucket]of [['每日反馈','feedback'],['需人工复核','manual']]) {
-    const projected=sheets.get(sheet).slice(1).filter(row=>row.some(Boolean)).map(row=>source.find(i=>i.title===row[0]));
+    const projected=sheets.get(sheet).slice(1).filter(row=>row.some(Boolean)).map(row=>payload.triaged.find(i=>i.title===row[0]));
     assert.ok(projected.every(Boolean));
     assert.deepEqual(identitySet(projected),identitySet(membership[bucket]));
   }
@@ -238,6 +241,37 @@ test('historical 7/20 projection mismatch shares identities, preserves rescue an
   assert.equal(state.length,2);
   assert.equal((await app.query.pendingSummary()).normal,membership.feedback.length-2);
   assert.equal((await app.query.weekly()).items.filter(i=>i.reviewBucket==='feedback'&&!i.feedback).length,membership.feedback.length-2);
-  assert.equal((await app.query.pendingSummary()).manual,1);
+  assert.equal((await app.query.pendingSummary()).manual,3);
   assert.equal(await fs.readFile(pendingPaperReviewPath(app.reviewRoot),'utf8'),pendingBefore);
+});
+
+test('formal Stage4 source preparation carries current held Manual into the same Workbook and service projection', async (t) => {
+  const app=await fixture(t);
+  const items=['A','B'].map((g,i)=>({...paper(700+i),rule_grade:'D',llm_review_grade:g,grade:'D',final_grade:'D'}));
+  await finalizePendingPaperReview({reviewRoot:app.reviewRoot,items});
+  const run=await app.run('prepared','2026-10-01T05:00:00Z',items,{weekly:true,report:{steps:{llm_grade_review:{ok:true,skipped:false,failed_batch_count:0},med_weekly_synthesis:{completed:true}},counts:{},failures:[]}});
+  const pipeline=app.query.pipeline(run), sourcePath=path.join(pipeline,'desktop_daily_review_source.json');
+  const paths={pipelineDir:pipeline,reviewRoot:app.reviewRoot,reviewDayDir:app.reviewRoot,sourcePath,runReportPath:path.join(pipeline,'run_report.json'),writebackReadyPath:path.join(pipeline,'writeback_ready_items.json'),backfillPath:path.join(pipeline,'abc_translation_backfill.json'),writebackSummaryPath:path.join(pipeline,'zotero_writeback_summary.json'),preferenceAuditPath:path.join(pipeline,'preference_learning_audit.json')};
+  await app.write(paths.writebackReadyPath,[]);await app.write(paths.backfillPath,{updated_items:[]});await app.write(paths.writebackSummaryPath,{writeback_items:[]});await app.write(sourcePath,{triaged:[]});
+  const pendingBefore=await fs.readFile(pendingPaperReviewPath(app.reviewRoot),'utf8');
+  const artifactBefore=await fs.readFile(path.join(pipeline,'triaged_items.json'),'utf8');
+  const prepared=await prepareStage4ExportSource({dateStr:'2026-10-01',paths,runtime:{translationCachePath:path.join(pipeline,'translation_cache.json')}});
+  assert.deepEqual(prepared.finalPayload.triaged.map(i=>i.doi),items.map(i=>i.doi));
+  const exported=await exportAllResearchOsXlsxWithNodeFallback({sourcePath,reviewRootDir:app.reviewRoot,reviewWeekDir:app.reviewRoot,reviewDayDir:app.reviewRoot,dateStr:'2026-10-01',weekLabel:'26.10',dayLabel:'10.01'});
+  const rows=readXlsxSheets(exported.outputs.every_other_day_report).get('需人工复核').slice(1);
+  assert.deepEqual(rows.map(row=>items.find(i=>i.title===row[0]).doi),(await app.query.weekly()).items.filter(i=>i.manualReviewPending).map(i=>i.doi));
+  assert.equal(await fs.readFile(pendingPaperReviewPath(app.reviewRoot),'utf8'),pendingBefore);
+  assert.equal(await fs.readFile(path.join(pipeline,'triaged_items.json'),'utf8'),artifactBefore);
+});
+
+test('completed and unfinished whole semantic failures never expose mass Manual', async (t) => {
+  for(const completed of [true,false]) {
+    const app=await fixture(t), items=Array.from({length:120},(_,i)=>paper(800+i));
+    const run=await app.run('failed','2026-10-01T05:00:00Z',items,{weekly:completed,report:{steps:{semantic_grading:{ok:false,skipped:false,failed_batch_count:1},med_weekly_synthesis:{completed}}}});
+    const pipeline=app.query.pipeline(run);
+    await app.write(path.join(pipeline,'desktop_daily_review_source.json'),{triaged:items});
+    await app.write(path.join(pipeline,'zotero_writeback_summary.json'),{writeback_items:items.map((i,n)=>({...i,itemKey:`FAILED${n}`}))});
+    assert.equal((await app.query.weekly()).total,0);
+    assert.equal((await app.query.pendingSummary()).manual,0);
+  }
 });
