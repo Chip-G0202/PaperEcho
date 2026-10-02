@@ -11,11 +11,11 @@ import { assertNotificationParity } from './helpers/notification_parity.mjs';
 const webhookUrl=new URL('/cgi-bin/webhook/send?key='+'generated-key','https://qyapi.weixin.qq.com').href;
 const testContent=()=>buildTestNotificationContent({generatedAt:'2026-09-30T00:00:00Z'});
 const papers=['C','A','B'].map((grade,index)=>({id:`item-${index}`,title:`Unique English ${index}`,translatedTitle:`中文${index}`,final_grade:grade,semantic_reason:`Reason ${index}`,journal:'Journal',source_type:'RSS',year:'2026'}));
-for(const kind of ['radar','weekly'])test(`WeCom ${kind} text preserves canonical semantics, 1800-byte prefix budget`,()=>{
+for(const kind of ['radar','weekly'])test(`WeCom ${kind} Markdown preserves summary semantics within 1800 bytes`,()=>{
   const content=kind==='radar'?buildRadarNotificationContent(papers,{audit:{candidateCount:3}}):buildWeeklyNotificationContent({runId:'weekly',counts:{created:3}},{literatureItems:papers,overview:'Canonical summary'});
-  const payload=renderWecomNotification(content); assert.equal(payload.msgtype,'text'); assertNotificationParity(content,payload.text.content); assert.ok(Buffer.byteLength(payload.text.content)<=1800);
-  const long={...content,items:Array.from({length:30},(_,i)=>({...content.items[0],title:`Long [${i}] end`,id:`long-${i}`,translatedTitle:'中'.repeat(40),reason:'Reason'.repeat(20)}))}; const shortened=renderWecomNotification(long);
-  assertNotificationParity(long,shortened.text.content,{prefix:true}); assert.match(shortened.text.content,/另有 \d+ 项未展开/); assert.ok(Buffer.byteLength(shortened.text.content)<=1800);
+  const payload=renderWecomNotification(content); assert.equal(payload.msgtype,'markdown'); assertNotificationParity(content,payload.markdown.content); assert.ok(Buffer.byteLength(payload.markdown.content)<=1800);
+  const long={...content,summaryView:{...content.summaryView,overview:'Long overview '.repeat(1000)},items:Array.from({length:30},(_,i)=>({...content.items[0],title:`Long [${i}] end`,id:`long-${i}`,translatedTitle:'中'.repeat(40),reason:'Reason'.repeat(20)}))}; const shortened=renderWecomNotification(long);
+  assertNotificationParity(long,shortened.markdown.content,{bounded:true}); assert.ok(Buffer.byteLength(shortened.markdown.content)<=1800);
 });
 test('WeCom strict official URL rejects SSRF, query pollution and altered path before sending',async()=>{
   assert.equal(validWecomWebhook(webhookUrl),true);let calls=0;
@@ -23,7 +23,7 @@ test('WeCom strict official URL rejects SSRF, query pollution and altered path b
     const result=await createWecomTransport({webhookUrl:url},{fetchImpl:async()=>{calls++;}})(renderWecomNotification(testContent()));assert.equal(result.accepted,false);
   }assert.equal(calls,0);
 });
-test('WeCom request is plain text without mentions or secret echo; byte boundary checked before send',async()=>{
+test('WeCom request preserves supported format without mentions or secret echo; byte boundary checked before send',async()=>{
   const calls=[];const send=createWecomTransport({webhookUrl},{fetchImpl:async(url,input)=>{calls.push({url,input});return{status:200,json:async()=>({errcode:0,errmsg:webhookUrl})};}});
   const payload=renderWecomNotification(testContent());assert.equal((await send({...payload,to:'hash',messageId:'id',mentioned_list:['@all']})).accepted,true);assert.deepEqual(JSON.parse(calls[0].input.body),payload);assert.equal(calls[0].input.redirect,'error');
   assert.equal((await send({msgtype:'text',text:{content:'中'.repeat(600)}})).accepted,true);assert.equal((await send({msgtype:'text',text:{content:'中'.repeat(601)}})).accepted,false);assert.equal(calls.length,2);

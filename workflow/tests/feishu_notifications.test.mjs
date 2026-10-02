@@ -11,11 +11,11 @@ import { businessChannelsFixture } from './helpers/channel_fixture.mjs';
 import { assertNotificationParity } from './helpers/notification_parity.mjs';
 const webhookUrl = new URL('/open-apis/bot/v2/hook/' + '0'.repeat(8) + '-0000-0000-0000-' + '0'.repeat(12), 'https://open.feishu.cn').href;
 const papers = ['C','A','B'].map((grade,index) => ({ id:`item-${index}`,title:`Unique English ${index}`,translatedTitle:`中文${index}`,final_grade:grade,semantic_reason:`Reason ${index}`,journal:'Journal',source_type:'RSS',year:'2026' }));
-for (const kind of ['radar','weekly']) test(`Feishu ${kind} rich text preserves canonical semantics and prefix`, () => {
+for (const kind of ['radar','weekly']) test(`Feishu ${kind} native post preserves summary semantics`, () => {
   const content=kind==='radar'?buildRadarNotificationContent(papers,{audit:{candidateCount:3}}):buildWeeklyNotificationContent({runId:'weekly',counts:{created:3}},{literatureItems:papers,overview:'Canonical summary'});
-  const payload=renderFeishuNotification(content); assert.equal(payload.msg_type,'post'); assertNotificationParity(content,payload.content.post.zh_cn.content.flat().map(node=>node.text).join('\n'));
-  const long={...content,items:Array.from({length:50},(_,i)=>({...content.items[0],id:`long-${i}`,title:`Long [${i}] end`,translatedTitle:'中'.repeat(250),reason:'Reason'.repeat(150)}))};
-  const short=renderFeishuNotification(long); assert.ok(Buffer.byteLength(JSON.stringify(short))<16384); assert.match(short.content.post.zh_cn.content[0][0].text,/另有 \d+ 项未展开/); assertNotificationParity(long,short.content.post.zh_cn.content[0][0].text,{prefix:true});
+  const payload=renderFeishuNotification(content); assert.equal(payload.msg_type,'post'); assertNotificationParity(content,[payload.content.post.zh_cn.title,...payload.content.post.zh_cn.content.flat().map(node=>node.text)].join('\n'));
+  const long={...content,summaryView:{...content.summaryView,overview:'Long overview '.repeat(1000)},items:Array.from({length:50},(_,i)=>({...content.items[0],id:`long-${i}`,title:`Long [${i}] end`,translatedTitle:'中'.repeat(250),reason:'Reason'.repeat(150)}))};
+  const short=renderFeishuNotification(long); assert.ok(Buffer.byteLength(JSON.stringify(short))<16384); assertNotificationParity(long,[short.content.post.zh_cn.title,...short.content.post.zh_cn.content.flat().map(node=>node.text)].join('\n'),{bounded:true});
 });
 test('Feishu official v2 URL rejects SSRF, altered paths and normalization before network',async()=>{
   assert.equal(validFeishuWebhook(webhookUrl),true); let calls=0;

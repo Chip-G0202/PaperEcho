@@ -9,15 +9,15 @@ import { renderWeeklyReport } from '../tools/stage5/report_summary.mjs';
 import { readNotificationReceipt } from '../tools/stage5/email_receipt.mjs';
 import { businessChannelsFixture } from './helpers/channel_fixture.mjs';
 import { assertNotificationParity } from './helpers/notification_parity.mjs';
-const texts={qq:p=>p.content,wechat:p=>p.messages.map(part=>part.content).join(''),feishu:p=>p.content.post.zh_cn.content.flat().map(node=>node.text).join('\n'),wecom:p=>p.text.content};
+const texts={qq:p=>p.content,wechat:p=>p.messages.map(part=>part.content).join(''),feishu:p=>[p.content.post.zh_cn.title,...p.content.post.zh_cn.content.flat().map(node=>node.text)].join('\n'),wecom:p=>p.markdown.content};
 const papers=['C','A','B','D','A'].map((grade,i)=>({id:`paper-${i}`,title:`Paper [${i}] end`,translatedTitle:`译文${i}`,final_grade:grade,recommendation_reason:`Reason ${i}`,journal:'Journal',year:'2026',source_type:'RSS',excluded:i===4}));
-for(const event of ['radar','weekly'])test(`all five ${event} renderers consume the same canonical items, grades, reasons and summary`,()=>{
+for(const event of ['radar','weekly'])test(`all five ${event} renderers show the same canonical summary and keep papers internal`,()=>{
   const content=event==='radar'?buildRadarNotificationContent(papers,{runId:'one-event',audit:{candidateCount:8}}):buildWeeklyNotificationContent({runId:'one-event',counts:{created:3,grades:{A:1,B:1,C:1}},finishedAt:'2026-09-30'},{literatureItems:papers,overview:'Existing overview'});
   assert.deepEqual(content.items.map(item=>item.id),['paper-0','paper-1','paper-2']); const before=structuredClone(content);
   const outputs={email:(event==='radar'?formatRadarReport(content):renderWeeklyReport(content)).text,...Object.fromEntries(CHANNEL_IDS.filter(id=>id!=='email').map(id=>[id,texts[id](renderChannelNotification(id,content))]))};
-  for(const text of Object.values(outputs)){ assertNotificationParity(content,text);assert.ok(!text.includes(papers[3].title));assert.ok(!text.includes(papers[4].title));for(const marker of event==='radar'?['本轮候选','8','本封推荐','3','A 级文献','1']:['本次新增','3','A','B','C','Existing overview'])assert.ok(text.includes(marker),marker); }assert.deepEqual(content,before);
-  const long={...content,sections:event==='weekly'?{...content.sections,overview:'Overview '.repeat(1000)}:undefined,items:Array.from({length:30},(_,i)=>({...content.items[0],id:`long-${i}`,title:`Long [${i}] end`,translatedTitle:'中'.repeat(35),reason:'reason '.repeat(30).trim()}))};
-  for(const id of CHANNEL_IDS.filter(id=>id!=='email'))assertNotificationParity(long,texts[id](renderChannelNotification(id,long)),{prefix:true});
+  for(const text of Object.values(outputs)){ assertNotificationParity(content,text);assert.ok(!text.includes(papers[3].title));assert.ok(!text.includes(papers[4].title));for(const marker of event==='radar'?['本轮候选','8','本轮推荐','3','分级','1']:['本次新增','3','A','B','C','Existing overview'])assert.ok(text.includes(marker),marker); }assert.deepEqual(content,before);
+  const long={...content,summaryView:{...content.summaryView,overview:'Overview '.repeat(1000)},items:Array.from({length:30},(_,i)=>({...content.items[0],id:`long-${i}`,title:`Long [${i}] end`,translatedTitle:'中'.repeat(35),reason:'reason '.repeat(30).trim()}))};
+  for(const id of CHANNEL_IDS.filter(id=>id!=='email'))assertNotificationParity(long,texts[id](renderChannelNotification(id,long)),{bounded:true});
 });
 for(const profile of ['radar','standard'])for(const enabled of [[],...CHANNEL_IDS.map(id=>[id]),CHANNEL_IDS])test(`${profile} enabled [${enabled}] completes independently; accepted channels never repeat`,async t=>{
   const f=await businessChannelsFixture(t,{profile,enabled});assert.equal(f.initial.businessStatus,'success');assert.equal(f.initial.notificationStatus,'completed');for(const id of CHANNEL_IDS)assert.equal(f.messages[id].length,enabled.includes(id)?1:0);

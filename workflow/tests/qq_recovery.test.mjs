@@ -128,6 +128,7 @@ test('QQ tampered recovery content cannot send or rerun business', async t => {
   const file = op.target.path;
   const receipt = await readNotificationReceipt(file);
   receipt.recoveryData.content.summary.created = 999;
+  receipt.recoveryData.content.summaryView.total = 999;
   await writeNotificationReceipt(file, receipt);
   const result = await f.resume();
   assert.equal(result.status, 'incomplete');

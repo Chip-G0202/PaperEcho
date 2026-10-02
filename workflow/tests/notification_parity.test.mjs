@@ -10,7 +10,7 @@ export const parityPapers = ['C', 'A', 'B', 'D'].map((grade, index) => ({ id: `p
 export function parityContent(kind, papers = parityPapers) {
   return kind === 'radar' ? buildRadarNotificationContent(papers, { runId: 'parity-radar', audit: { generatedAt: '2026-09-30T00:00:00Z', candidateCount: 8 } }) : buildWeeklyNotificationContent({ runId: 'parity-weekly', pipelineMode: 'desktop', startedAt: '2026-09-23T00:00:00Z', finishedAt: '2026-09-30T00:00:00Z', counts: { created: 3, grades: { A: 1, B: 1, C: 1, D: 0 } } }, { literatureItems: papers, overview: 'Shared weekly summary' });
 }
-for (const kind of ['radar', 'weekly']) test(`${kind} Email/QQ use canonical IDs/order/final grade/translations/reasons, no D`, () => {
+for (const kind of ['radar', 'weekly']) test(`${kind} Email/QQ show the same summary and preserve internal paper order`, () => {
   const content = parityContent(kind); const before = structuredClone(content);
   assert.deepEqual(content.items.map(item => item.id), ['paper-0', 'paper-1', 'paper-2']);
   assert.deepEqual(content.items.map(item => item.grade), ['C', 'A', 'B']);
@@ -20,10 +20,10 @@ for (const kind of ['radar', 'weekly']) test(`${kind} Email/QQ use canonical IDs
   for (const message of [email.text, qq.content]) { assert.ok(!message.includes('Canonical English 3')); if (kind === 'weekly') assert.ok(message.includes('Shared weekly summary')); else assert.ok(message.includes('本轮候选：8')); }
   assert.deepEqual(content, before);
 });
-test('QQ item truncation is canonical prefix, not grade priority or cherry picking', () => {
+test('QQ summary does not expand the internal paper list', () => {
   const items = Array.from({ length: 12 }, (_, index) => ({ ...parityPapers[index % 3], id: `bounded-${index}`, title: `Bounded English ${index}`, translatedTitle: `中${index}`.repeat(100), semantic_reason: `Reason ${index}` }));
-  const content = parityContent('radar', items); const ids = assertNotificationParity(content, renderQqNotification(content).content, { prefix: true });
-  assert.ok(ids.length > 0 && ids.length < items.length);
+  const content = parityContent('radar', items); assertNotificationParity(content, renderQqNotification(content).content);
+  assert.equal(content.items.length, 12);
 });
 test('content owns exclusions and supplies deterministic identities with absent provider IDs', () => {
   const items = [{ title: 'Fallback title', final_grade: 'A' }, { title: 'Excluded', final_grade: 'A', excluded: true }];

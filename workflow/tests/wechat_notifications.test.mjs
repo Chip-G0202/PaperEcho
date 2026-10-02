@@ -16,10 +16,10 @@ import { assertNotificationParity } from './helpers/notification_parity.mjs';
 
 const uid = 'UID_' + 'generatedFixture'; const appToken = 'AT_' + 'generatedSecret';
 const papers = ['C','A','B'].map((grade,index) => ({ id: `item-${index}`, title: `Unique English ${index}`, translatedTitle: `中文${index}`, final_grade: grade, semantic_reason: `Reason ${index}`, journal: 'Journal', source_type: 'RSS', year: '2026' }));
-for (const kind of ['radar','weekly']) test(`WeChat ${kind} canonical semantics/prefix, text not Email HTML`, () => {
+for (const kind of ['radar','weekly']) test(`WeChat ${kind} summary semantics in lightweight HTML`, () => {
   const content = kind === 'radar' ? buildRadarNotificationContent(papers, { audit: { candidateCount: 3 } }) : buildWeeklyNotificationContent({ runId: 'weekly', counts: { created: 3 } }, { literatureItems: papers, overview: 'Canonical summary' });
   const payload = renderWechatNotification(content); assertNotificationParity(content, payload.messages.map(item => item.content).join(''));
-  for (const message of payload.messages) { assert.equal(message.contentType, 1); assert.ok(Buffer.byteLength(message.content) <= WECHAT_PART_BYTES); assert.ok(!message.content.includes('<html')); }
+  for (const message of payload.messages) { assert.equal(message.contentType, 2); assert.ok(Buffer.byteLength(message.content) <= WECHAT_PART_BYTES); assert.ok(!message.content.includes('<html')); }
 });
 test('UTF-8 chunks preserve all scalars/graphemes and prefer paragraph boundaries', () => {
   const text = ('中文👩🏽‍🔬e\u0301\n').repeat(2500); const chunks = splitUtf8Paragraphs(text, 8000); assert.ok(chunks.length > 1); assert.equal(chunks.join(''), text);

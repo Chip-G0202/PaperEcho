@@ -28,35 +28,33 @@ test("content projects existing Radar fields and excludes D without regrading", 
 
 test("zero and partial Radar results render without invented metadata", () => {
   const empty = formatRadarReport(buildRadarNotificationContent([]));
-  assert.match(empty.text, /本轮暂无推荐文献/);
+  assert.match(empty.text, /本轮推荐 0 篇/);
   assert.doesNotMatch(empty.text, /本轮候选|undefined|null/);
   const partial = formatRadarReport(buildRadarNotificationContent([{ title: "English only", final_grade: "B" }]));
-  assert.match(partial.text, /\[B\] English only/);
+  assert.match(partial.text, /本轮推荐 1 篇/);
+  assert.doesNotMatch(partial.text, /English only/);
   assert.doesNotMatch(partial.html, /推荐理由|undefined|null/);
 });
 
 test("Radar HTML and text use the same content with title hierarchy, summary and footer", () => {
   const result = formatRadarReport(buildRadarNotificationContent(papers, { runId: "radar-fixture", audit }));
-  for (const text of ["PaperEcho · Daily Radar", "2026-09-30", "今日摘要", "English A", "中文 A", "Journal", "2026", "Existing reason A", "radar-fixture", "由 PaperEcho 自动生成"]) {
+  for (const text of ["PaperEcho · Daily Radar", "2026-09-30", "本轮文献概况", "本轮候选：12", "本轮推荐 3 篇", "分级", "radar-fixture", "由 PaperEcho 自动生成"]) {
     assert.ok(result.html.includes(text), text);
     assert.ok(result.text.includes(text), text);
   }
-  assert.ok(result.html.indexOf("English A") < result.html.indexOf("中文 A"));
-  for (const grade of ["A", "B", "C"]) assert.ok(result.html.includes(`${grade} 级文献`));
-  assert.doesNotMatch(result.html + result.text, /English D|Rule:|LLM:|Confidence:|rule_grade/);
-  assert.match(result.html, /查看原文/);
+  assert.doesNotMatch(result.html + result.text, /English [ABCD]|中文 [ABCD]|Existing reason|级文献|查看原文|Rule:|LLM:|Confidence:|rule_grade/);
   assert.deepEqual(result.attachments, []);
 });
 
 test("all external Radar text is escaped; text preserves literal characters; unsafe URLs omitted", () => {
   const value = `<script>alert('x' & "y")</script>&amp;`;
-  const content = buildRadarNotificationContent([{ title: value, translatedTitle: value, journal: value, year: value, final_grade: "A", semantic_reason: value, doi: value, url: "javascript:alert(1)" }], { runId: value, audit: { generatedAt: value } });
+  const content = buildRadarNotificationContent([{ title: value, translatedTitle: value, journal: value, year: value, final_grade: "A", semantic_reason: value, doi: value, url: "javascript:alert(1)" }], { runId: value, audit: { generatedAt: value, overview: value } });
   const message = formatRadarReport(content);
   assert.doesNotMatch(message.html, /<script>|javascript:/);
   assert.ok(message.html.includes("&lt;script&gt;alert(&#39;x&#39; &amp; &quot;y&quot;)&lt;/script&gt;&amp;amp;"));
   assert.ok(message.text.includes(value));
   const safe = formatRadarReport(buildRadarNotificationContent([{ title: "Link", final_grade: "A", url: 'https://example.test/?q="x"&v=1' }]));
-  assert.match(safe.html, /href="https:\/\/example.test\/\?q=&quot;x&quot;&amp;v=1"/);
+  assert.doesNotMatch(safe.html, /href=|example.test/);
 });
 
 test("Weekly content and renderer preserve counts, grades, overview, integrity and warnings", () => {
@@ -73,16 +71,16 @@ test("Weekly content and renderer preserve counts, grades, overview, integrity a
   assert.ok(result.html.indexOf("分级情况") < result.html.indexOf("本轮文献概况"));
 });
 
-test("Weekly long literature identifiers wrap inside the responsive email layout without losing content", () => {
+test("Weekly long overview wraps inside the responsive email layout; article identifiers remain private", () => {
   const doi = "10.example/" + "longidentifier".repeat(12);
   const item = { title: "Long title & <literal text>", translatedTitle: "中文译名", final_grade: "A", doi, semantic_reason: "Existing reason" };
-  const message = formatStage5Report(summary, { literatureItems: [item] });
+  const overview = "Overview " + "long-summary".repeat(100);
+  const message = formatStage5Report(summary, { literatureItems: [item], overview });
   assert.match(message.html, /name="viewport" content="width=device-width, initial-scale=1"/);
   assert.match(message.html, /table-layout:fixed;overflow-wrap:anywhere;word-break:break-word/);
-  assert.ok(message.html.includes(doi));
-  assert.ok(message.text.includes(doi));
-  assert.match(message.html, /Long title &amp; &lt;literal text&gt;/);
-  assert.match(message.text, /\[A\] Long title & <literal text>/);
+  assert.ok(message.html.includes(overview));
+  assert.ok(message.text.includes(overview));
+  assert.doesNotMatch(message.html + message.text, /10.example|Long title|中文译名|Existing reason/);
   assert.equal(message.subject, formatStage5Report(summary).subject);
 });
 

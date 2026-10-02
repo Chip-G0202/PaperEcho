@@ -1,16 +1,18 @@
 import assert from 'node:assert/strict';
+import { notificationSummary } from '../../tools/stage5/notification_content.mjs';
 
-// Fixtures use distinct short titles: validate meaning/order, not whole messages.
-export function assertNotificationParity(content, text, { prefix = false } = {}) {
-  const included = content.items.filter(item => text.includes(item.title));
-  assert.deepEqual(included.map(item => item.id), content.items.slice(0, included.length).map(item => item.id));
-  if (!prefix) assert.equal(included.length, content.items.length);
-  let position = -1;
-  for (const item of included) {
-    const next = text.indexOf(item.title); assert.ok(next > position); position = next;
-    assert.ok(text.includes(`[${item.grade}]`));
-    for (const value of [item.translatedTitle, item.reason, item.journal, item.year, item.source].filter(Boolean)) assert.ok(text.includes(value), value);
-  }
-  if (prefix && included.length < content.items.length) assert.match(text, new RegExp(`(?:还有|另有) ${content.items.length - included.length} 项`));
-  return included.map(item => item.id);
+export function visibleSummary(text) {
+  return text.replace(/<[^>]*>/g, '\n').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\\([\x60*_{}[\]()+#!|.\-\\])/g, '$1');
+}
+// Summary semantic parity; internal papers must never become outbound rows.
+export function assertNotificationParity(content, text, { bounded = false } = {}) {
+  text = visibleSummary(text);
+  const view = notificationSummary(content);
+  for (const value of [view.brand, view.status, view.date, view.totalLabel].filter(Boolean)) assert.ok(text.includes(value), value);
+  if (view.total !== null) assert.ok(text.includes(String(view.total)), 'total');
+  for (const [grade, count] of Object.entries(view.grades)) if (count !== null) assert.match(text, new RegExp(String.raw`${grade}\s*${count}(?:\D|$)`));
+  if (view.overview) assert.ok(text.includes(bounded ? view.overview.slice(0, 24) : view.overview), 'overview');
+  for (const alert of view.alerts) assert.ok(text.includes(alert), alert);
+  for (const item of content.items) for (const value of [item.title, item.translatedTitle, item.reason, item.identifier].filter(Boolean)) assert.ok(!text.includes(value), 'paper detail: ' + value);
+  assert.doesNotMatch(text, /项未展开|级文献/);
 }
