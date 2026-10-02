@@ -38,7 +38,7 @@ Control Center application boundary：
 | schedule / interval gate | `workflow/tools/lib/schedule_support.mjs` | 无 | 独立 lib 模块 |
 | notification content | `workflow/tools/stage5/notification_content.mjs` | 无 | 从现有 Radar/Weekly 业务结果构建内容，不检索、不重新评级 |
 | email rendering | `stage5/radar_report.mjs`、`stage5/report_summary.mjs`、`stage5/test_notification_report.mjs` | 无 | 共用 `stage5/email_layout.mjs` 的品牌布局与 HTML escaping；HTML/text 使用同一内容模型 |
-| QQ rendering / transport | `notification/qq_renderer.mjs`、`notification/qq_transport.mjs` | 无 | 同一 content 的有界纯文本；官方单聊/群聊主动发送，内存 token，无 inbound；5000 UTF-8 字节为产品预算，provider 硬上限未验证 |
+| QQ rendering / transport | `notification/qq_renderer.mjs`、`notification/qq_transport.mjs` | 无 | 同一 summary-only content 的有界原生 Markdown（msg_type=2、markdown.content，无模板）；官方单聊/群聊主动发送，内存 token，无 inbound；5000 UTF-8 字节为产品预算，provider 硬上限未验证 |
 | business channel fan-out | `notification/channel_delivery.mjs` | Stage5 / Radar 入口 | 共用事件偏好，各渠道独立 receipt/ledger；v5 通知部分失败保持业务成功，不建立平行 QQ 服务 |
 | notification delivery / recovery | `notification/delivery.mjs`、`stage5/email_receipt.mjs`、`recovery/notification_recovery.mjs`（均在 `workflow/tools/`） | 原 Runner `--resume` | SMTP 仍归 `stage5/email_sender.mjs`；已成功业务不重跑，原回执和 ledger 完成恢复 |
 | triage policy | `workflow/tools/stage1/rule_classifier.mjs` | `workflow/tools/stage1/main.mjs` | Stage1-local rule classifier；旧 `workflow_classifier.mjs` / `triage_policy.mjs` 兼容入口已删除 |

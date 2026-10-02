@@ -70,8 +70,8 @@ test('disabled QQ explicit Test is generic, independently deduped and does not e
   assert.equal((await f.services.notifications.test(input)).status, 'success');
   assert.equal((await f.services.notifications.test(input)).status, 'success');
   assert.equal(f.messages.length, 1);
-  assert.match(f.messages[0].content, /PaperEcho · 通知测试/);
-  assert.match(f.messages[0].content, /仅用于验证平台 API 是否接受消息/);
+  assert.match(f.messages[0].markdown.content, /PaperEcho · 通知测试/);
+  assert.match(f.messages[0].markdown.content, /仅用于验证平台 API 是否接受消息/);
   assert.equal(f.messages[0].html, undefined);
   assert.deepEqual(await f.read(), before);
   const { receiptRoot } = await f.services.notifications.configuration();

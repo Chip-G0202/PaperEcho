@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { visibleSummary } from './helpers/notification_parity.mjs';
 import assert from 'node:assert/strict';
 import { buildRadarNotificationContent, buildWeeklyNotificationContent } from '../tools/stage5/notification_content.mjs';
 import { formatRadarReport } from '../tools/stage5/radar_report.mjs';
@@ -12,7 +13,7 @@ function render(content, channel) {
   return channel === 'email' ? (content.eventType === 'radar_completed' ? formatRadarReport(content) : renderWeeklyReport(content)) : renderChannelNotification(channel, content);
 }
 function visible(channel, payload) {
-  return channel === 'email' ? payload.text : channel === 'qq' ? payload.content : channel === 'wechat' ? payload.messages.map(part => part.content).join('') : channel === 'feishu' ? [payload.content.post.zh_cn.title, ...payload.content.post.zh_cn.content.flat().map(node => node.text)].join('\n') : payload.markdown.content.replace(/\\([*_\[\]#!|.\-])/g, '$1');
+  return channel === 'email' ? payload.text : channel === 'qq' ? visibleSummary(payload.markdown.content) : channel === 'wechat' ? payload.messages.map(part => part.content).join('') : channel === 'feishu' ? [payload.content.post.zh_cn.title, ...payload.content.post.zh_cn.content.flat().map(node => node.text)].join('\n') : payload.markdown.content.replace(/\\([*_\[\]#!|.\-])/g, '$1');
 }
 for (const kind of ['radar', 'weekly']) test(`${kind} all five notifications show summary, counts, date and warnings without article details`, () => {
   const content = kind === 'radar' ? buildRadarNotificationContent(papers, { audit: { generatedAt: '2026-10-02T00:00:00Z', candidateCount: 8, overview: 'SUMMARY_CANARY', warnings: ['WARNING_CANARY'] } }) : buildWeeklyNotificationContent({ finishedAt: '2026-10-02T00:00:00Z', counts: { created: 20, grades: { A: 0, B: 3, C: 17, D: 0 } }, warnings: ['WARNING_CANARY'], notificationStatus: 'incomplete' }, { overview: 'SUMMARY_CANARY', literatureItems: papers });
@@ -42,13 +43,13 @@ test('HTML and Markdown escape overview punctuation; native post/text treat it l
   for (const html of [renderWeeklyReport(content).html, renderChannelNotification('wechat', content).messages[0].content]) { assert.doesNotMatch(html, /<script>|<@all>/); assert.match(html, /&lt;script&gt;&amp;/); }
   const markdown = renderChannelNotification('wecom', content).markdown.content;
   assert.match(markdown, /\\\* \\_ \\\[x\\\]/); assert.doesNotMatch(markdown, /<script>|<@all>|\n> quote/);
-  assert.ok(renderChannelNotification('qq', content).content.includes(value));
+  assert.match(renderChannelNotification('qq', content).markdown.content, /&lt;script&gt;&amp;/);
   assert.ok(renderChannelNotification('feishu', content).content.post.zh_cn.content.flat().some(node => node.text.includes(value)));
 });
 test('long Unicode overview keeps warning and stays within every channel budget', () => {
   for (const value of ['👩🏽‍🔬', 'e\u0301', '<>&*_[]']) {
     const content = buildWeeklyNotificationContent({ counts: { created: 20 }, warnings: ['IMPORTANT_WARNING'] }, { overview: value.repeat(10000) });
-    const qq = renderChannelNotification('qq', content); assert.ok(Buffer.byteLength(qq.content) <= 5000); assert.match(qq.content, /IMPORTANT_WARNING/);
+    const qq = renderChannelNotification('qq', content); assert.ok(Buffer.byteLength(qq.markdown.content) <= 5000); assert.match(visibleSummary(qq.markdown.content), /IMPORTANT_WARNING/);
     const wx = renderChannelNotification('wechat', content); for (const part of wx.messages) { assert.equal(part.contentType, 2); assert.ok(Buffer.byteLength(part.content) <= 8000); } assert.match(wx.messages.map(part => part.content).join(''), /IMPORTANT_WARNING/);
     const feishu = renderChannelNotification('feishu', content); assert.ok(Buffer.byteLength(JSON.stringify(feishu)) < 16384);
     const wecom = renderChannelNotification('wecom', content); assert.ok(Buffer.byteLength(wecom.markdown.content) <= 1800); assert.match(visible('wecom', wecom), /IMPORTANT_WARNING/);

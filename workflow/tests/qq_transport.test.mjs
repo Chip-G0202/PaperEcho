@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createQqTransport } from '../tools/notification/qq_transport.mjs';
 
 const config = { appId: 'fixture-app', clientSecret: 'fixture-secret', targetType: 'user', targetId: 'fixture-openid' };
-const payload = { msg_type: 0, content: 'PaperEcho 通知测试 🧪' };
+const payload = { msg_type: 2, markdown: { content: '# PaperEcho 通知测试 🧪' } };
 const tokenResponse = { access_token: 'fixture-token', expires_in: 7200 };
 const messageResponse = { id: 'fixture-message', timestamp: '2026-09-30T12:00:00+08:00' };
 function fake(responses) {
@@ -22,7 +22,14 @@ function assertRedacted(result) {
   for (const sensitive of [config.clientSecret, 'fixture-token', config.targetId, 'provider-sensitive-message']) assert.equal(serialized.includes(sensitive), false);
 }
 
-for (const targetType of ['user', 'group']) test(`QQ ${targetType} uses official active text wire format`, async () => {
+test('QQ retains the exact legacy text provider schema for verified old receipts', async () => {
+  const http = fake([{ body: tokenResponse }, { body: messageResponse }]);
+  const legacy = { msg_type: 0, content: 'PaperEcho 历史摘要' };
+  assert.equal((await createQqTransport(config, http)(legacy)).accepted, true);
+  assert.deepEqual(http.calls[1].body, legacy);
+});
+
+for (const targetType of ['user', 'group']) test(`QQ ${targetType} uses official active Markdown wire format`, async () => {
   const http = fake([{ body: tokenResponse }, { body: messageResponse }]);
   const send = createQqTransport({ ...config, targetType, targetId: 'fixture/id?' }, http);
   const result = await send({ ...payload, to: 'internal-recipient', messageId: 'internal-identity' });
@@ -66,7 +73,7 @@ test('QQ invalid configuration and payload never acquire token', async () => {
     assert.equal((await createQqTransport({ ...config, ...invalid }, options)(payload)).category, 'qq_configuration_invalid');
   }
   const send = createQqTransport(config, options);
-  for (const invalid of [null, {}, { ...payload, msg_type: 2 }, { ...payload, content: '' }, { ...payload, apiUrl: 'https://example.com' }]) {
+  for (const invalid of [null, {}, { ...payload, msg_type: 0 }, { ...payload, markdown: { content: '' } }, { ...payload, content: 'forbidden' }, { ...payload, markdown: { content: 'x', custom_template_id: 'forbidden' } }, { ...payload, keyboard: {} }, { ...payload, apiUrl: 'https://example.com' }]) {
     assert.equal((await send(invalid)).category, 'qq_invalid_payload');
   }
   assert.equal(calls, 0);

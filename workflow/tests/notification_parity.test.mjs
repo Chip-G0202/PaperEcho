@@ -16,13 +16,13 @@ for (const kind of ['radar', 'weekly']) test(`${kind} Email/QQ show the same sum
   assert.deepEqual(content.items.map(item => item.grade), ['C', 'A', 'B']);
   const email = (kind === 'radar' ? formatRadarReport : renderWeeklyReport)(content);
   const qq = renderQqNotification(content);
-  assertNotificationParity(content, email.text); assertNotificationParity(content, qq.content);
-  for (const message of [email.text, qq.content]) { assert.ok(!message.includes('Canonical English 3')); if (kind === 'weekly') assert.ok(message.includes('Shared weekly summary')); else assert.ok(message.includes('本轮候选：8')); }
+  assertNotificationParity(content, email.text); assertNotificationParity(content, qq.markdown.content);
+  for (const message of [email.text, qq.markdown.content]) { assert.ok(!message.includes('Canonical English 3')); if (kind === 'weekly') assert.ok(message.includes('Shared weekly summary')); else assert.ok(message.includes('本轮候选：8')); }
   assert.deepEqual(content, before);
 });
 test('QQ summary does not expand the internal paper list', () => {
   const items = Array.from({ length: 12 }, (_, index) => ({ ...parityPapers[index % 3], id: `bounded-${index}`, title: `Bounded English ${index}`, translatedTitle: `中${index}`.repeat(100), semantic_reason: `Reason ${index}` }));
-  const content = parityContent('radar', items); assertNotificationParity(content, renderQqNotification(content).content);
+  const content = parityContent('radar', items); assertNotificationParity(content, renderQqNotification(content).markdown.content);
   assert.equal(content.items.length, 12);
 });
 test('content owns exclusions and supplies deterministic identities with absent provider IDs', () => {

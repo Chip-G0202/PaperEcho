@@ -11,6 +11,7 @@ import { completeLedgerNotification } from '../tools/notification/ledger_bridge.
 import { notificationIdentity, recipientHash, receiptPathFor, readNotificationReceipt, writeNotificationReceipt } from '../tools/stage5/email_receipt.mjs';
 import { recordRadarNotificationOutcome, selectRadarNotificationCandidates } from '../tools/radar/state.mjs';
 import { canonicalQueryHash } from '../tools/stage1/source_state.mjs';
+import { renderLegacyQqNotification } from '../tools/notification/qq_renderer.mjs';
 
 const base = fileURLToPath(new URL('../../tests/runs/qq-recovery/', import.meta.url));
 const configHash = 'a'.repeat(64);
@@ -135,4 +136,19 @@ test('QQ tampered recovery content cannot send or rerun business', async t => {
   assert.equal(result.channels.find(item => item.channel === 'qq').reason, 'notification_payload_changed');
   assert.equal(f.messages.email.length, 1);
   assert.equal(f.messages.qq.length, 1);
+});
+
+test('historical text receipt resumes its exact summary once without changing identity', async t => {
+  const f = await fixture(t, 'standard', 'accepted', 'failed');
+  const op = f.coordinator.store.ledger.operations.find(item => item.intent.channel === 'qq');
+  const receipt = await readNotificationReceipt(op.target.path);
+  const payload = renderLegacyQqNotification(receipt.recoveryData.content);
+  Object.assign(receipt, notificationIdentity({ notificationType: receipt.notificationType, businessSubject: receipt.businessSubject, eventEpoch: receipt.eventEpoch, payload, channel: 'qq' }));
+  await writeNotificationReceipt(op.target.path, receipt);
+  assert.equal((await f.resume()).status, 'completed');
+  assert.equal(f.messages.qq[1].msg_type, 0);
+  assert.equal(f.messages.qq[1].content, payload.content);
+  assert.equal((await readNotificationReceipt(op.target.path)).receiptId, receipt.receiptId);
+  await f.resume();
+  assert.equal(f.messages.qq.length, 2);
 });

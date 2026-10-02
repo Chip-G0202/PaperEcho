@@ -9,6 +9,7 @@ import { completeLedgerNotification } from "../notification/ledger_bridge.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
 import { channelDeliveryPolicy } from '../notification/policy.mjs';
 import { CHANNEL_IDS, channelConfiguration, channelRecipient, createChannelTransport, renderChannelNotification } from '../notification/channels.mjs';
+import { renderLegacyQqNotification } from '../notification/qq_renderer.mjs';
 
 // Called only after the formal resume owner validates the run, lease and artifact.
 export async function resumeCompletedBusinessNotification(options = {}) {
@@ -74,8 +75,12 @@ async function resumeOneNotification({ store, recipient = "", transport, qqTrans
     let payload;
     try {
       payload = channel !== 'email' ? renderChannelNotification(channel, data.content) : { ...(eventType === "radar_completed" ? formatRadarReport(data.content) : renderWeeklyReport(data.content)), attachments: data.attachments };
-      const identity = notificationIdentity({ notificationType: receipt.notificationType, businessSubject: receipt.businessSubject, eventEpoch: receipt.eventEpoch, payload, channel });
-      if (["payloadHash", "dedupeKey", "receiptId", "messageId"].some((key) => identity[key] !== receipt[key])) return blocked("notification_payload_changed");
+      const matchesReceipt = candidate => {
+        const identity = notificationIdentity({ notificationType: receipt.notificationType, businessSubject: receipt.businessSubject, eventEpoch: receipt.eventEpoch, payload: candidate, channel });
+        return ["payloadHash", "dedupeKey", "receiptId", "messageId"].every(key => identity[key] === receipt[key]);
+      };
+      if (!matchesReceipt(payload) && channel === 'qq') payload = renderLegacyQqNotification(data.content);
+      if (!matchesReceipt(payload)) return blocked("notification_payload_changed");
       if (data.attachments.length !== data.attachmentHashes.length) return blocked("notification_attachment_changed");
       for (const [index, item] of data.attachments.entries()) {
         const actualHash = createHash("sha256").update(await fsApi.readFile(item.path)).digest("hex");

@@ -69,12 +69,17 @@ export function createQqTransport({ appId, clientSecret, targetType, targetId },
   return async (payload) => {
     if (typeof appId !== 'string' || !appId.trim() || typeof clientSecret !== 'string' || !clientSecret
       || !['user', 'group'].includes(targetType) || typeof targetId !== 'string' || !targetId.trim() || /[\u0000-\u001f]/.test(targetId)) return outcome(false, 'qq_configuration_invalid');
-    if (!payload || payload.msg_type !== 0 || typeof payload.content !== 'string' || !payload.content.trim() || /\p{Surrogate}/u.test(payload.content) || Buffer.byteLength(payload.content, 'utf8') > QQ_TEXT_BUDGET_BYTES
-      || Object.keys(payload).some((key) => !['msg_type', 'content', 'to', 'messageId'].includes(key))) return outcome(false, 'qq_invalid_payload');
+    const markdown = payload?.msg_type === 2;
+    const content = markdown ? payload.markdown?.content : payload?.content;
+    const allowed = markdown ? ['msg_type', 'markdown', 'to', 'messageId'] : ['msg_type', 'content', 'to', 'messageId'];
+    if (!payload || ![0, 2].includes(payload.msg_type) || typeof content !== 'string' || !content.trim() || /\p{Surrogate}/u.test(content) || Buffer.byteLength(content, 'utf8') > QQ_TEXT_BUDGET_BYTES
+      || Object.keys(payload).some((key) => !allowed.includes(key))
+      || markdown && (!payload.markdown || Array.isArray(payload.markdown) || Object.keys(payload.markdown).some(key => key !== 'content'))) return outcome(false, 'qq_invalid_payload');
     const accessToken = await access();
     if (typeof accessToken !== 'string') return accessToken;
     // Outbound-only active message: no msg_id/event_id or interaction recall.
-    const { status, data } = await request(`/v2/${targetType === 'user' ? 'users' : 'groups'}/${encodeURIComponent(targetId)}/messages`, { msg_type: 0, content: payload.content }, accessToken);
+    const body = markdown ? { msg_type: 2, markdown: { content } } : { msg_type: 0, content };
+    const { status, data } = await request(`/v2/${targetType === 'user' ? 'users' : 'groups'}/${encodeURIComponent(targetId)}/messages`, body, accessToken);
     const code = errorCode(data);
     if (Number.isFinite(code) && code !== 0 || [401, 403, 429].includes(status)) {
       const error = category(code, status);
