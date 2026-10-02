@@ -29,8 +29,8 @@ test('grade owner transition contract survives pending persistence and writeback
     ['A','A','A',false], ['B','B','B',false], ['C','C','C',false], ['D','D','D',false],
     ['A','B','B',false], ['B','A','A',false], ['B','C','C',false], ['C','B','B',false], ['D','C','C',false],
     ['C','D','C',true], ['A','C','A',true], ['C','A','C',true], ['B','D','B',true], ['D','B','D',true], ['A','D','A',true], ['D','A','D',true],
-    ['B','','B',false], ['B','','B',true,{failed:true}],
-    ['B','B','B',true,{requested:true}], ['B','A','B',true,{confidence:'low'}], ['D','D','D',false,{requested:true}],
+    ['B','','B',true], ['B','','B',false,{failed:true}],
+    ['B','B','B',true,{requested:true}], ['B','A','B',true,{confidence:'low'}], ['D','D','D',true,{requested:true}],
   ];
   for (const [index, [rule, semantic, final, manual, options]] of transitions.entries()) {
     const item = reviewed(rule, semantic, index, options);
@@ -41,13 +41,13 @@ test('grade owner transition contract survives pending persistence and writeback
     assert.equal(item.needs_human_review, manual);
     assert.equal(isActiveManualReview(item), manual);
     assert.equal(getWeeklyReviewEvidence(item).needsReview, manual);
-    assert.equal(isWritebackEligibleItem(item), final !== 'D' && !manual);
+    assert.equal(isWritebackEligibleItem(item), final !== 'D' && !manual && !options?.failed);
   }
   const retry = reviewed('B', 'A', 'retry');
   applyReviewToItems([{id:'retry',rule_grade:'B',_item:retry}], [], {failedReviewItemIds:new Set(['retry'])});
   assert.equal(retry.grade, 'B');
   assert.equal(retry.final_grade, 'B');
-  assert.equal(isManualReviewEligible(retry), true);
+  assert.equal(isManualReviewEligible(retry), false);
 });
 
 test('explicit upstream review overrides automatic adoption; legacy evidence alone does not', async (t) => {
@@ -83,6 +83,6 @@ test('old queue-inferred holds recover upstream policy without deleting historic
   assert.equal(isActiveManualReview(risky),true);
   delete risky.llm_review; // Older artifacts can retain the grade owner's reason instead.
   assert.equal(isActiveManualReview(risky),true);
-  const pendingOnly = { ...reviewed('B','',2), semantic_source:'', needs_human_review:true, manual_review_state:'pending', review_consensus_required:true };
+  const pendingOnly = { ...reviewed('B','',2), semantic_source:'', semantic_stage_status:undefined, needs_human_review:true, manual_review_state:'pending', review_consensus_required:true };
   assert.equal(isManualReviewEligible(pendingOnly),false);
 });

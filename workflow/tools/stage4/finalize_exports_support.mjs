@@ -1,10 +1,22 @@
 import { resolveCachedTranslation } from "../lib/title_translation_support.mjs";
+import { classifyLiterature } from '../stage1/semantic_grade_synthesis.mjs';
 import {
   buildStage1WritebackCorrelationKey,
   buildWritebackReadyItems,
   filterDesktopReviewSourceByWritebackSummary,
   resolveVerifiedWritebackItems,
 } from "../lib/pipeline_stage_support.mjs";
+
+// Input is the existing final source (or the existing prospective eligibility
+// builder's output), never all Stage1 holds or historical pending records.
+export function buildFinalReviewMembership(items = [], context = {}) {
+  const membership = { feedback: [], manual: [], excluded: [], blocked: [] };
+  for (const item of items) {
+    const decision = classifyLiterature(item, context);
+    membership[decision.reviewBucket || 'blocked'].push(item);
+  }
+  return membership;
+}
 
 // Stage1 safety holds are not user tasks. Before an export exists, derive only
 // the prospective final source through the pipeline's existing pure owners.

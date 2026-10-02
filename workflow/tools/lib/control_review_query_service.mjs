@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { buildStage4StandaloneExportSource, buildProspectiveStage4ExportSource, buildFinalExportPayload } from '../stage4/finalize_exports_support.mjs';
+import { buildStage4StandaloneExportSource, buildProspectiveStage4ExportSource, buildFinalExportPayload, buildFinalReviewMembership } from '../stage4/finalize_exports_support.mjs';
 import { buildRunSummary } from './run_summary.mjs';
 import { feedbackIdentity } from './control_feedback_service.mjs';
 import { loadSourceSelectionConfig } from './literature_config.mjs';
@@ -80,7 +80,7 @@ export class ReviewQueryService {
       const writeback = await this.read(path.join(pipeline, 'zotero_writeback_summary.json'));
       const filtered = buildStage4StandaloneExportSource({ desktopSource: source, writebackSummary: writeback });
       if (!['ok', 'no_new_writeback_items'].includes(filtered.filter.status)) continue;
-      return { run, report, writeback, items: filtered.allAbcItems };
+      return { run, report, writeback, items: buildFinalExportPayload({ allAbcItems: filtered.allAbcItems, writebackSummary: writeback }).triaged };
     }
     return null;
   }
@@ -133,7 +133,9 @@ export class ReviewQueryService {
     const active = scopeItems.filter((item) => isActiveManualReview(item, current));
     const admittedKeys = new Set((weekly?.items || []).flatMap(identityKeys));
     const admittedReviews = new Set();
-    const weeklyItems = (weekly?.items || []).map((item) => {
+    const weeklyMembership = buildFinalReviewMembership(weekly?.items || []);
+    const admittedMembership = new Set([...weeklyMembership.feedback, ...weeklyMembership.manual]);
+    const weeklyItems = (weekly?.items || []).filter(item => admittedMembership.has(item)).map((item) => {
       const keys = identityKeys(item);
       const matches = active.filter((entry) => identityKeys(entry).some((key) => keys.includes(key)));
       if (matches.length > 1) throw new Error('FEEDBACK_IDENTITY_AMBIGUOUS');
@@ -160,7 +162,7 @@ export class ReviewQueryService {
       const currentEntry = current.find((entry) => entry.keys.some((key) => keys.includes(key)));
       const pendingReview = item._heldReview === true;
       return {
-        id, feedbackAllowed: keys.length > 0, title: String(item.title || ''),
+        id, feedbackAllowed: keys.length > 0 && ['feedback', 'manual'].includes(evidence.reviewBucket), title: String(item.title || ''),
         translatedTitle: String(item.translatedTitle || item.translated_title || item.title_translation || item['标题翻译'] || item['中文标题'] || item.shortTitle || ''),
         authors: (Array.isArray(item.authors) ? item.authors : [item.authors || '']).map((author) => typeof author === 'string' ? author : [author?.firstName, author?.lastName].filter(Boolean).join(' ')), journal: String(item.journal || item.publicationTitle || ''), year: String(item.year || ''),
         doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), source: String(item.source || item.source_type || ''),
@@ -195,9 +197,8 @@ export class ReviewQueryService {
       total = page.total; items.push(...page.items); offset += page.items.length;
       if (!page.items.length) break;
     } while (offset < total);
-    const visible = items.filter((item) => ['A', 'B', 'C'].includes(item.finalGrade ?? item.grade) || item.pendingReview);
     return {
-      normal: visible.filter((item) => !item.pendingReview && !item.needsReview && item.feedbackAllowed && !item.feedback).length,
+      normal: items.filter((item) => item.reviewBucket === 'feedback' && !item.pendingReview && item.feedbackAllowed && !item.feedback).length,
       manual: items.filter((item) => item.manualReviewPending && item.feedbackAllowed && !item.manualGrade).length,
       rules: (await this.rules.list()).filter(isActiveRuleSuggestion).length,
     };

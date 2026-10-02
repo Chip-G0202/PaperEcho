@@ -42,7 +42,7 @@ Local：
 
 - `desktop_daily_review_source.json` contains only items actually admitted by Stage2 from `zotero_writeback_summary.writeback_items`.
 - Stage1 ABC is the candidate pool, not the final workbook source.
-- `周报.xlsx` contains mutually exclusive `每日反馈` and `需人工复核` sheets; detailed criteria live in `workflow/tools/stage4/spreadsheet_adapter.mjs` and its tests.
+- `周报.xlsx` and the Control Center share `stage1/semantic_grade_synthesis.mjs#classifyLiterature` and `stage4/finalize_exports_support.mjs#buildFinalReviewMembership` within the existing final eligibility boundary. `每日反馈` and `需人工复核` are mutually exclusive projections; display fields never decide membership.
 - If Stage2/readiness fails, Stage4 does not run and no final workbook success may be claimed.
 
 ## Status and result validation

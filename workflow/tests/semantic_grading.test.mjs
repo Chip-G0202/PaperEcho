@@ -195,7 +195,7 @@ describe("synthesizeFinalGrade with standards-based semantic_grade", () => {
     assert.equal(r.needsHumanReview, false);
   });
 
-  it("empty semanticGrade falls back to ruleGrade", () => {
+  it("isolated empty semanticGrade keeps ruleGrade as evidence and requires manual review", () => {
     const r = synthesizeFinalGrade({
       ruleGrade: "B",
       semanticGrade: "",
@@ -203,6 +203,6 @@ describe("synthesizeFinalGrade with standards-based semantic_grade", () => {
       flags: {},
     });
     assert.equal(r.finalGrade, "B");
-    assert.equal(r.needsHumanReview, false);
+    assert.equal(r.needsHumanReview, true);
   });
 });

@@ -58,13 +58,15 @@ UI 定向验证：`node --test workflow/tests/control_ui.test.mjs workflow/tests
 
 ### 连续等级审阅
 
-反馈回答“最终等级是否正确”，不会改写本次 rule / semantic / final grade、Weekly 结果或即时修改 Zotero。文献队列分类及等级字段兼容规则归 Stage4 `spreadsheet_adapter.mjs#getWeeklyReviewEvidence`，查询服务复用该 owner，Web 不根据等级差另推人工复核资格。现有 `needs_human_review` 及 legacy aliases 保持兼容；普通队列与人工复核队列互斥，保留输入结果顺序，默认定位尚未反馈且具可靠标识的文献。
+反馈回答“最终等级是否正确”，不会改写本次 rule / semantic / final grade、Weekly 结果或即时修改 Zotero。分类 policy 归 Stage1 `semantic_grade_synthesis.mjs#classifyLiterature`；Stage4 的既有最终 eligibility boundary 决定可见范围，`finalize_exports_support.mjs#buildFinalReviewMembership` 在该范围内划分 Feedback / Manual / Excluded，workbook 和查询服务共同消费。`getWeeklyReviewEvidence` 只投影等级证据和分类结果，Web 不复制 truth table；展示标签不能决定 membership。队列互斥并保留输入顺序，actionable 是 base 减去 canonical 已决定项，history 和当前 session 回看保留。
 
 一次仅突出一篇，卡片与文献页共享同一左对齐内容列，统一显示英文标题、中文标题、期刊/年份/来源、规则评级、语义评级、最终评级和已有推荐理由；三个系统评级始终是不可覆盖的证据。普通 Feedback 保持相对纠正：A 级仅禁用升级，B/C 级四个动作均可用，C 级降级与排除分别保留为 `downgrade` / `drop`，D 不进入普通队列。人工复核改为直接选择 A/B/C/D；canonical revision 额外保存 `manual_grade` 与 `original_final_grade`，并派生旧 feedback 动作用于现有学习/条目动作兼容。点击即保存，成功后前进，失败停留并允许重试；回看改评继续追加 revision，不改写原 rule / semantic / final grade。
 
 文献工作区：1 升级、2 不变、3 降级、4 排除；人工复核：1 A、2 B、3 C、4 D；规则工作区：1 接受、2 拒绝、3 进入修订；↑ / ↓ 回看或继续。每种任务在页面内提供独立的键盘帮助，快捷键仅绑定当前审阅工作区，在 input、textarea、select、contenteditable、dialog 或编辑状态内禁用；不拦截系统组合键，保存期间拒绝重复动作。鼠标和触屏可使用卡片下方等宽的上一篇／下一篇按钮。
 
-完整 Weekly 的新候选同时取得规则评级与标题语义评级后，双方均为 D 的文献直接排除、留在机器审计中，不进入人工复核或 Zotero。两级不一致，或语义评级缺失时，先写入 `review_results/文献评价/pending_paper_review.json` 待审队列，不写回 Zotero；跨次运行按 DOI、PMID 等标识和受约束的规范化标题复用同一记录。工作台“人工复核”可直接确认 A/B/C/D：确认 D 保持排除，确认 A/B/C 后，下一次完整工作流读取 canonical feedback，重新执行正式去重和写回门槛，再按确认等级处理。工作台保存人工评级时不会直接连接或修改 Zotero；待审队列也不混入已写回 Weekly 列表。旧 XLSX/DOCX 继续作为兼容入口。
+完整 Weekly 中，D 是排除边界，A/B/C 表示相关程度。相同 ABC 自动确认、相邻 ABC 采用语义等级、D→C 自动 soft rescue；D→B/A、ABC→D、A↔C 需要人工。double D 确认排除，但显式 manual request 优先，已有 canonical manual decision 则优先 replay。正式低置信冲突需要人工，不能扩展成所有低置信条目。正常完成的 semantic stage 中单篇缺失分类为 semantic_unavailable；批次/stage 失败保持 workflow blocker、等待重试并阻止写回，不产生大批人工任务。没有足够 stage 证据的缺失结果 fail closed，不猜测分类。
+
+`pending_paper_review.json` 只负责 durable identity、历史 hold、重复 sightings 和人工结果 replay，不拥有 grading policy。Stage1 人工证据或 safety hold 不直接成为用户任务；只有进入 Stage4 既有最终集合的 Manual 才能出现在 workbook / 工作台。没有已完成 Weekly 时也只通过同一 Stage4 pure eligibility builder 推导 prospective 集合。人工选择 A/B/C/D 继续追加 canonical revision；后续 workflow 重跑正式去重和写回门槛，确认 D 保持排除。工作台保存人工评级不会即时连接或修改 Zotero。旧 XLSX/DOCX 保留兼容入口。
 
 | 按钮 / 兼容 API 值 | 原 workflow 值 | 意义 |
 |---|---|---|

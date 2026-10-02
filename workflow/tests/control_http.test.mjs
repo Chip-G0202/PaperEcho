@@ -22,7 +22,7 @@ async function setup(t, count = 0) {
   await write(path.join(root, 'config', 'rss_sources.json'), { sources: [] });
   await write(path.join(reviewRoot, 'screening_standards.md'), '# 标准\n\n## 优先关注\n\n* 基线\n\n## 相对降权\n');
   await write(path.join(reviewRoot, 'runs', 'weekly-1', 'run_group.json'), { schemaVersion: 1, runId: 'weekly-1', pipelineMode: 'desktop', startedAt: '2026-09-12T05:00:00Z', status: 'completed', artifacts: [{ kind: 'pipeline', rootKey: 'research', path: 'pipeline/fixture' }, { kind: 'weekly_export', rootKey: 'review', path: 'week/day' }] });
-  const items = Array.from({ length: count }, (_, i) => ({ title: `${i}: 中文 <img src=x onerror=alert(1)> ${'长标题'.repeat(i === 0 ? 1000 : 1)}`, doi: i % 2 ? '' : `10.1234/item-${i}`, pmid: String(12345 + i), grade: 'B', source_channel: 'RSS', authors: ['作者 <script>'], journal: '期刊', needs_human_review: i === 0 }));
+  const items = Array.from({ length: count }, (_, i) => ({ title: `${i}: 中文 <img src=x onerror=alert(1)> ${'长标题'.repeat(i === 0 ? 1000 : 1)}`, doi: i % 2 ? '' : `10.1234/item-${i}`, pmid: String(12345 + i), grade: 'B', rule_grade:'B', semantic_grade:'B', source_channel: 'RSS', authors: ['作者 <script>'], journal: '期刊', needs_human_review: i === 0 }));
   await write(path.join(pipeline, 'run_report.json'), { steps: { med_weekly_synthesis: { completed: true } } });
   await write(path.join(pipeline, 'desktop_daily_review_source.json'), { triaged: items });
   await write(path.join(pipeline, 'zotero_writeback_summary.json'), { writeback_items: items.map((item, i) => ({ ...item, itemKey: `KEY${i}` })) });

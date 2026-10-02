@@ -127,7 +127,7 @@ test("no urgent item keeps business Radar mail silent", async () => {
   assert.equal(calls, 0);
 });
 
-test("all urgent items are sent in one aggregate mail without attachments", async () => {
+test("all urgent items are sent in one summary-only aggregate mail without attachments", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "radar-mail-"));
   let calls = 0;
   let message;
@@ -141,8 +141,10 @@ test("all urgent items are sent in one aggregate mail without attachments", asyn
   assert.equal(result.status, "accepted");
   assert.equal(calls, 1);
   assert.equal(message.attachments.length, 0);
-  assert.match(message.text, /Urgent/);
-  assert.match(message.text, /Second/);
+  assert.match(message.text, /本轮推荐 2 篇/);
+  assert.match(message.text, /分级：A 2 \/ B 0 \/ C 0 \/ D 0/);
+  assert.doesNotMatch(message.text, /Urgent|Second|10\.1000\/(?:notify|second)/);
+  assert.doesNotMatch(message.html, /Urgent|Second|10\.1000\/(?:notify|second)/);
 });
 
 test("SMTP failed or unknown outcome never removes the urgent queue", async () => {

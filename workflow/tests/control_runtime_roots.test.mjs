@@ -22,7 +22,7 @@ async function seed(context, title) {
   const local = context.localRepository;
   const runRoot = context.runRoot || path.join(context.reviewRoot, 'runs');
   const runId = 'current';
-  const paper = { title, doi: '10.1234/current', grade: 'B' };
+  const paper = { title, doi: '10.1234/current', grade: 'B', rule_grade:'B', semantic_grade:'B' };
   await write(path.join(runRoot, runId, 'run_group.json'), { schemaVersion: 1, runId, pipelineMode: local ? 'local' : 'desktop', status: 'completed', startedAt: '2026-09-13T05:00:00Z', artifacts: [{ kind: 'weekly_export' }, { kind: 'pipeline', rootKey: local ? 'local' : 'research', path: local ? 'review_results/pipeline/current' : 'pipeline/current' }] });
   const pipeline = path.join(context.researchRoot, 'pipeline', 'current');
   await write(path.join(pipeline, 'run_report.json'), { steps: { med_weekly_synthesis: { completed: true } } });

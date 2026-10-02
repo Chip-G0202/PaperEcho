@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { FeedbackService, feedbackIdentity } from '../tools/lib/control_feedback_service.mjs';
 import { ReviewQueryService } from '../tools/lib/control_review_query_service.mjs';
 import { finalizePendingPaperReview, pendingPaperReviewPath, readPendingPaperReview } from '../tools/lib/pending_paper_review.mjs';
-import { buildStage4StandaloneExportSource, buildFinalExportPayload, buildProspectiveStage4ExportSource } from '../tools/stage4/finalize_exports_support.mjs';
+import { buildStage4StandaloneExportSource, buildFinalExportPayload, buildProspectiveStage4ExportSource, buildFinalReviewMembership } from '../tools/stage4/finalize_exports_support.mjs';
 import { getWeeklyReviewEvidence, exportAllResearchOsXlsxWithNodeFallback } from '../tools/stage4/spreadsheet_adapter.mjs';
 import { readXlsxSheets } from '../tools/lib/review_workbook_reader.mjs';
 
@@ -90,7 +90,7 @@ test('newer Weekly evidence outranks older held artifacts; Radar does not produc
 
 test('a historical auto D record can be re-seen with current pending evidence', async (t) => {
   const app = await fixture(t);
-  const old = { ...paper(0), grade: 'D', rule_grade: 'D', llm_review_grade: 'D' };
+  const old = { ...paper(0), grade: 'D', rule_grade: 'D', llm_review_grade: 'D', needs_human_review:false };
   await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items: [old] });
   assert.equal((await readPendingPaperReview(app.reviewRoot)).records[0].status, 'auto_d');
   await app.run('re-seen', '2026-10-01T05:00:00Z', [{ ...paper(0), manual_review_state: 'pending' }]);
@@ -193,4 +193,51 @@ test('completed Stage4 source stays authoritative without Weekly manifest and mi
   await app.write(path.join(pipeline, 'zotero_writeback_summary.json'), { writeback_items: [] });
   assert.equal((await app.query.pendingSummary()).manual, 0);
   assert.equal((await app.query.weekly()).total, 0);
+});
+
+test('historical 7/20 projection mismatch shares identities, preserves rescue and canonical history after reload', async (t) => {
+  const app=await fixture(t);
+  const normal=Array.from({length:20},(_,i)=>({...paper(300+i),rule_grade:i<13?'D':'C',llm_review_grade:'C',grade:'C',final_grade:'C',needs_human_review:false,'推荐等级':i<13?'D无关':'C领域相关'}));
+  const manual={...paper(400),final_grade:'C'};
+  const excluded={...paper(401),rule_grade:'D',llm_review_grade:'D',grade:'D',final_grade:'D',needs_human_review:false};
+  const holds=['A','B'].map((g,i)=>({...paper(500+i),rule_grade:'D',llm_review_grade:g,grade:'D',final_grade:'D',pre_llm_skip_writeback:true}));
+  await finalizePendingPaperReview({reviewRoot:app.reviewRoot,items:holds});
+  const pendingBefore=await fs.readFile(pendingPaperReviewPath(app.reviewRoot),'utf8');
+  const source=[...normal,manual,excluded];
+  assert.equal(normal.filter(i=>i['推荐等级']!=='D无关').length,7); // Legacy XLSX veto.
+  assert.equal(normal.filter(i=>['A','B','C'].includes(i.final_grade)).length,20); // Legacy UI.
+  const run=await app.run('parity','2026-10-01T05:00:00Z',[...source,...holds],{weekly:true,report:{steps:{med_weekly_synthesis:{completed:true}}}});
+  const pipeline=app.query.pipeline(run);
+  const writeback={writeback_items:source.map((i,n)=>({...i,itemKey:`PARITY${n}`}))};
+  await app.write(path.join(pipeline,'desktop_daily_review_source.json'),{triaged:source});
+  await app.write(path.join(pipeline,'zotero_writeback_summary.json'),writeback);
+  const filtered=buildStage4StandaloneExportSource({desktopSource:{triaged:source},writebackSummary:writeback});
+  const payload=buildFinalExportPayload({allAbcItems:filtered.allAbcItems,writebackSummary:writeback});
+  const membership=buildFinalReviewMembership(payload.triaged);
+  const identitySet=items=>items.map(i=>feedbackIdentity(i).sort().join('|')).sort();
+  const before=await app.query.weekly();
+  assert.deepEqual(identitySet(before.items.filter(i=>i.reviewBucket==='feedback')),identitySet(membership.feedback));
+  assert.deepEqual(identitySet(before.items.filter(i=>i.reviewBucket==='manual')),identitySet(membership.manual));
+  assert.deepEqual(identitySet(membership.feedback),identitySet(normal));
+  assert.deepEqual(identitySet(membership.manual),identitySet([manual]));
+  assert.ok(before.items.every(i=>!holds.some(h=>h.doi===i.doi)&&i.doi!==excluded.doi));
+  const sourcePath=path.join(pipeline,'workbook_source.json');
+  await app.write(sourcePath,payload);
+  const exported=await exportAllResearchOsXlsxWithNodeFallback({sourcePath,reviewRootDir:app.reviewRoot,reviewWeekDir:app.reviewRoot,reviewDayDir:app.reviewRoot,dateStr:'2026-10-01',weekLabel:'26.10',dayLabel:'10.01'});
+  const sheets=readXlsxSheets(exported.outputs.every_other_day_report);
+  for(const[sheet,bucket]of [['每日反馈','feedback'],['需人工复核','manual']]) {
+    const projected=sheets.get(sheet).slice(1).filter(row=>row.some(Boolean)).map(row=>source.find(i=>i.title===row[0]));
+    assert.ok(projected.every(Boolean));
+    assert.deepEqual(identitySet(projected),identitySet(membership[bucket]));
+  }
+  for(const entry of before.items.filter(i=>i.reviewBucket==='feedback').slice(0,2)) {
+    await app.feedback.submit({kind:'paper_feedback',paper:await app.query.resolvePaper(before.runId,entry.id),value:'relevant',requestId:entry.id});
+    assert.equal((await app.query.resolvePaper(before.runId,entry.id)).doi,entry.doi); // Session revision.
+  }
+  const state=await app.feedback.current();
+  assert.equal(state.length,2);
+  assert.equal((await app.query.pendingSummary()).normal,membership.feedback.length-2);
+  assert.equal((await app.query.weekly()).items.filter(i=>i.reviewBucket==='feedback'&&!i.feedback).length,membership.feedback.length-2);
+  assert.equal((await app.query.pendingSummary()).manual,1);
+  assert.equal(await fs.readFile(pendingPaperReviewPath(app.reviewRoot),'utf8'),pendingBefore);
 });

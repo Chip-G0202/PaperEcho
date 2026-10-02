@@ -55,7 +55,8 @@ describe("spreadsheet_adapter llm_review_grade compatibility", () => {
     ]);
 
     assert.deepEqual(exported.headers, ["英文标题", "标题翻译", "规则等级", "语义等级", "最终等级", "期刊/来源", "反馈", "评价"]);
-    assert.deepEqual(exported.dailyRows.map((row) => row[3]), ["B", "A", "B", "A"]);
+    assert.deepEqual(exported.dailyRows.map((row) => row[3]), ["B", "B"]);
+    assert.deepEqual(exported.reviewRows.map((row) => row[5]), ["A", "A"]); // C→A is a large grade gap.
   });
 
   it("keeps explicit review separate from legacy disagreement evidence", async () => {
@@ -76,7 +77,7 @@ describe("spreadsheet_adapter llm_review_grade compatibility", () => {
   });
 
   it("writes the canonical translatedTitle to the XLSX translation column", async () => {
-    const exported = await exportRows([{ title: "English source title", translatedTitle: "中文标题", rule_grade: "A", final_grade: "A" }]);
+    const exported = await exportRows([{ title: "English source title", translatedTitle: "中文标题", rule_grade: "A", semantic_grade:"A", final_grade: "A" }]);
     assert.equal(exported.dailyRows[0][0], "English source title");
     assert.equal(exported.dailyRows[0][1], "中文标题");
     assert.notEqual(exported.dailyRows[0][0], exported.dailyRows[0][1]);

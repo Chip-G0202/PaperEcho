@@ -24,7 +24,7 @@ const paper = (doi, rule, semantic, title = `Clinical mechanism study of ${doi}`
     final_grade: decision.finalGrade, needs_human_review: decision.needsHumanReview };
 };
 
-test('pending storage holds upstream review decisions, not every disagreement or missing semantic', async (t) => {
+test('pending storage holds classification decisions including isolated missing, not adjacent adjustments', async (t) => {
   const root = await fixture(t);
   const items = [
     paper('10.1234/dd', 'D', 'D'), paper('10.1234/dc', 'D', 'C'),
@@ -32,16 +32,17 @@ test('pending storage holds upstream review decisions, not every disagreement or
     paper('10.1234/no-semantic', 'B', ''), paper('10.1234/bb', 'B', 'B'),
   ];
   const result = await finalizePendingPaperReview({ reviewRoot: root, items });
-  assert.deepEqual([result.pending, result.autoD], [1, 1]);
+  assert.deepEqual([result.pending, result.autoD], [2, 1]);
   assert.equal(items[0].needs_human_review, false);
   assert.equal(isWritebackEligibleItem(items[0]), false);
   assert.equal(items[2].needs_human_review, true);
   assert.equal(isWritebackEligibleItem(items[2]), false);
-  for (const item of [items[1], items[3], items[4]]) assert.equal(isWritebackEligibleItem(item), true);
+  for (const item of [items[1], items[3]]) assert.equal(isWritebackEligibleItem(item), true);
+  assert.equal(isWritebackEligibleItem(items[4]),false);
   assert.equal(isWritebackEligibleItem(items[5]), true);
   const current = await new FeedbackService({ reviewRoot: root }).current();
-  assert.equal((await listPendingPaperReview({ reviewRoot: root, current })).length, 1);
-  assert.equal((await readPendingPaperReview(root)).records.length, 2);
+  assert.equal((await listPendingPaperReview({ reviewRoot: root, current })).length, 2);
+  assert.equal((await readPendingPaperReview(root)).records.length, 3);
 });
 
 test('pending review survives a later run, and manual A/B/C is replayed before writeback', async (t) => {

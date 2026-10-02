@@ -4,7 +4,7 @@ import path from "node:path";
 import { callJsonLlm, hashText, resolveLlmRuntime } from "../lib/llm_json_support.mjs";
 import { createServiceConcurrencyController } from "../lib/adaptive_concurrency.mjs";
 import { normalizeGradeLetter } from "../lib/grade_primitives.mjs";
-import { synthesizeLlmReview } from "./semantic_grade_synthesis.mjs";
+import { classifyLiterature } from "./semantic_grade_synthesis.mjs";
 
 const DEFAULT_ELIGIBLE_RULE_GRADES = ["A", "B", "C"];
 
@@ -186,6 +186,7 @@ export function applyReviewToItems(reviewItems, llmItems, { failedReviewItemIds 
     const target = reviewItem._item;
     const llm = byId.get(reviewItem.id);
     target.rule_grade = reviewItem.rule_grade;
+    target.semantic_stage_status = failedReviewItemIds.has(reviewItem.id) ? 'failed' : 'completed';
     if (!llm) {
       delete target.llm_review;
       target.llm_review_grade = "";
@@ -193,24 +194,25 @@ export function applyReviewToItems(reviewItems, llmItems, { failedReviewItemIds 
       target.final_grade = reviewItem.rule_grade;
       target.grade = reviewItem.rule_grade;
       target.semantic_reason = failedReviewItemIds.has(reviewItem.id)
-        ? "LLM复审批次失败，保持规则等级并进入人工复核"
-        : "LLM复审未返回该条目，保持规则等级";
+        ? "LLM复审批次失败，等待重试，不生成人工任务"
+        : "LLM复审未返回该条目，需要人工复核";
       target.semantic_confidence = 0;
       target.semantic_source = failedReviewItemIds.has(reviewItem.id)
         ? "llm_title_review_failed"
         : "llm_title_review_missing";
-      target.needs_human_review = failedReviewItemIds.has(reviewItem.id);
-      target.disagreement_type = failedReviewItemIds.has(reviewItem.id) ? "llm_review_failed" : "";
+      target.needs_human_review = !failedReviewItemIds.has(reviewItem.id);
+      target.disagreement_type = failedReviewItemIds.has(reviewItem.id) ? "llm_review_failed" : "semantic_unavailable";
       if (target.needs_human_review) stats.items_needing_human_review += 1;
       continue;
     }
-    const synthesized = synthesizeLlmReview({
-      ruleGrade: reviewItem.rule_grade,
-      llmGrade: llm.llm_review_grade,
-      confidence: llm.confidence,
-      llmNeedsHumanReview: llm.needs_human_review,
-      semanticReason: llm.reason,
-      flags: target.flags,
+    const synthesized = classifyLiterature({
+      ...target,
+      rule_grade: reviewItem.rule_grade,
+      llm_review: llm,
+      llm_review_grade: llm.llm_review_grade,
+      semantic_grade: llm.llm_review_grade,
+      semantic_source: 'llm_title_review',
+      semantic_stage_status: 'completed',
     });
     target.llm_review_grade = llm.llm_review_grade;
     target.semantic_grade = llm.llm_review_grade;
@@ -724,6 +726,15 @@ export async function reviewGradesWithLlm({
       }
     }
     const hasFailedBatches = unresolvedFailureDiagnostics.length > 0;
+    // A stage failure is an operational blocker, never hundreds of user tasks.
+    // Persist its scope so consumers do not infer isolated missing from absence.
+    for (const item of items) {
+      item.semantic_stage_status = hasFailedBatches ? 'failed' : 'completed';
+      const decision = classifyLiterature(item);
+      item.needs_human_review = decision.needsHumanReview;
+      if (hasFailedBatches) item.pre_llm_skip_writeback = true;
+    }
+    stats.items_needing_human_review = items.filter(item => item.needs_human_review).length;
     const timingDiagnostics = summarizeBatchTimings(batchTimingEntries, {
       plannedBatchCount,
       configuredBatchSize: batchSize,

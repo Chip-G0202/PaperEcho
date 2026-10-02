@@ -129,7 +129,8 @@ for (const change of ["missing", "content", "receipt"]) test(`recovery ${change}
   const f = await fixture(t, "radar");
   const receipt = await readNotificationReceipt(f.receiptPath);
   if (change === "missing") delete receipt.recoveryData;
-  if (change === "content") receipt.recoveryData.content.items[0].title = "Changed content";
+  // Recovery binds the rendered summary, not article titles omitted from it.
+  if (change === "content") receipt.recoveryData.content.summaryView.total += 1;
   if (change === "receipt") receipt.ledgerOperationId = "b".repeat(64);
   await writeNotificationReceipt(f.receiptPath, receipt);
   assert.equal((await f.resume()).status, "blocked");
