@@ -151,3 +151,11 @@ npm test
 ```
 
 新增测试只写项目内临时 fixture，HTTP 使用临时 loopback port，LLM 为注入 mock；不连接真实 Zotero、LLM、SMTP，不访问 Production。运行全量旧 tests 时，将 TEMP/TMP 与 npm_config_cache 指向工作区临时目录，以保持输出隔离。不得为 Control Center 的验收更改正式 scheduler、配置、ledger、索引或用户反馈。
+
+## 通知偏好与渠道设置
+
+“通知偏好”是通知设置的唯一主区域：Radar 与周报独立选择参与渠道，下方五张卡片分别打开全局设置浮层；旧 `settings/connections/{channel}` 深链接仍进入此页面并打开对应浮层。Enabled 与 Configured 独立，关闭不清除配置或凭据；配置完整的关闭渠道仍可显式测试。浮层保存成功后读取最新状态再关闭，失败保留输入；凭据继续由 SecretService 单独写入，原值永不回显，外部环境凭据只读。
+
+事件渠道选择复用 canonical `common.notifications.{radar,weekly}.channels`（schema 6 可选数组）。未提供时保留历史全部已启用渠道，空数组表示该事件不发送；渠道总开关与事件 enabled 仍生效。Runner 将选择传入既有 delivery policy，不另建发送或恢复路径。通知保持 summary-only，QQ 使用原生 Markdown，无模板设置。
+
+Manual reachability 依赖可可靠匹配并重放的稳定 identity，不要求一定有标题；缺标题使用现有显示 fallback，identity 缺失或冲突继续 fail closed。

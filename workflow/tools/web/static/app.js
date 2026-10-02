@@ -10,6 +10,8 @@ let settingsGroup = 'common';
 let settingsView = 'sources';
 let reviewSection = 'normal';
 let activeReview = null;
+let activeChannelModal = null;
+const notificationChannelIds = ['email', 'qq', 'wechat', 'feishu', 'wecom'];
 const decisionReceipts = new Map();
 const pageNames = { home: '概览 · Overview', weekly: '文献 · Literature', feedback: '反馈 · Feedback', settings: '设置 · Settings', system: '系统 · System' };
 const errorMessages = { SETTING_VALUE_INVALID: '请检查字段格式或允许范围，原设置未改变。', SEARCH_KEYWORD_OWNER_REQUIRED: '请使用检索词分组修改检索式。', CREDENTIAL_VALUE_INVALID: '请输入有效单行凭据（最多 4096 字符）；请勿同时包含两种引号。', CREDENTIAL_EXTERNALLY_MANAGED: '该凭据由外部环境管理，请在原入口修改。', CREDENTIAL_WRITE_FAILED: '凭据未保存，请检查本地配置权限后重试。', CREDENTIAL_ENV_FORMAT_UNSUPPORTED: '凭据文件格式无法安全编辑，原文件未改变。', WEEKLY_CHANGED_RELOAD: '当前文献已更新，请刷新页面后重试。' };
@@ -31,19 +33,21 @@ const settingViews = {
   review: [['translation', '标题翻译', ['Models']], ['preference', '偏好学习', ['Models', 'Ranking / Review']]],
   runtime: [['path', '运行路径', ['Runtime']]],
   automation: [['radar', 'Daily Radar', ['Radar']], ['weekly', '周报', ['Weekly', 'Integrity']]],
-  connections: [['notifications', '通知偏好', ['Notifications']], ['email', '邮箱', ['Notifications']], ['qq', 'QQ', ['Notifications']], ['wechat', '微信', ['Notifications']], ['feishu', '飞书', ['Notifications']], ['wecom', '企业微信群机器人', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
+  connections: [['notifications', '通知偏好', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
 };
 function el(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; }
 function button(text, action) { const node = el('button', text); node.type = 'button'; node.addEventListener('click', async () => {
   node.disabled = true; node.setAttribute('aria-busy', 'true'); notice.dataset.kind = 'success';
-  const scope = node.closest('.setting, article, .research-form, .settings-subgroup, .settings-section');
+  const modal = node.closest('.channel-dialog') ? activeChannelModal : null;
+  modal?.setBusy(true);
+  const scope = modal?.dialog || node.closest('.setting, article, .research-form, .settings-subgroup, .settings-section');
   const previousNotice = notice.textContent;
   scope?.querySelectorAll('.field-error,.save-state').forEach((entry) => entry.remove());
   scope?.querySelectorAll('[aria-invalid]').forEach((entry) => { entry.removeAttribute('aria-invalid'); entry.removeAttribute('aria-describedby'); });
   try { await action(); if (scope?.isConnected && notice.textContent && notice.textContent !== previousNotice) { const state = el('p', notice.textContent, 'save-state meta'); state.setAttribute('role', 'status'); scope.append(state); } } catch (error) {
     notice.dataset.kind = 'error'; notice.textContent = error.message;
-    if (scope) { const message = el('p', error.message, 'field-error'); message.id = `error-${crypto.randomUUID()}`; message.setAttribute('role', 'alert'); scope.append(message); scope.querySelectorAll('input,select,textarea').forEach((entry) => { entry.setAttribute('aria-invalid', 'true'); entry.setAttribute('aria-describedby', message.id); }); }
-  } finally { node.disabled = false; node.removeAttribute('aria-busy'); }
+    if (scope) { const message = el('p', error.message, 'field-error'); message.id = `error-${crypto.randomUUID()}`; message.setAttribute('role', 'alert'); message.tabIndex = -1; scope.append(message); if (modal) message.focus(); scope.querySelectorAll('input,select,textarea').forEach((entry) => { entry.setAttribute('aria-invalid', 'true'); entry.setAttribute('aria-describedby', message.id); }); }
+  } finally { modal?.setBusy(false); if (!modal) node.disabled = false; node.removeAttribute('aria-busy'); }
 }); return node; }
 function select(values, selected) { const node = el('select'); for (const [value, label] of values) { const option = el('option', label); option.value = value; node.append(option); } node.value = selected || ''; return node; }
 function label(text, input) { const node = el('label', text); input.id ||= `field-${crypto.randomUUID()}`; input.setAttribute('aria-label', text); node.htmlFor = input.id; node.append(input); return node; }
@@ -526,7 +530,11 @@ function currentSettingText(setting) {
 }
 function settingControl(setting) {
   let input;
-  if (setting.id === 'sources.override') {
+  if (/^notification\.(radar|weekly)\.channels$/.test(setting.id)) {
+    input = el('fieldset', undefined, 'setting-options'); input.append(el('legend', setting.description));
+    for (const value of setting.validation.values) { const checkbox = el('input'); checkbox.type = 'checkbox'; checkbox.value = value; checkbox.checked = (setting.value || []).includes(value); input.append(label(({ email: '邮箱', qq: 'QQ', wechat: '微信', feishu: '飞书', wecom: '企业微信' })[value], checkbox)); }
+    Object.defineProperty(input, 'value', { get: () => [...input.querySelectorAll('input')].filter(node => node.checked).map(node => node.value) });
+  } else if (setting.id === 'sources.override') {
     input = el('fieldset', undefined, 'setting-options source-options'); input.append(el('legend', setting.description));
     const labels = { rss: '启用 RSS 期刊订阅', pubmed_pmc: 'PubMed / PMC', openalex: 'OpenAlex', semantic_scholar: 'Semantic Scholar' };
     const shown = setting.optionScope === 'rss' ? ['rss'] : setting.validation.values.filter((value) => value !== 'rss');
@@ -613,7 +621,9 @@ function emailDeliveryText(delivery) {
   return `最近发送：${emailResultLabels[delivery.status] || '尚未发送'}${delivery.kind === 'test' ? '（测试通知）' : ''}${time}${delivery.error ? ` · ${emailErrorLabels[delivery.error] || '暂时无法发送'}` : ''}`;
 }
 async function settings(group = settingsGroup, view = settingsView) {
-  settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common'; settingsView = view;
+  settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common';
+  const requestedChannel = settingsGroup === 'connections' && notificationChannelIds.includes(view) ? view : null;
+  settingsView = requestedChannel ? 'notifications' : view;
   main.append(pageIntro('工作空间设置', '这里只保留日常最常用的选项；检索词、检索式和底层参数继续由原配置维护。'));
   const data = await api('/api/settings');
   const credentials = await api('/api/credentials');
@@ -746,42 +756,113 @@ async function settings(group = settingsGroup, view = settingsView) {
     sync();
     const actions = el('div', undefined, 'actions group-save section-actions'); save = button('', async () => { const selected = options.value; if (!selected) throw new Error('请先选择一种运行路径。'); const selectedRecords = records.filter((entry) => entry.pathName === selected || entry.pathName === 'shared' && selected !== 'local'); const updates = [{ id: 'runtime.mode', value: selected }]; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); if (record.required && value === undefined && !String(record.entry.value || '').trim()) throw new Error(`请先填写${record.entry.description}，原设置未改变。`); if (record.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); if (value !== undefined) updates.push({ id: record.entry.id, value }); } await api('/api/settings', { updates }); mode.value = selected; mode.ownerPresent = true; current.textContent = `当前运行路径：${runtimePaths[selected].title}`; current.className = 'runtime-current'; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); record.entry.ownerPresent = true; if (value !== undefined) { record.entry.value = value; if (record.input.dataset?.replacement === 'true') record.input.value = ''; } if (record.currentValue) record.currentValue.textContent = `当前：${currentSettingText(record.entry)}`; } panels[selected].querySelector('.runtime-readiness').textContent = readinessFor[selected](); notice.textContent = selected === 'web' ? 'Zotero Web 配置已保存；下次运行生效。连接状态仍由运行前检测确认。' : '“运行路径”已保存，下次运行生效；连接与路径可用性仍由运行前检查确认。'; }); save.className = 'primary'; actions.append(save); section.append(actions); sync(); body.append(section); return;
   }
-  if (settingsGroup === 'connections' && ['notifications', 'email', 'qq', 'wechat', 'feishu', 'wecom'].includes(settingsView)) {
+  if (settingsGroup === 'connections' && settingsView === 'notifications') {
     const channelSettings = await api('/api/notifications');
-    for (const channel of channelSettings.channels.filter(entry => settingsView === 'notifications' || entry.id === settingsView)) {
-    const name = channel.displayName || (channel.id === 'email' ? '邮箱' : 'QQ');
-    const toggleId = `${channel.id}.enabled`;
-    const credential = channel.credential;
+    const preferences = el('section', undefined, 'settings-section section notification-preferences');
+    preferences.append(el('h3', '通知偏好', 'section-header'), el('p', '分别选择 Radar 与周报的通知渠道；渠道配置在下方卡片中管理。', 'meta'));
+    appendSettingsControls(preferences, data.filter(entry => entry.id.startsWith('notification.')), '通知偏好', '保存通知偏好');
+    body.append(preferences);
+    const grid = el('div', undefined, 'notification-channel-grid'); body.append(grid);
+    const descriptions = { email: '通过邮件接收研究摘要与提醒。', qq: '通过 QQ 官方机器人接收 Markdown 摘要。', wechat: '通过 WxPusher 接收微信通知。', feishu: '通过飞书群机器人接收摘要。', wecom: '通过企业微信群机器人接收摘要。' };
+    const names = { email: '邮箱', qq: 'QQ', wechat: '微信', feishu: '飞书', wecom: '企业微信' };
+    const icons = { email: '✉', qq: 'Q', wechat: '微', feishu: '飞', wecom: '企' };
     const readinessLabels = { configured: '配置完整', incomplete: '配置不完整', invalid: '配置错误' };
-    const channelStatus = el('p', undefined, 'channel-status'); const recent = el('p', undefined, 'meta delivery-status');
-    const syncStatus = () => { channelStatus.textContent = `${channel.enabled ? '已启用' : '未启用'} · ${readinessLabels[channel.readiness]}`; recent.textContent = emailDeliveryText(channel.lastDelivery); };
-    const refresh = async () => { const next = (await api('/api/notifications')).channels.find((entry) => entry.id === channel.id); Object.assign(channel, next); Object.assign(credential, next.credential); syncStatus(); };
-    syncStatus();
-    const emailSection = el('section', undefined, 'settings-section section channel-card');
-    emailSection.append(el('h3', name, 'section-header'), channelStatus, el('p', '关闭后保留配置和凭据，Radar 与周报仍正常运行。', 'meta'), recent);
-    const emailEntries = data.filter((entry) => entry.category === 'Notifications' && (channel.id === 'email' ? entry.id.startsWith('email.') || entry.id.startsWith('smtp.') : entry.id.startsWith(`${channel.id}.`)));
-    if (settingsView === 'notifications') {
-      appendSettingsControls(emailSection, emailEntries.filter((entry) => entry.id === toggleId), `${name}渠道`, `保存${name}开关`, [toggleId], { refresh });
-      emailSection.append(button(`${name}配置与测试`, () => navigate(`settings/connections/${channel.id}`))); body.append(emailSection);
-    } else {
-      const emailStatus = () => { const names = { 'email.recipient': '收件人', 'smtp.host': '邮件服务器', 'smtp.user': '登录账号', 'smtp.password': '邮箱密码', 'qq.appId': 'AppID', 'qq.targetType': '目标类型', 'qq.targetId': '目标 OpenID', 'qq.secret': 'AppSecret' }; return channel.readiness === 'configured' ? '配置完整。连接与实际发送结果请通过测试通知确认。' : channel.readiness === 'invalid' ? `配置错误，请检查${name}参数。` : `配置不完整，还需填写：${channel.missing.map((id) => names[id] || `${name}设置`).join('、')}。`; };
-      const testPanel = el('div', undefined, 'notification-test feature-dependent');
-      const testState = el('p', `测试只检查${name}发送，不改变通知开关或论文处理结果。`, 'meta'); testState.setAttribute('role', 'status');
+    const cards = new Map();
+    for (const channel of channelSettings.channels) {
+      const name = names[channel.id] || channel.displayName;
+      const card = el('section', undefined, 'settings-section channel-card'); card.dataset.channel = channel.id;
+      const heading = el('div', undefined, 'channel-heading'); const icon = el('span', icons[channel.id], 'channel-icon'); icon.setAttribute('aria-hidden', 'true'); heading.append(icon, el('h3', name));
+      const status = el('p', undefined, 'channel-status'); const recent = el('p', undefined, 'meta delivery-status');
+      const sync = () => { status.textContent = `${channel.enabled ? '已启用' : '未启用'} · ${readinessLabels[channel.readiness] || '配置不完整'}`; recent.textContent = emailDeliveryText(channel.lastDelivery || { status: 'none' }); };
+      sync(); const actions = el('div', undefined, 'actions channel-actions');
+      const open = button('设置', () => openChannel(channel, open)); open.className = 'primary'; open.setAttribute('aria-label', `设置${name}`); actions.append(open);
+      card.append(heading, el('p', descriptions[channel.id], 'channel-description'), status, recent, actions); grid.append(card); cards.set(channel.id, { channel, sync, open });
+    }
+    function openChannel(channel, opener) {
+      activeChannelModal?.close(true, false);
+      const name = names[channel.id] || channel.displayName;
+      const backdrop = el('div', undefined, 'channel-backdrop');
+      const dialog = el('section', undefined, 'channel-dialog settings-section'); dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.tabIndex = -1;
+      const title = el('h2', `${name}通知设置`); title.id = 'channel-dialog-title'; dialog.setAttribute('aria-labelledby', title.id);
+      const status = el('p', undefined, 'channel-status');
+      const sync = () => { status.textContent = `${channel.enabled ? '已启用' : '未启用'} · ${readinessLabels[channel.readiness] || '配置不完整'}`; };
+      const refresh = async () => {
+        const next = (await api('/api/notifications')).channels.find(entry => entry.id === channel.id);
+        if (!next) throw new Error('设置已提交，但渠道状态未能读取，请重新读取后确认。');
+        Object.assign(channel, next); cards.get(channel.id).sync(); sync();
+      };
+      sync(); let busy = false;
+      const background = [...document.body.children].map(node => [node, node.inert]); const overflow = document.body.style.overflow;
+      const close = (force = false, clearRoute = true) => {
+        if (busy && !force) return;
+        backdrop.remove(); background.forEach(([node, inert]) => { node.inert = inert; }); document.body.style.overflow = overflow;
+        if (activeChannelModal?.dialog === dialog) activeChannelModal = null;
+        if (clearRoute && notificationChannelIds.includes(parseRoute(location.hash).settingsView)) window.history?.replaceState(null, '', '#settings/connections/notifications');
+        opener?.focus();
+      };
+      const header = el('header', undefined, 'channel-dialog-header'); const copy = el('div'); copy.append(title, status, el('p', descriptions[channel.id], 'meta')); const dismiss = button('关闭', () => close(true)); dismiss.setAttribute('aria-label', '关闭通知设置'); header.append(copy, dismiss); dialog.append(header);
+      const form = el('div', undefined, 'channel-dialog-body'); dialog.append(form);
+      form.append(el('p', '关闭渠道会保留配置和凭据。配置完整不代表平台已验证；测试使用已保存的设置。', 'meta'));
+      if (channel.id === 'qq') form.append(el('p', '使用 QQ 机器人 AppID / AppSecret；目标是机器人对应的用户或群 OpenID，不是 QQ 号码。', 'meta'));
+      if (channel.id === 'wechat') form.append(el('p', 'WxPusher API 接受不等于微信已送达；绑定与激活状态由客户端确认。', 'meta'));
+      const records = [];
+      for (const entry of data.filter(entry => entry.category === 'Notifications' && (channel.id === 'email' ? entry.id.startsWith('email.') || entry.id.startsWith('smtp.') : entry.id.startsWith(channel.id + '.')))) {
+        if (!entry.available) continue;
+        const row = el('div', undefined, 'setting');
+        if (entry.readOnly) { row.append(el('p', `${entry.description}：${currentSettingText(entry)}（只读）`)); form.append(row); continue; }
+        const input = settingControl(entry);
+        if (entry.type !== 'boolean' && entry.type !== 'enum') row.append(el('p', `当前：${currentSettingText(entry)}`, 'setting-current'));
+        row.append(input.className.includes('setting-options') ? input : label(entry.description + (input.dataset.replacement === 'true' ? '（留空不变）' : ''), input));
+        form.append(row); records.push({ entry, input });
+      }
+      const credentialsSection = el('section', undefined, 'channel-credentials'); credentialsSection.append(el('h3', '凭据'), el('p', '原值永不回显；替换或清除凭据会单独保存。', 'meta'));
+      for (const credential of (channel.credentials || [channel.credential]).filter(Boolean)) appendCredentialEditor(credentialsSection, credential, refresh);
+      form.append(credentialsSection);
+      const testState = el('p', '测试不会自动启用渠道。', 'meta notification-test-state'); testState.setAttribute('role', 'status'); form.append(testState);
+      const footer = el('footer', undefined, 'actions channel-dialog-actions'); footer.append(button('取消', () => close(true)));
+      const save = button('保存设置', async () => {
+        const updates = records.flatMap(({ entry, input }) => {
+          if (input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。');
+          const value = settingValue(entry, input); return value === undefined ? [] : [{ id: entry.id, value }];
+        });
+        await api('/api/settings', { updates }); await refresh();
+        for (const { entry } of records) { const update = updates.find(item => item.id === entry.id); if (update) entry.value = update.value; }
+        notice.textContent = `${name}通知设置已保存。`; close(true);
+      }); save.className = 'primary'; footer.append(save);
       let requestId = crypto.randomUUID();
       const test = button('发送测试通知', async () => {
         test.textContent = '发送中…'; testState.textContent = '正在发送测试通知…';
-        try { const result = await api('/api/notifications/test', { channel: channel.id, requestId }); testState.textContent = result.status === 'success' && channel.id === 'wechat' ? 'WxPusher API 已接受消息；不代表微信 ClawBot 已送达。' : result.status === 'success' && channel.id === 'feishu' ? '飞书 API 已接受消息；请在目标群确认。' : result.status === 'success' && channel.id === 'wecom' ? '企业微信群机器人 API 已接受消息；请在目标群确认。' : emailErrorLabels[result.error] || emailResultLabels[result.status] || '暂时无法发送'; notice.textContent = testState.textContent; await refresh(); if (result.status === 'success') requestId = crypto.randomUUID(); }
-        finally { test.textContent = '发送测试通知'; }
-      }); testPanel.append(test, testState, el('p', '测试使用已保存的设置；修改参数后请先保存。', 'meta'));
-      if (channel.id === 'qq') emailSection.append(el('p', '使用 QQ 开放平台机器人 AppID / AppSecret；目标填写该机器人对应的用户或群 OpenID，不是 QQ 号码。', 'meta'));
-      if (channel.id === 'wechat') testPanel.append(el('p', '微信 ClawBot · WxPusher。用户需在 WxPusher 客户端绑定并保持渠道激活；当前每次激活后 24 小时内最多 10 条，到期或用完需在微信会话回复任意消息。具体时效/次数以 WxPusher 当前规则为准。配置完整不代表已绑定、激活或送达。', 'meta'));
-      appendSettingsControls(emailSection, emailEntries, `${name}配置`, `保存${name}配置`, [toggleId], { statusText: emailStatus, credentials: channel.credentials || [credential], refresh, extraContent: testPanel, allowDisabledEditing: true, diagnosticLabel: `配置与测试${name}（不启用通知）` }); body.append(emailSection);
+        try {
+          const result = await api('/api/notifications/test', { channel: channel.id, requestId });
+          testState.textContent = result.status === 'success' && channel.id !== 'email' ? '平台 API 已接受消息；请在目标端确认。' : emailErrorLabels[result.error] || emailResultLabels[result.status] || '暂时无法发送';
+          await refresh(); if (result.status === 'success') requestId = crypto.randomUUID();
+        } finally { test.textContent = '发送测试通知'; }
+      }); footer.append(test); dialog.append(footer); backdrop.append(dialog);
+      const setBusy = value => {
+        busy = value; dialog.setAttribute('aria-busy', String(value));
+        dialog.querySelectorAll('button').forEach(node => { node.disabled = value; });
+        dialog.querySelectorAll('input,select,textarea').forEach(node => { node.disabled = value; });
+        test.disabled = value || channel.readiness !== 'configured';
+      };
+      activeChannelModal = { dialog, close, setBusy };
+      background.forEach(([node]) => { node.inert = true; }); document.body.style.overflow = 'hidden'; document.body.append(backdrop); setBusy(false);
+      backdrop.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { event.preventDefault(); close(); return; }
+        if (event.key !== 'Tab') return;
+        const nodes = [...dialog.querySelectorAll('button,input,select,textarea')].filter(node => {
+          if (node.disabled) return false;
+          for (let parent = node; parent && parent !== dialog; parent = parent.parentElement) if (parent.hidden) return false;
+          return true;
+        });
+        const first = nodes[0], last = nodes.at(-1);
+        if (!first) { event.preventDefault(); dialog.focus(); }
+        else if (!nodes.includes(document.activeElement)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
+        else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      });
+      dismiss.focus();
     }
-    }
-    if (settingsView === 'notifications') {
-      const preferences = el('section', undefined, 'settings-section section'); preferences.append(el('h3', '通知偏好', 'section-header'), el('p', '选择允许通知的事件，并通过已启用的渠道发送；Daily Radar 仍只通知当前重要推荐。', 'meta'));
-      appendSettingsControls(preferences, data.filter((entry) => entry.id.startsWith('notification.')), '通知偏好', '保存通知偏好'); body.append(preferences);
-    }
+    if (requestedChannel && cards.has(requestedChannel)) openChannel(cards.get(requestedChannel).channel, cards.get(requestedChannel).open);
     return;
   }
   for (const group of active[2]) {
@@ -798,6 +879,7 @@ async function settings(group = settingsGroup, view = settingsView) {
   }
 }
 async function render() {
+  activeChannelModal?.close(true, false);
   activeReview = null; main.setAttribute('aria-busy', 'true'); main.replaceChildren(el('p', '正在读取当前工作空间…', 'loading'));
   document.querySelector('#page-title').textContent = pageNames[page];
   document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = true; node.setAttribute('aria-current', node.dataset.page === page ? 'page' : 'false'); });
@@ -825,7 +907,7 @@ function parseRoute(hash) {
     const groups = { general: 'common', common: 'common', models: 'review', review: 'review', runtime: 'runtime', automation: 'automation', connections: 'connections' };
     state.settingsGroup = groups[section] || 'common';
     const fallback = { common: 'databases', review: 'translation', runtime: 'path', automation: 'radar', connections: 'notifications' }[state.settingsGroup];
-    state.settingsView = settingViews[state.settingsGroup].some(([key]) => key === task) ? task : fallback;
+    state.settingsView = settingViews[state.settingsGroup].some(([key]) => key === task) || state.settingsGroup === 'connections' && notificationChannelIds.includes(task) ? task : fallback;
   }
   return state;
 }
@@ -833,7 +915,7 @@ function route() {
   if (location.hash === '#content' && main.getAttribute('aria-busy') === 'false') { main.focus(); return; }
   ({ page, feedbackView, reviewSection, settingsGroup, settingsView } = parseRoute(location.hash));
   notice.textContent = ''; document.querySelector('#sidebar').dataset.open = 'false'; document.querySelector('#menu-toggle').setAttribute('aria-expanded', 'false');
-  return render().then(() => { window.scrollTo?.(0, 0); (activeReview?.workspace || main).focus({ preventScroll: true }); });
+  return render().then(() => { window.scrollTo?.(0, 0); if (!activeChannelModal) (activeReview?.workspace || main).focus({ preventScroll: true }); });
 }
 const defaultRoutes = { feedback: 'feedback/rating/normal', settings: 'settings/general/databases' };
 document.querySelectorAll('[data-page]').forEach((node) => node.addEventListener('click', () => navigate(defaultRoutes[node.dataset.page] || node.dataset.page)));

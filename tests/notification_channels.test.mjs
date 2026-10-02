@@ -9,7 +9,7 @@ import { migrateApplicationConfig } from '../workflow/tools/lib/application_conf
 import { validateRunnerConfigObject, resolveRunnerConfiguration } from '../workflow/tools/runner/config_loader.mjs';
 import { parseRunnerArgs } from '../workflow/tools/runner/args.mjs';
 import { buildExecutionPlan } from '../workflow/tools/runner/preflight.mjs';
-import { emailDeliveryPolicy } from '../workflow/tools/notification/policy.mjs';
+import { emailDeliveryPolicy, channelDeliveryPolicy } from '../workflow/tools/notification/policy.mjs';
 import { runStage5Notification, resolveStage5Request } from '../workflow/tools/stage5/main.mjs';
 import { sendRadarAggregateNotification } from '../workflow/tools/stage5/radar_notification.mjs';
 import { createNotificationReceipt, writeNotificationReceipt, receiptPathFor, notificationReceiptPathFor } from '../workflow/tools/stage5/email_receipt.mjs';
@@ -196,4 +196,28 @@ test('notification API keeps session/Host/Origin/CSRF guards and never returns s
   assert.equal((await request('/api/notifications/test', { data: { ...data, recipient: 'arbitrary@example.test' }, headers: auth })).status, 400);
   assert.equal((await request('/api/notifications/test', { data, headers: auth })).value.error, 'authentication_failed');
   for (const route of ['/api/notifications', '/api/settings', '/api/credentials']) { const result = await request(route, { headers: auth }); assert.equal(result.status, 200); assert.equal(result.text.includes(fakeSecret), false); assert.equal(result.headers['access-control-allow-origin'], undefined); }
+});
+// Run-local event channel selection is opt-in; absent lists preserve historical fan-out.
+test('v6 event channel preferences validate, persist independently and reach Runner policy', async t => {
+  const f = await fixture(t, { schemaVersion: 6 });
+  await f.services.config.updateMany([{ id: 'notification.radar.channels', value: ['qq'] }, { id: 'notification.weekly.channels', value: ['email', 'wecom'] }]);
+  const config = await f.read();
+  assert.deepEqual(config.common.notifications.radar.channels, ['qq']);
+  assert.deepEqual(config.common.notifications.weekly.channels, ['email', 'wecom']);
+  assert.equal(emailDeliveryPolicy('radar', { config }).required, false);
+  assert.equal(emailDeliveryPolicy('weekly', { config }).required, true);
+  const options = parseRunnerArgs(['--check', '--mode', 'desktop', '--profile', 'standard', '--config', f.configPath]);
+  const resolved = await resolveRunnerConfiguration(options, { cwd: f.root, env: {} });
+  assert.equal(resolved.env.PAPERECHO_NOTIFY_RADAR_CHANNELS, '["qq"]');
+  assert.equal(emailDeliveryPolicy('radar', { env: resolved.env }).required, false);
+  for (const id of ['qq', 'wechat', 'feishu', 'wecom']) {
+    const env = { ...resolved.env, [`PAPERECHO_${id.toUpperCase()}_CHANNEL`]: '{"enabled":true}' };
+    assert.equal(channelDeliveryPolicy(id, 'radar', { env }).required, id === 'qq');
+    assert.equal(channelDeliveryPolicy(id, 'weekly', { env }).required, id === 'wecom');
+  }
+  assert.equal(emailDeliveryPolicy('weekly', { env: { PAPERECHO_NOTIFY_WEEKLY_CHANNELS: '[]' } }).required, false);
+  assert.equal(emailDeliveryPolicy('weekly', { env: { PAPERECHO_NOTIFY_WEEKLY_CHANNELS: 'invalid' } }).required, false);
+  assert.equal(emailDeliveryPolicy('failure', { env: resolved.env }).required, true);
+  for (const channels of [['unknown'], ['qq', 'qq'], 'qq', [null]]) assert.throws(() => validateRunnerConfigObject({ schemaVersion: 6, common: { notifications: { radar: { channels } } } }));
+  const saved = await f.read(); await assert.rejects(f.services.config.update('notification.radar.channels', ['bad']), /SETTING_VALUE_INVALID/); assert.deepEqual(await f.read(), saved);
 });
