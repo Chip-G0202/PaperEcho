@@ -169,7 +169,7 @@ export class ReviewQueryService {
         id, feedbackAllowed: keys.length > 0 && ['feedback', 'manual'].includes(evidence.reviewBucket), title: String(item.title || ''),
         translatedTitle: String(item.translatedTitle || item.translated_title || item.title_translation || item['标题翻译'] || item['中文标题'] || item.shortTitle || ''),
         authors: (Array.isArray(item.authors) ? item.authors : [item.authors || '']).map((author) => typeof author === 'string' ? author : [author?.firstName, author?.lastName].filter(Boolean).join(' ')), journal: String(item.journal || item.publicationTitle || ''), year: String(item.year || ''),
-        doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), source: String(item.source || item.source_type || ''),
+        doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), url: String(item.url || item.URL || ''), source: String(item.source || item.source_type || ''),
         ...evidence,
         grade: evidence.finalGrade, zotero: pendingReview ? 'not_written' : this.localRepository ? 'not_used_local' : 'admitted',
         pendingReview, manualReviewPending: Boolean(item._activeManualItem && isActiveManualReview(item._activeManualItem, current)),

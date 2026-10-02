@@ -61,6 +61,7 @@ export function matchPendingPaperRecord(item, records = []) {
     }
   }
   if (matches.length > 1) throw new Error('PENDING_PAPER_REVIEW_IDENTITY_AMBIGUOUS');
+  if (matches.some(record => conflictingStrongKey(keys, record.keys))) throw new Error('PENDING_PAPER_REVIEW_IDENTITY_CONFLICT');
   return matches[0] || null;
 }
 

@@ -19,13 +19,22 @@ test('held classification Manual reaches export independently of automatic admis
 
 test('reachability preserves real safety filters and canonical decisions without mutating evidence', () => {
   const valid = paper('D','B',0);
-  const candidates = [valid,{...valid},paper('D','B',1,{pre_llm_zotero_existing_duplicate:true}),paper('D','A',2,{title:''}),paper('B','D',3,{doi:''}),paper('D','D',4),paper('B','',5,{semantic_stage_status:'failed'}),paper('D','A',6)];
+  const candidates = [valid,{...valid},paper('D','B',1,{pre_llm_zotero_existing_duplicate:true}),paper('D','A',2,{title:'',doi:''}),paper('B','D',3,{doi:''}),paper('D','D',4),paper('B','',5,{semantic_stage_status:'failed'}),paper('D','A',6)];
   const before = JSON.stringify(candidates);
   const reviewContext = {current:[{kind:'manual_grade',identity:'doi:10.1234/reach-6',keys:['doi:10.1234/reach-6'],manual_grade:'C'}]};
   const payload = buildFinalExportPayload({allAbcItems: [],manualCandidates:candidates,reviewContext});
   assert.deepEqual(payload.triaged.map(i=>i.doi),[valid.doi]);
   assert.equal(JSON.stringify(candidates),before);
   assert.equal(buildFinalExportPayload({allAbcItems:[],manualCandidates:[valid],reviewContext:{semanticStageStatus:'failed'}}).triaged.length,0);
+});
+
+test('untitled Manual needs a replayable strong identity; Feedback admission is unchanged', () => {
+  const untitled=paper('D','',20,{title:'',doi:'',url:'https://example.org/synthetic-paper'});
+  assert.equal(buildFinalExportPayload({allAbcItems:[],manualCandidates:[untitled]}).triaged.length,1);
+  assert.equal(buildFinalExportPayload({allAbcItems:[],manualCandidates:[{...untitled,url:'',pending_review_id:'00000000-0000-4000-8000-000000000020'}]}).triaged.length,0);
+  assert.equal(buildFinalExportPayload({allAbcItems:[],manualCandidates:[{...untitled,llm_review_grade:'C'}]}).triaged.length,0);
+  const conflicting={id:'00000000-0000-4000-8000-000000000020',keys:['url:https://example.org/synthetic-paper','doi:10.1234/other'],paper:{},status:'pending'};
+  assert.throws(()=>buildFinalReviewMembership([{...untitled,doi:'10.1234/conflict'}],{pendingRecords:[conflicting]}),/IDENTITY_CONFLICT/);
 });
 
 test('Feedback still requires normal admission; all buckets remain disjoint', () => {

@@ -61,6 +61,14 @@ function ui() {
   return { ...context.testing, main, notice, body, location: context.location };
 }
 const papers = (count = 100) => Array.from({ length: count }, (_, i) => ({ id: String(i), title: `English ${i} — ${'long title '.repeat(i === 0 ? 80 : 1)}`, translatedTitle: `中文副标题 ${i}`, authors: ['测试作者'], finalGrade: ['A', 'B', 'C'][i % 3], ruleGrade: 'B', semanticGrade: 'A', needsReview: i === count - 1, manualReviewPending: i === count - 1, reviewReason: i === count - 1 ? '既有等级复审依据' : '', source: 'PubMed', journal: 'Journal', year: '2026', doi: i ? '' : '10.1234/test', pmid: String(1000 + i), zotero: 'not_used_local', feedbackAllowed: true, feedback: null }));
+
+test('untitled Manual card uses existing fallback and saves its stable paper ID', async () => {
+  const app=ui(),calls=[],item={...papers(1)[0],id:'stable-untitled',title:'',translatedTitle:'',doi:'',pmid:'',url:'https://example.org/untitled',pendingReview:true,manualReviewPending:true};
+  app.setApi(async(url,payload)=>{if(payload){calls.push(payload);return {revision:1};}return {runId:'fixture',total:1,items:[item]};});
+  await app.paperReview(true,'manual');
+  assert.match(app.main.textContent,/原始标题未提供/);assert.match(app.main.textContent,/来源链接：https:\/\/example.org\/untitled/);
+  await byText(app.main,'B 2').click();assert.equal(calls[0].paperId,'stable-untitled');assert.equal(calls[0].manualGrade,'B');assert.equal(item.title,'');
+});
 const byText = (root, text) => root.querySelectorAll('button').find((node) => node.textContent === text);
 const work = (root) => root.querySelector('.review-workspace');
 const currentTitle = (root) => root.querySelector('article')?.querySelector('h3')?.textContent;

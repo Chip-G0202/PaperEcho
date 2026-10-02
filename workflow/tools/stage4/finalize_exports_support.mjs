@@ -20,9 +20,12 @@ export function buildReviewProjectionContext(report = {}, options = {}) {
 export function isManualReviewReachable(item, context = {}) {
   if (context.workflowValid === false || context.semanticStageStatus === 'failed' || classifyLiterature(item, context).reviewBucket !== 'manual'
     || (context.currentRunId && item.last_run_id !== context.currentRunId)
-    || typeof item.title !== 'string' || !item.title.trim() || item.pre_llm_zotero_existing_duplicate === true) return false;
+    || item.pre_llm_zotero_existing_duplicate === true) return false;
   let keys;
   try { keys = feedbackIdentity(item); } catch { return false; }
+  // An untitled item needs a real paper identifier for later replay, not only
+  // a syntactically valid review UUID with no recoverable paper evidence.
+  if (!String(item.title || '').trim() && !keys.some(key => !key.startsWith('review:'))) return false;
   return !manualDecisionForRecord({ id: item.pending_review_id || '', keys }, context.current || []);
 }
 

@@ -215,6 +215,7 @@ function gradeBadge(value) {
 }
 function paperHeading(card, item, { showGrade = true } = {}) {
   card.append(el('h3', item.title || '原始标题未提供', 'paper-title'));
+  if (!String(item.title || '').trim()) card.append(el('p', [item.doi && `DOI：${item.doi}`, item.pmid && `PMID：${item.pmid}`, item.url && `来源链接：${item.url}`].filter(Boolean).join(' · '), 'meta'));
   if (item.translatedTitle && item.translatedTitle !== item.title) card.append(el('p', item.translatedTitle, 'translated-title'));
   card.append(el('p', [item.journal, item.year, item.source].filter(Boolean).join(' · '), 'meta'));
   if (showGrade) { const badges = el('div', undefined, 'badge-row'); badges.append(gradeBadge(displayGrade(item))); card.append(badges); }

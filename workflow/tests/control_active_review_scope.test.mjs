@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FeedbackService, feedbackIdentity } from '../tools/lib/control_feedback_service.mjs';
 import { ReviewQueryService } from '../tools/lib/control_review_query_service.mjs';
-import { finalizePendingPaperReview, pendingPaperReviewPath, readPendingPaperReview } from '../tools/lib/pending_paper_review.mjs';
+import { finalizePendingPaperReview, pendingPaperReviewPath, readPendingPaperReview, preparePendingPaperReview, attachPendingPaperReview } from '../tools/lib/pending_paper_review.mjs';
 import { buildStage4StandaloneExportSource, buildFinalExportPayload, buildProspectiveStage4ExportSource, buildFinalReviewMembership } from '../tools/stage4/finalize_exports_support.mjs';
 import { getWeeklyReviewEvidence, exportAllResearchOsXlsxWithNodeFallback } from '../tools/stage4/spreadsheet_adapter.mjs';
 import { readXlsxSheets } from '../tools/lib/review_workbook_reader.mjs';
@@ -274,4 +274,20 @@ test('completed and unfinished whole semantic failures never expose mass Manual'
     assert.equal((await app.query.weekly()).total,0);
     assert.equal((await app.query.pendingSummary()).manual,0);
   }
+});
+
+test('identifiable untitled Manual saves by stable identity and replays without inventing a title', async (t) => {
+  const app=await fixture(t);
+  const item={title:'',url:'https://example.org/untitled-paper',rule_grade:'D',grade:'D',final_grade:'D',semantic_stage_status:'completed'};
+  await finalizePendingPaperReview({reviewRoot:app.reviewRoot,items:[item]});
+  await app.run('untitled','2026-10-01T05:00:00Z',[item]);
+  const page=await app.query.weekly();assert.equal(page.total,1);assert.equal(page.items[0].manualReviewPending,true);
+  assert.equal(page.items[0].title,'');assert.equal(page.items[0].url,item.url);
+  const resolved=await app.query.resolvePaper(page.runId,page.items[0].id);
+  assert.deepEqual(feedbackIdentity(resolved),feedbackIdentity(item));
+  await app.feedback.submit({kind:'manual_grade',paper:resolved,manualGrade:'B',requestId:page.items[0].id});
+  const replay=await preparePendingPaperReview({reviewRoot:app.reviewRoot,candidates:[]});
+  assert.equal(replay.injectedCount,1);attachPendingPaperReview(replay.input,replay);
+  await finalizePendingPaperReview({reviewRoot:app.reviewRoot,items:replay.input});
+  assert.equal(replay.input[0].manual_confirmed_grade,'B');assert.equal(replay.input[0].url,item.url);assert.equal(replay.input[0].title,'');
 });
