@@ -197,27 +197,88 @@ test('notification API keeps session/Host/Origin/CSRF guards and never returns s
   assert.equal((await request('/api/notifications/test', { data, headers: auth })).value.error, 'authentication_failed');
   for (const route of ['/api/notifications', '/api/settings', '/api/credentials']) { const result = await request(route, { headers: auth }); assert.equal(result.status, 200); assert.equal(result.text.includes(fakeSecret), false); assert.equal(result.headers['access-control-allow-origin'], undefined); }
 });
-// Run-local event channel selection is opt-in; absent lists preserve historical fan-out.
-test('v6 event channel preferences validate, persist independently and reach Runner policy', async t => {
+test('v6 global channel selection and event switches reach the shared Runner policy without dual writes', async t => {
   const f = await fixture(t, { schemaVersion: 6 });
-  await f.services.config.updateMany([{ id: 'notification.radar.channels', value: ['qq'] }, { id: 'notification.weekly.channels', value: ['email', 'wecom'] }]);
+  await f.services.config.updateMany([{ id: 'email.enabled', value: true }, { id: 'qq.enabled', value: true }, { id: 'notification.radar', value: true }, { id: 'notification.weekly', value: false }]);
   const config = await f.read();
-  assert.deepEqual(config.common.notifications.radar.channels, ['qq']);
-  assert.deepEqual(config.common.notifications.weekly.channels, ['email', 'wecom']);
-  assert.equal(emailDeliveryPolicy('radar', { config }).required, false);
-  assert.equal(emailDeliveryPolicy('weekly', { config }).required, true);
+  assert.deepEqual(config.common.notifications.radar, { enabled: true });
+  assert.deepEqual(config.common.notifications.weekly, { enabled: false });
+  assert.equal(emailDeliveryPolicy('radar', { config }).required, true);
+  assert.equal(channelDeliveryPolicy('qq', 'radar', { config }).required, true);
+  assert.equal(emailDeliveryPolicy('weekly', { config }).required, false);
   const options = parseRunnerArgs(['--check', '--mode', 'desktop', '--profile', 'standard', '--config', f.configPath]);
-  const resolved = await resolveRunnerConfiguration(options, { cwd: f.root, env: {} });
-  assert.equal(resolved.env.PAPERECHO_NOTIFY_RADAR_CHANNELS, '["qq"]');
-  assert.equal(emailDeliveryPolicy('radar', { env: resolved.env }).required, false);
-  for (const id of ['qq', 'wechat', 'feishu', 'wecom']) {
-    const env = { ...resolved.env, [`PAPERECHO_${id.toUpperCase()}_CHANNEL`]: '{"enabled":true}' };
-    assert.equal(channelDeliveryPolicy(id, 'radar', { env }).required, id === 'qq');
-    assert.equal(channelDeliveryPolicy(id, 'weekly', { env }).required, id === 'wecom');
+  const resolved = await resolveRunnerConfiguration(options, { cwd: f.root, env: { PAPERECHO_NOTIFY_RADAR_CHANNELS: '[]' } });
+  assert.equal(resolved.env.PAPERECHO_NOTIFY_RADAR_CHANNELS, undefined);
+  for (const id of ['email', 'qq', 'wechat', 'feishu', 'wecom']) {
+    assert.equal(channelDeliveryPolicy(id, 'radar', { env: resolved.env }).required, ['email', 'qq'].includes(id));
+    assert.equal(channelDeliveryPolicy(id, 'weekly', { env: resolved.env }).required, false);
   }
-  assert.equal(emailDeliveryPolicy('weekly', { env: { PAPERECHO_NOTIFY_WEEKLY_CHANNELS: '[]' } }).required, false);
-  assert.equal(emailDeliveryPolicy('weekly', { env: { PAPERECHO_NOTIFY_WEEKLY_CHANNELS: 'invalid' } }).required, false);
   assert.equal(emailDeliveryPolicy('failure', { env: resolved.env }).required, true);
   for (const channels of [['unknown'], ['qq', 'qq'], 'qq', [null]]) assert.throws(() => validateRunnerConfigObject({ schemaVersion: 6, common: { notifications: { radar: { channels } } } }));
-  const saved = await f.read(); await assert.rejects(f.services.config.update('notification.radar.channels', ['bad']), /SETTING_VALUE_INVALID/); assert.deepEqual(await f.read(), saved);
+  assert.equal((await f.services.config.list()).some(entry => /notification\.(radar|weekly)\.channels/.test(entry.id)), false);
+  const saved = await f.read(); await assert.rejects(f.services.config.update('notification.radar.channels', ['qq']), /SETTING_UNKNOWN/); assert.deepEqual(await f.read(), saved);
+});
+
+for (const [daily, weekly, radarEnabled, weeklyEnabled, expected] of [
+  [['email', 'qq'], ['email'], true, true, ['email', 'qq']],
+  [[], ['qq'], true, true, ['qq']],
+  [['wechat'], ['feishu', 'wecom'], false, true, ['wechat', 'feishu', 'wecom']],
+  [['qq'], [], true, false, ['qq']],
+  [[], [], false, false, []],
+  [undefined, ['qq'], false, true, ['email', 'qq', 'wechat', 'feishu', 'wecom']],
+]) test(`legacy event lists migrate atomically to global selection ${JSON.stringify([daily, weekly, radarEnabled, weeklyEnabled])}`, async t => {
+  const f = await fixture(t, { schemaVersion: 6 });
+  f.value.common.notifications = { radar: { enabled: radarEnabled, ...(daily ? { channels: daily } : {}) }, weekly: { enabled: weeklyEnabled, channels: weekly }, channels: Object.fromEntries(['qq', 'wechat', 'feishu', 'wecom'].map(id => [id, { enabled: true }])) };
+  await fs.writeFile(f.configPath, JSON.stringify(f.value));
+  // Read-only compatibility and persisted migration use exactly the same projection.
+  const before = await fs.readFile(f.configPath, 'utf8');
+  const listed = await f.services.config.list();
+  assert.deepEqual(listed.filter(entry => /^(email|qq|wechat|feishu|wecom)\.enabled$/.test(entry.id) && entry.value).map(entry => entry.id.split('.')[0]), expected);
+  assert.equal(await fs.readFile(f.configPath, 'utf8'), before);
+  assert.equal((await migrateApplicationConfig({ root: f.root })).migrated, true);
+  const after = await f.read();
+  assert.equal(after.schemaVersion, 6);
+  assert.deepEqual(after.common.notifications.radar, { enabled: radarEnabled });
+  assert.deepEqual(after.common.notifications.weekly, { enabled: weeklyEnabled });
+  assert.deepEqual(['email', 'qq', 'wechat', 'feishu', 'wecom'].filter(id => id === 'email' ? after.common.email.enabled : after.common.notifications.channels[id].enabled), expected);
+  assert.deepEqual(after.common.email.smtp, f.value.common.email.smtp);
+  assert.deepEqual(JSON.parse(await fs.readFile(`${f.configPath}.v6-backup`, 'utf8')), f.value);
+  const migrated = await fs.readFile(f.configPath, 'utf8');
+  assert.equal((await migrateApplicationConfig({ root: f.root })).migrated, false);
+  assert.equal(await fs.readFile(f.configPath, 'utf8'), migrated);
+  await f.services.config.update('notification.radar', !radarEnabled);
+  assert.equal((await f.read()).common.notifications.radar.channels, undefined);
+});
+
+test('legacy migration retains disabled global channels and failed atomic writes retain original bytes', async t => {
+  const f = await fixture(t, { schemaVersion: 6, enabled: false });
+  f.value.common.notifications = { radar: { channels: ['email', 'qq'] }, weekly: { channels: ['email'] }, channels: { qq: { enabled: false } } };
+  await fs.writeFile(f.configPath, JSON.stringify(f.value));
+  const before = await fs.readFile(f.configPath, 'utf8');
+  await assert.rejects(migrateApplicationConfig({ root: f.root, atomicOptions: { validateTemporary: () => { throw new Error('fixture atomic failure'); } } }), /fixture atomic failure/);
+  assert.equal(await fs.readFile(f.configPath, 'utf8'), before);
+  await migrateApplicationConfig({ root: f.root });
+  const config = await f.read();
+  assert.equal(config.common.email.enabled, false); assert.equal(config.common.notifications.channels.qq.enabled, false);
+  assert.deepEqual(config.common.notifications.radar, { enabled: true }); assert.deepEqual(config.common.notifications.weekly, { enabled: true });
+});
+
+test('explicit Test does not select channels or enable either event', async t => {
+  let calls = 0;
+  const f = await fixture(t, { enabled: false, schemaVersion: 6, transport: async () => { calls++; return { accepted: true }; } });
+  await f.services.config.updateMany([{ id: 'notification.radar', value: false }, { id: 'notification.weekly', value: false }]);
+  const before = await fs.readFile(f.configPath, 'utf8');
+  assert.equal((await f.services.notifications.test({ channel: 'email', requestId: 'both-events-disabled' })).status, 'success');
+  assert.equal(calls, 1); assert.equal(await fs.readFile(f.configPath, 'utf8'), before);
+});
+
+test('globally selected QQ with missing credentials retains transport fail-closed behavior', async t => {
+  const f = await fixture(t, { enabled: false, schemaVersion: 6 });
+  const originalFetch = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async () => { calls++; assert.fail('incomplete provider must not contact QQ'); };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const env = { PAPERECHO_CONFIG_SCHEMA_VERSION: '6', PAPERECHO_EMAIL_ENABLED: 'false', PAPERECHO_QQ_CHANNEL: JSON.stringify({ enabled: true, appId: 'fixture', targetType: 'user', targetId: 'fixture-target' }) };
+  const result = await runStage5Notification({ runSummary: { runId: 'missing-credential', outputRoot: f.root, artifacts: [], counts: { created: 1 } }, config: { env, runStateRoot: f.root } });
+  assert.equal(result.channels.qq.status, 'failed'); assert.equal(result.channels.qq.reason, 'qq_configuration_invalid');
+  assert.equal(result.businessStatus, 'success'); assert.equal(result.notificationStatus, 'incomplete'); assert.equal(calls, 0);
 });

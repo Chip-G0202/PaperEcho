@@ -486,7 +486,7 @@ test('model capability toggles remain in the real DOM when registry entries are 
   const preference = app.main.querySelectorAll('input').find((input) => input.getAttribute('aria-label') === '启用智能评审与偏好学习');
   assert.ok(preference); assert.notEqual(preference.disabled, true); await preference.press('Space'); assert.equal(preference.checked, true);
 });
-test('email toggle owns its configuration panel and preserves fields while off', async () => {
+test('Email provider modal preserves configuration while globally unselected', async () => {
   const app = ui(); const settings = [
     { category: 'Notifications', available: true, id: 'email.enabled', description: '发送报告邮件', type: 'boolean', value: false, validation: {} },
     { category: 'Notifications', available: true, id: 'email.recipient', description: '收件人', type: 'email', value: 'old@example.test', validation: {} },
@@ -498,10 +498,9 @@ test('email toggle owns its configuration panel and preserves fields while off',
   const channel = { id: 'email', enabled: false, readiness: 'configured', missing: [], credential, lastDelivery: { status: 'none' } };
   app.setApi(async (url) => url === '/api/credentials' ? [credential] : url === '/api/notifications' ? { channels: [channel] } : settings);
   await app.settings('connections', 'email'); const email = app.body.querySelector('.channel-dialog');
-  assert.match(email.textContent, /邮箱.*未启用.*配置完整.*SMTP 主机/);
+  assert.match(email.textContent, /Email.*未选择.*配置完整.*SMTP 主机/);
   assert.equal(email.querySelectorAll('input').every(input => !input.disabled), true);
-  const toggle = email.querySelector('input'); await toggle.click(); await toggle.click();
-  assert.equal(toggle.checked, false);
+  assert.equal(email.querySelectorAll('input').some(input => input.type === 'checkbox'), false);
   assert.equal(settings.find((entry) => entry.id === 'email.recipient').value, 'old@example.test');
   await byText(email.querySelector('.channel-dialog-actions'), '取消').click();
   assert.equal(app.body.querySelector('.channel-dialog'), null);
@@ -528,7 +527,7 @@ test('notification UI saves event preferences separately and protects test in-fl
   assert.equal(app.main.querySelectorAll('.notification-preferences').length, 1);
   assert.doesNotMatch(app.main.textContent, /Weekly 完成后发送邮件/);
   await byText(app.main, '保存通知偏好').click();
-  assert.deepEqual(Array.from(calls[0][1].updates, (entry) => entry.id), ['notification.radar', 'notification.weekly']);
+  assert.deepEqual(Array.from(calls[0][1].updates, (entry) => entry.id), ['email.enabled', 'notification.radar', 'notification.weekly']);
   app.main.replaceChildren(); await app.settings('connections', 'email');
   const modal = app.body.querySelector('.channel-dialog');
   const host = modal.querySelectorAll('input').find((input) => input.type === 'text'); host.value = 'new.example.test';
@@ -603,7 +602,8 @@ for (const [emailEnabled, qqEnabled] of [[false, false], [true, false], [false, 
   assert.ok(app.main.querySelectorAll('.channel-card')[1].querySelector('button'));
   assert.match(app.main.textContent, /发送成功/);
   assert.match(app.main.textContent, /发送频率受限/);
-  assert.deepEqual(app.main.querySelectorAll('input').filter(input => input.type === 'checkbox').map(input => input.checked), []);
+  assert.deepEqual(app.main.querySelectorAll('input').filter(input => input.type === 'checkbox').map(input => input.checked), [emailEnabled, qqEnabled]);
+  for (const [index, enabled] of [emailEnabled, qqEnabled].entries()) assert.ok(app.main.querySelectorAll('.channel-card')[index].textContent.includes(enabled ? '已选择' : '未选择'));
 });
 
 test('QQ disabled configuration opens in the global modal; Test and credentials preserve toggle', async () => {
@@ -624,7 +624,7 @@ test('QQ disabled configuration opens in the global modal; Test and credentials 
   await app.settings('connections', 'qq');
   const card = app.body.querySelector('.channel-dialog');
   assert.equal(card.getAttribute('aria-modal'), 'true');
-  assert.equal(card.querySelector('input').checked, false);
+  assert.equal(card.querySelectorAll('input').some(input => input.type === 'checkbox'), false);
   assert.match(card.textContent, /单聊用户/);
   assert.match(card.textContent, /群聊/);
   await byText(card, '发送测试通知').click();
@@ -654,7 +654,7 @@ function notificationUiFixture({ fail = false, external = false } = {}) {
   const channels = ids.map(id => ({ id, enabled: false, readiness: 'configured', missing: [], credential: { id: id === 'email' ? 'SMTP_PASS' : `${id.toUpperCase()}_SECRET`, configured: true, writable: !external, reason: external ? '由外部环境管理，只读' : '' }, lastDelivery: { status: 'none' } }));
   const entries = ids.map(id => ({ category: 'Notifications', id: `${id}.enabled`, description: `启用 ${id}`, available: true, type: 'boolean', value: false, validation: {} }));
   entries.push({ category: 'Notifications', id: 'smtp.host', description: 'SMTP 主机', available: true, type: 'string', value: 'old.example.test', validation: {} });
-  for (const event of ['radar', 'weekly']) entries.push({ category: 'Notifications', id: `notification.${event}.channels`, description: `${event} 通知渠道`, available: true, type: 'list', value: [event === 'radar' ? 'qq' : 'email'], validation: { values: ids } });
+  for (const event of ['radar', 'weekly']) entries.push({ category: 'Notifications', id: `notification.${event}`, description: `${event} 通知`, available: true, type: 'boolean', value: event === 'radar', validation: {} });
   app.setApi(async (url, input) => {
     if (!input) return url === '/api/settings' ? entries : url === '/api/credentials' ? [] : { channels };
     calls.push([url, input]);
@@ -670,7 +670,7 @@ for (const id of ['email', 'qq', 'wechat', 'feishu', 'wecom']) test(`notificatio
   assert.deepEqual(Array.from(app.settingViews.connections, entry => entry[0]), ['notifications', 'credentials']);
   await app.settings('connections', id);
   assert.equal(app.main.querySelectorAll('.channel-card').length, 5);
-  assert.equal(app.main.querySelectorAll('input').length, 10, 'only event choices on the page');
+  assert.equal(app.main.querySelectorAll('input').length, 7, 'five global choices and two event switches');
   const modal = app.body.querySelector('.channel-dialog'); const backdrop = app.body.querySelector('.channel-backdrop');
   assert.equal(modal.getAttribute('role'), 'dialog'); assert.equal(modal.getAttribute('aria-modal'), 'true');
   assert.equal(app.main.inert, true); assert.equal(app.body.style.overflow, 'hidden');
@@ -687,31 +687,42 @@ for (const id of ['email', 'qq', 'wechat', 'feishu', 'wecom']) test(`notificatio
 });
 test('channel Save refreshes card then closes; Cancel never saves', async () => {
   const { app, calls } = notificationUiFixture(); await app.settings('connections', 'email');
-  let modal = app.body.querySelector('.channel-dialog'); await modal.querySelector('input').click();
+  let modal = app.body.querySelector('.channel-dialog'); modal.querySelector('input').value = 'new.example.test';
   await byText(modal, '保存设置').click();
   assert.equal(app.body.querySelector('.channel-dialog'), null);
-  assert.match(app.main.querySelector('.channel-card').textContent, /已启用 · 配置完整/);
-  assert.deepEqual(Array.from(calls[0][1].updates, entry => entry.id), ['email.enabled']);
+  assert.match(app.main.querySelector('.channel-card').textContent, /未选择 · 配置完整/);
+  assert.deepEqual(Array.from(calls[0][1].updates, entry => entry.id), ['smtp.host']);
   await app.main.querySelector('.channel-card').querySelector('button').click(); modal = app.body.querySelector('.channel-dialog');
-  await modal.querySelector('input').click(); await byText(modal.querySelector('.channel-dialog-actions'), '取消').click();
-  assert.equal(calls.length, 1); assert.match(app.main.querySelector('.channel-card').textContent, /已启用/);
+  modal.querySelector('input').value = 'cancelled.example.test'; await byText(modal.querySelector('.channel-dialog-actions'), '取消').click();
+  assert.equal(calls.length, 1); assert.match(app.main.querySelector('.channel-card').textContent, /未选择/);
 });
 test('failed Save keeps modal/input/card state and focuses the error; external credential stays read-only', async () => {
   const { app } = notificationUiFixture({ fail: true, external: true }); await app.settings('connections', 'email');
   const modal = app.body.querySelector('.channel-dialog'); const input = modal.querySelectorAll('input').find(node => node.type === 'text');
-  input.value = 'unsaved.example.test'; await modal.querySelector('input').click(); await byText(modal, '保存设置').click();
+  input.value = 'unsaved.example.test'; await byText(modal, '保存设置').click();
   assert.equal(app.body.querySelector('.channel-dialog'), modal); assert.equal(input.value, 'unsaved.example.test');
-  assert.match(app.main.querySelector('.channel-card').textContent, /未启用/);
+  assert.match(app.main.querySelector('.channel-card').textContent, /未选择/);
   assert.equal(app.document.activeElement, modal.querySelector('.field-error'));
   assert.match(modal.textContent, /外部环境管理/); assert.equal(modal.querySelectorAll('input').some(node => node.type === 'password'), false);
 });
-test('notification event channel choices are independent and save only preference fields', async () => {
+test('one global selector and two independent event switches save once and refresh selected cards', async () => {
   const { app, calls } = notificationUiFixture(); await app.settings('connections', 'notifications');
-  const choices = app.main.querySelectorAll('.setting-options'); assert.equal(choices.length, 2);
-  const checked = node => node.querySelectorAll('input').filter(input => input.checked).map(input => input.value);
-  assert.deepEqual(checked(choices[0]), ['qq']); assert.deepEqual(checked(choices[1]), ['email']);
-  await choices[0].querySelectorAll('input')[0].click(); assert.deepEqual(checked(choices[1]), ['email']);
+  const choices = app.main.querySelectorAll('.notification-global-channels'); assert.equal(choices.length, 1);
+  assert.equal(choices[0].querySelectorAll('input').length, 5);
+  const events = app.main.querySelectorAll('.notification-event'); assert.equal(events.length, 2);
+  for (const event of events) assert.equal(event.querySelectorAll('input').length, 1);
+  assert.equal(events[0].querySelector('input').checked, true); assert.equal(events[1].querySelector('input').checked, false);
+  await choices[0].querySelectorAll('input')[1].click(); await events[0].querySelector('input').click();
+  assert.equal(events[1].querySelector('input').checked, false);
   await byText(app.main, '保存通知偏好').click();
-  assert.deepEqual(Array.from(calls[0][1].updates, entry => entry.id), ['notification.radar.channels', 'notification.weekly.channels']);
-  assert.deepEqual(Array.from(calls[0][1].updates[0].value), ['email', 'qq']);
+  assert.deepEqual(Array.from(calls[0][1].updates, entry => entry.id), ['email.enabled', 'qq.enabled', 'wechat.enabled', 'feishu.enabled', 'wecom.enabled', 'notification.radar', 'notification.weekly']);
+  assert.deepEqual(Array.from(calls[0][1].updates, entry => entry.value), [false, true, false, false, false, false, false]);
+  assert.match(app.main.querySelectorAll('.channel-card')[1].textContent, /已选择/);
+  assert.equal(app.body.querySelector('.channel-dialog'), null);
+});
+
+test('credential-only provider Save closes without posting an empty settings batch', async () => {
+  const { app, calls } = notificationUiFixture(); await app.settings('connections', 'wecom');
+  const modal = app.body.querySelector('.channel-dialog'); await byText(modal, '保存设置').click();
+  assert.equal(app.body.querySelector('.channel-dialog'), null); assert.equal(calls.length, 0);
 });

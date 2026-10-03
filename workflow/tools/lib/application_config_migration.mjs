@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { DOMAIN_SECTIONS, assertNonSecret, applicationConfigPath } from './application_config.mjs';
+import { DOMAIN_SECTIONS, assertNonSecret, applicationConfigPath, normalizeNotificationPreferences } from './application_config.mjs';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { getTranslationConfig } from './title_translation_support.mjs';
 import { getPreferenceLearningConfig } from './preference_learning_support.mjs';
@@ -48,9 +48,9 @@ export async function migrateApplicationConfig({ root, env = {}, configPath, ato
   return withAtomicJsonLock(target, async () => {
     const old = await read(target);
     if (old) validateRunnerConfigObject(old);
-    if (old?.schemaVersion === 6) return { migrated: false, schemaVersion: 6 };
-    if ([3, 4, 5].includes(old?.schemaVersion)) {
-      const candidate = upgradeOutboundChannelsConfig(old, now);
+    if ([3, 4, 5, 6].includes(old?.schemaVersion)) {
+      const candidate = normalizeNotificationPreferences(upgradeOutboundChannelsConfig(old, now));
+      if (JSON.stringify(candidate) === JSON.stringify(old)) return { migrated: false, schemaVersion: 6 };
       validateRunnerConfigObject(candidate);
       const backup = `${target}.v${old.schemaVersion}-backup`;
       const existing = await read(backup);

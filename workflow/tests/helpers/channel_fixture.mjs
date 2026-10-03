@@ -10,7 +10,7 @@ import { recipientHash, receiptPathFor, readNotificationReceipt } from '../../to
 import { CHANNEL_IDS } from '../../tools/notification/channels.mjs';
 import { recordRadarNotificationOutcome } from '../../tools/radar/state.mjs';
 const base = fileURLToPath(new URL('../../../tests/runs/channel-fixtures/', import.meta.url));
-export async function businessChannelsFixture(t, { profile = 'standard', enabled = CHANNEL_IDS, failed = [], unknown = [] } = {}) {
+export async function businessChannelsFixture(t, { profile = 'standard', enabled = CHANNEL_IDS, notificationsEnabled = true, failed = [], unknown = [] } = {}) {
   await fs.mkdir(base, { recursive: true }); const root = await fs.mkdtemp(path.join(base,'case-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
   const runId = `channels-${profile}`; const state = path.join(root,runId); const hash = 'b'.repeat(64); const recipient = 'reader@example.test';
   const coordinator = await createRunRecoveryCoordinator({ runRoot: root, runId, mode: 'web', profile, launcherId: 'web-fixed-launcher/runner', configHash: hash, inputHash: hash, artifactPath: path.join(state,'business.json') });
@@ -20,8 +20,8 @@ export async function businessChannelsFixture(t, { profile = 'standard', enabled
   const before = await fs.readFile(path.join(state,'business.json'), 'utf8');
   const receiptPath = profile === 'radar' ? radarNotificationReceiptPath(state,runId,items,audit) : receiptPathFor(state);
   const type = profile === 'radar' ? 'radar_business' : 'run_summary';
-  const emailOperation = enabled.includes('email') ? await coordinator.prepareFileOperation({ type: 'notification', targetId: recipientHash(recipient), targetPath: receiptPath, input: { runId }, retryable: false, intent: { notificationType: type, eventEpoch: runId } }) : null;
-  const env = { PAPERECHO_CONFIG_SCHEMA_VERSION: '6', PAPERECHO_EMAIL_ENABLED: String(enabled.includes('email')) };
+  const emailOperation = notificationsEnabled && enabled.includes('email') ? await coordinator.prepareFileOperation({ type: 'notification', targetId: recipientHash(recipient), targetPath: receiptPath, input: { runId }, retryable: false, intent: { notificationType: type, eventEpoch: runId } }) : null;
+  const env = { PAPERECHO_CONFIG_SCHEMA_VERSION: '6', PAPERECHO_EMAIL_ENABLED: String(enabled.includes('email')), [profile === 'radar' ? 'PAPERECHO_NOTIFY_RADAR' : 'PAPERECHO_NOTIFY_WEEKLY']: String(notificationsEnabled) };
   env.FEISHU_WEBHOOK_URL = new URL('/open-apis/bot/v2/hook/' + '0'.repeat(8) + '-0000-0000-0000-' + '0'.repeat(12), 'https://open.feishu.cn').href;
   env.WECOM_WEBHOOK_URL = new URL('/cgi-bin/webhook/send?key=' + 'generated-key', 'https://qyapi.weixin.qq.com').href;
   for (const id of CHANNEL_IDS.filter(id => id !== 'email')) env[`PAPERECHO_${id.toUpperCase()}_CHANNEL`] = JSON.stringify({ enabled: enabled.includes(id), appId: 'fixture', targetType: 'user', targetId: 'fixture-recipient', uid: 'UID_' + 'generatedFixture' });

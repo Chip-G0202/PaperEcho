@@ -530,11 +530,7 @@ function currentSettingText(setting) {
 }
 function settingControl(setting) {
   let input;
-  if (/^notification\.(radar|weekly)\.channels$/.test(setting.id)) {
-    input = el('fieldset', undefined, 'setting-options'); input.append(el('legend', setting.description));
-    for (const value of setting.validation.values) { const checkbox = el('input'); checkbox.type = 'checkbox'; checkbox.value = value; checkbox.checked = (setting.value || []).includes(value); input.append(label(({ email: '邮箱', qq: 'QQ', wechat: '微信', feishu: '飞书', wecom: '企业微信' })[value], checkbox)); }
-    Object.defineProperty(input, 'value', { get: () => [...input.querySelectorAll('input')].filter(node => node.checked).map(node => node.value) });
-  } else if (setting.id === 'sources.override') {
+  if (setting.id === 'sources.override') {
     input = el('fieldset', undefined, 'setting-options source-options'); input.append(el('legend', setting.description));
     const labels = { rss: '启用 RSS 期刊订阅', pubmed_pmc: 'PubMed / PMC', openalex: 'OpenAlex', semantic_scholar: 'Semantic Scholar' };
     const shown = setting.optionScope === 'rss' ? ['rss'] : setting.validation.values.filter((value) => value !== 'rss');
@@ -643,6 +639,7 @@ async function settings(group = settingsGroup, view = settingsView) {
     const toggleIds = new Set(featureToggleIds); const saves = []; const dependentRows = []; const featureToggles = []; let unavailable = 0;
     const orderedEntries = toggleIds.size ? [...entries].sort((a, b) => Number(toggleIds.has(b.id)) - Number(toggleIds.has(a.id))) : entries;
     for (const entry of orderedEntries) {
+      const rowContainer = featureOptions.rowContainer?.(entry) || container;
       const setting = { ...entry, sourceEntry: entry, optionScope: settingsView, description: entry.description.replace(/translation/g, '标题翻译').replace(/preference/g, '偏好学习').replace(/required/g, '必要').replace(/optional/g, '补充').replace(/negative/g, '排除').replace(/owner/g, '配置服务').replace(/workflow/g, '工作流').replace(/Weekly/g, '周报') };
       if (setting.id === 'sources.override') setting.description = settingsView === 'rss' ? 'RSS 订阅状态' : '选择 PaperEcho 用于检索论文的数据库来源';
       if (setting.id === 'pubmed.days') setting.description = 'PubMed / PMC 检索天数';
@@ -652,14 +649,14 @@ async function settings(group = settingsGroup, view = settingsView) {
         unavailable += 1;
         continue;
       }
-      if (setting.readOnly) { row.append(el('p', `${setting.description}：${setting.value}（只读）`)); container.append(row); continue; }
-      if (setting.type === 'rss') { const read = rssEditor(setting, row); saves.push({ setting, read, input: row }); container.append(row); continue; }
+      if (setting.readOnly) { row.append(el('p', `${setting.description}：${setting.value}（只读）`)); rowContainer.append(row); continue; }
+      if (setting.type === 'rss') { const read = rssEditor(setting, row); saves.push({ setting, read, input: row }); rowContainer.append(row); continue; }
       const input = settingControl(setting);
       if (setting.synthetic) { input.addEventListener('change', () => { setting.changed = true; }); }
       if (toggle) { featureToggles.push(input); input.id ||= `field-${crypto.randomUUID()}`; input.setAttribute('aria-label', setting.description); const switchLabel = el('label'); switchLabel.htmlFor = input.id; const switchCopy = el('span', undefined, 'feature-toggle-copy'); const stateText = el('small', setting.value === true ? '当前已开启' : '当前已关闭'); switchCopy.append(el('strong', setting.description), stateText); switchLabel.append(switchCopy, input); row.append(switchLabel); input.addEventListener('change', () => { stateText.textContent = `待保存：${input.checked ? '开启' : '关闭'}`; }); if (setting.mixed) row.append(el('p', '现有相关开关状态不一致；切换并保存后会同步。', 'meta')); setting.stateText = stateText; }
       else { if (toggleIds.size) dependentRows.push({ row, input }); if (input.className.includes('setting-options')) row.append(input); else if (setting.type === 'boolean') { const stateText = el('p', setting.value === true ? '当前已开启' : '当前已关闭', 'meta'); row.append(label(setting.description, input), stateText); setting.stateText = stateText; } else { const currentValue = el('p', `当前：${currentSettingText(setting)}`, 'setting-current'); row.append(currentValue, label(`${setting.description}（留空不变）`, input)); setting.currentValue = currentValue; } }
       if (setting.validation.min !== undefined || setting.validation.max !== undefined) row.append(el('small', `允许范围：${setting.validation.min ?? '不限'}–${setting.validation.max ?? '不限'}`));
-      saves.push({ setting, input, read: () => settingValue(setting, input) }); container.append(row);
+      saves.push({ setting, input, read: () => settingValue(setting, input) }); rowContainer.append(row);
     }
     let syncFeatureStatus = () => {};
     if (toggleIds.size && featureOptions.statusText) {
@@ -759,12 +756,25 @@ async function settings(group = settingsGroup, view = settingsView) {
   if (settingsGroup === 'connections' && settingsView === 'notifications') {
     const channelSettings = await api('/api/notifications');
     const preferences = el('section', undefined, 'settings-section section notification-preferences');
-    preferences.append(el('h3', '通知偏好', 'section-header'), el('p', '分别选择 Radar 与周报的通知渠道；渠道配置在下方卡片中管理。', 'meta'));
-    appendSettingsControls(preferences, data.filter(entry => entry.id.startsWith('notification.')), '通知偏好', '保存通知偏好');
+    preferences.append(el('h3', '通知偏好', 'section-header'), el('p', '选择一次通知渠道，再分别开启 Daily Radar 与 Weekly 通知。平台配置在下方卡片中管理。', 'meta'));
+    const names = { email: 'Email', qq: 'QQ', wechat: '微信', feishu: '飞书', wecom: '企业微信' };
+    const globalIds = notificationChannelIds.map(id => `${id}.enabled`);
+    const selector = el('fieldset', undefined, 'notification-global-channels'); selector.append(el('legend', '通知渠道'), el('p', 'PaperEcho 使用哪些平台发送通知。', 'meta')); preferences.append(selector);
+    const events = new Map();
+    for (const [event, title] of [['radar', 'Daily Radar 通知'], ['weekly', 'Weekly 通知']]) {
+      const region = el('section', undefined, 'notification-event'); region.dataset.event = event;
+      region.append(el('h4', title), el('p', `开启后，${event === 'radar' ? 'Daily Radar' : 'Weekly'} 会通过上方选择的通知渠道发送。`, 'meta')); preferences.append(region); events.set(`notification.${event}`, region);
+    }
+    const other = el('details', undefined, 'notification-other'); other.append(el('summary', '其它提醒')); preferences.append(other);
+    const preferenceEntries = data.filter(entry => globalIds.includes(entry.id) || entry.id.startsWith('notification.')).map(entry => ({ ...entry, description: globalIds.includes(entry.id) ? names[entry.id.split('.')[0]] : events.has(entry.id) ? '启用通知' : entry.description }));
+    appendSettingsControls(preferences, preferenceEntries, '通知偏好', '保存通知偏好', [], {
+      rowContainer: entry => globalIds.includes(entry.id) ? selector : events.get(entry.id) || other,
+      refresh: async () => { for (const next of (await api('/api/notifications')).channels) { const card = cards.get(next.id); if (card) { Object.assign(card.channel, next); card.sync(); } } },
+    });
+    other.hidden = !preferenceEntries.some(entry => entry.id.startsWith('notification.') && !events.has(entry.id));
     body.append(preferences);
     const grid = el('div', undefined, 'notification-channel-grid'); body.append(grid);
     const descriptions = { email: '通过邮件接收研究摘要与提醒。', qq: '通过 QQ 官方机器人接收 Markdown 摘要。', wechat: '通过 WxPusher 接收微信通知。', feishu: '通过飞书群机器人接收摘要。', wecom: '通过企业微信群机器人接收摘要。' };
-    const names = { email: '邮箱', qq: 'QQ', wechat: '微信', feishu: '飞书', wecom: '企业微信' };
     const icons = { email: '✉', qq: 'Q', wechat: '微', feishu: '飞', wecom: '企' };
     const readinessLabels = { configured: '配置完整', incomplete: '配置不完整', invalid: '配置错误' };
     const cards = new Map();
@@ -773,7 +783,7 @@ async function settings(group = settingsGroup, view = settingsView) {
       const card = el('section', undefined, 'settings-section channel-card'); card.dataset.channel = channel.id;
       const heading = el('div', undefined, 'channel-heading'); const icon = el('span', icons[channel.id], 'channel-icon'); icon.setAttribute('aria-hidden', 'true'); heading.append(icon, el('h3', name));
       const status = el('p', undefined, 'channel-status'); const recent = el('p', undefined, 'meta delivery-status');
-      const sync = () => { status.textContent = `${channel.enabled ? '已启用' : '未启用'} · ${readinessLabels[channel.readiness] || '配置不完整'}`; recent.textContent = emailDeliveryText(channel.lastDelivery || { status: 'none' }); };
+      const sync = () => { status.textContent = `${channel.enabled ? '已选择' : '未选择'} · ${readinessLabels[channel.readiness] || '配置不完整'}`; recent.textContent = emailDeliveryText(channel.lastDelivery || { status: 'none' }); };
       sync(); const actions = el('div', undefined, 'actions channel-actions');
       const open = button('设置', () => openChannel(channel, open)); open.className = 'primary'; open.setAttribute('aria-label', `设置${name}`); actions.append(open);
       card.append(heading, el('p', descriptions[channel.id], 'channel-description'), status, recent, actions); grid.append(card); cards.set(channel.id, { channel, sync, open });
@@ -785,7 +795,7 @@ async function settings(group = settingsGroup, view = settingsView) {
       const dialog = el('section', undefined, 'channel-dialog settings-section'); dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.tabIndex = -1;
       const title = el('h2', `${name}通知设置`); title.id = 'channel-dialog-title'; dialog.setAttribute('aria-labelledby', title.id);
       const status = el('p', undefined, 'channel-status');
-      const sync = () => { status.textContent = `${channel.enabled ? '已启用' : '未启用'} · ${readinessLabels[channel.readiness] || '配置不完整'}`; };
+      const sync = () => { status.textContent = `${channel.enabled ? '已选择' : '未选择'} · ${readinessLabels[channel.readiness] || '配置不完整'}`; };
       const refresh = async () => {
         const next = (await api('/api/notifications')).channels.find(entry => entry.id === channel.id);
         if (!next) throw new Error('设置已提交，但渠道状态未能读取，请重新读取后确认。');
@@ -802,11 +812,11 @@ async function settings(group = settingsGroup, view = settingsView) {
       };
       const header = el('header', undefined, 'channel-dialog-header'); const copy = el('div'); copy.append(title, status, el('p', descriptions[channel.id], 'meta')); const dismiss = button('关闭', () => close(true)); dismiss.setAttribute('aria-label', '关闭通知设置'); header.append(copy, dismiss); dialog.append(header);
       const form = el('div', undefined, 'channel-dialog-body'); dialog.append(form);
-      form.append(el('p', '关闭渠道会保留配置和凭据。配置完整不代表平台已验证；测试使用已保存的设置。', 'meta'));
+      form.append(el('p', '渠道选择在通知偏好中管理。配置完整不代表平台已验证；测试使用已保存的设置，与渠道选择及事件开关无关。', 'meta'));
       if (channel.id === 'qq') form.append(el('p', '使用 QQ 机器人 AppID / AppSecret；目标是机器人对应的用户或群 OpenID，不是 QQ 号码。', 'meta'));
       if (channel.id === 'wechat') form.append(el('p', 'WxPusher API 接受不等于微信已送达；绑定与激活状态由客户端确认。', 'meta'));
       const records = [];
-      for (const entry of data.filter(entry => entry.category === 'Notifications' && (channel.id === 'email' ? entry.id.startsWith('email.') || entry.id.startsWith('smtp.') : entry.id.startsWith(channel.id + '.')))) {
+      for (const entry of data.filter(entry => entry.category === 'Notifications' && entry.id !== `${channel.id}.enabled` && (channel.id === 'email' ? entry.id.startsWith('email.') || entry.id.startsWith('smtp.') : entry.id.startsWith(channel.id + '.')))) {
         if (!entry.available) continue;
         const row = el('div', undefined, 'setting');
         if (entry.readOnly) { row.append(el('p', `${entry.description}：${currentSettingText(entry)}（只读）`)); form.append(row); continue; }
@@ -825,7 +835,7 @@ async function settings(group = settingsGroup, view = settingsView) {
           if (input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。');
           const value = settingValue(entry, input); return value === undefined ? [] : [{ id: entry.id, value }];
         });
-        await api('/api/settings', { updates }); await refresh();
+        if (updates.length) await api('/api/settings', { updates }); await refresh();
         for (const { entry } of records) { const update = updates.find(item => item.id === entry.id); if (update) entry.value = update.value; }
         notice.textContent = `${name}通知设置已保存。`; close(true);
       }); save.className = 'primary'; footer.append(save);

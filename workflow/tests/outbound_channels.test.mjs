@@ -11,6 +11,16 @@ import { businessChannelsFixture } from './helpers/channel_fixture.mjs';
 import { assertNotificationParity } from './helpers/notification_parity.mjs';
 const texts={qq:p=>p.markdown.content,wechat:p=>p.messages.map(part=>part.content).join(''),feishu:p=>[p.content.post.zh_cn.title,...p.content.post.zh_cn.content.flat().map(node=>node.text)].join('\n'),wecom:p=>p.markdown.content};
 const papers=['C','A','B','D','A'].map((grade,i)=>({id:`paper-${i}`,title:`Paper [${i}] end`,translatedTitle:`译文${i}`,final_grade:grade,recommendation_reason:`Reason ${i}`,journal:'Journal',year:'2026',source_type:'RSS',excluded:i===4}));
+for (const [enabled, daily, weekly] of [[['email', 'qq'], true, true], [['email', 'qq'], true, false], [['qq'], false, true], [[], true, true]]) {
+  for (const profile of ['radar', 'standard']) test(`global selection [${enabled}] Daily=${daily} Weekly=${weekly} reaches ${profile} Stage5`, async t => {
+    const notificationsEnabled = profile === 'radar' ? daily : weekly;
+    const f = await businessChannelsFixture(t, { profile, enabled, notificationsEnabled });
+    assert.equal(f.initial.businessStatus, 'success'); assert.equal(f.initial.notificationStatus, 'completed');
+    for (const id of CHANNEL_IDS) assert.equal(f.messages[id].length, notificationsEnabled && enabled.includes(id) ? 1 : 0);
+    assert.equal(await fs.readFile(path.join(f.state, 'business.json'), 'utf8'), f.before);
+    if (!notificationsEnabled || !enabled.length) assert.equal(f.coordinator.store.ledger.operations.some(op => op.type === 'notification'), false);
+  });
+}
 for(const event of ['radar','weekly'])test(`all five ${event} renderers show the same canonical summary and keep papers internal`,()=>{
   const content=event==='radar'?buildRadarNotificationContent(papers,{runId:'one-event',audit:{candidateCount:8}}):buildWeeklyNotificationContent({runId:'one-event',counts:{created:3,grades:{A:1,B:1,C:1}},finishedAt:'2026-09-30'},{literatureItems:papers,overview:'Existing overview'});
   assert.deepEqual(content.items.map(item=>item.id),['paper-0','paper-1','paper-2']); const before=structuredClone(content);

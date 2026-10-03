@@ -49,7 +49,25 @@ export function readApplicationConfig(options = {}) {
   catch (error) { if (error.code === 'ENOENT') return null; throw new Error('APPLICATION_CONFIG_UNREADABLE'); }
   if (![1, 2, 3, 4, 5, 6].includes(config?.schemaVersion)) throw new Error('APPLICATION_CONFIG_SCHEMA_UNSUPPORTED');
   if (config.schemaVersion < 3) return null;
-  return validateRunnerConfigObject(config);
+  return normalizeNotificationPreferences(validateRunnerConfigObject(config));
+}
+
+// Legacy lists filtered existing global switches; merging must never enable
+// a previously disabled channel. Missing lists retain historical fan-out.
+export function normalizeNotificationPreferences(config) {
+  const notifications = config?.common?.notifications;
+  if (!['radar', 'weekly'].some(event => notifications?.[event]?.channels !== undefined)) return config;
+  const next = structuredClone(config);
+  const ids = ['email', 'qq', 'wechat', 'feishu', 'wecom'];
+  const selected = new Set(['radar', 'weekly'].flatMap(event => notifications[event]?.channels ?? ids));
+  next.common.email ||= {};
+  next.common.email.enabled = config.common.email?.enabled !== false && selected.has('email');
+  for (const id of ids.slice(1)) {
+    const channel = next.common.notifications.channels?.[id];
+    if (channel) channel.enabled = channel.enabled === true && selected.has(id);
+  }
+  for (const event of ['radar', 'weekly']) next.common.notifications[event] = { enabled: notifications[event]?.enabled !== false };
+  return next;
 }
 
 // Existing domain consumers receive their old in-memory shape, never an exported legacy file.

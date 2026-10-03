@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { MODES, PROFILES, RUNNER_SCHEMA_VERSION, SUPPORTED_RUNNER_CONFIG_SCHEMAS } from "./constants.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
-import { DOMAIN_SECTIONS, validateApplicationSections } from '../lib/application_config.mjs';
+import { DOMAIN_SECTIONS, validateApplicationSections, normalizeNotificationPreferences } from '../lib/application_config.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const DEFAULT_CONFIG_PATH = path.join(REPO_ROOT, "config", "paperecho.config.json");
@@ -285,7 +285,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   }
 
   const loaded = await loadConfigFile({ requestedPath, source: configSource, fsApi, cwd });
-  const config = loaded.config;
+  const config = normalizeNotificationPreferences(loaded.config);
   const configSelection = selectConfigMode(config);
   const warnings = [];
   if (cliOptions.fixedMode && configSelection.mode && configSelection.mode !== cliOptions.mode) {
@@ -313,7 +313,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   setEnvValue(effectiveEnv, "PAPERECHO_EMAIL_ENABLED", common.email.enabled !== false);
   setEnvValue(effectiveEnv, "PAPERECHO_NOTIFY_RADAR", common.notifications.radar?.enabled !== false);
   setEnvValue(effectiveEnv, "PAPERECHO_NOTIFY_WEEKLY", common.notifications.weekly?.enabled !== false);
-  for (const event of ['radar', 'weekly']) effectiveEnv[`PAPERECHO_NOTIFY_${event.toUpperCase()}_CHANNELS`] = JSON.stringify(common.notifications[event]?.channels ?? ['email', 'qq', 'wechat', 'feishu', 'wecom']);
+  for (const event of ['radar', 'weekly']) delete effectiveEnv[`PAPERECHO_NOTIFY_${event.toUpperCase()}_CHANNELS`];
   effectiveEnv.PAPERECHO_QQ_CHANNEL = JSON.stringify(config?.schemaVersion >= 5 ? common.notifications.channels?.qq || { enabled: false } : { enabled: false });
   for (const channel of ['wechat', 'feishu', 'wecom']) effectiveEnv[`PAPERECHO_${channel.toUpperCase()}_CHANNEL`] = JSON.stringify(configSchemaVersion >= 6 ? common.notifications.channels?.[channel] || { enabled: false } : { enabled: false });
   for (const name of ["PAPERECHO_FAILURE_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_DEGRADATION_THRESHOLD", "PAPERECHO_NOTIFICATION_RECEIPT_ROOT", "PAPERECHO_NOTIFICATION_HEALTH_ROOT", "PAPERECHO_NOTIFICATION_RETRY_FAILED", "PAPERECHO_NOTIFICATION_UNKNOWN_POLICY", "PAPERECHO_SOURCE_STATE_ROOT", "PAPERECHO_INTEGRITY_ENABLED", "PAPERECHO_INTEGRITY_BOOTSTRAP_BATCH_SIZE", "PAPERECHO_INTEGRITY_CROSSREF_CONCURRENCY", "PAPERECHO_INTEGRITY_PUBMED_BATCH_SIZE", "PAPERECHO_INTEGRITY_CACHE_TTL_DAYS"]) delete effectiveEnv[name];

@@ -6,7 +6,6 @@ import { buildPubMedQueryFromKeywordGroups } from './literature_config.mjs';
 import { readApplicationConfig, applicationConfigPath, DOMAIN_SECTIONS } from './application_config.mjs';
 import { migrateApplicationConfig, upgradeNotificationConfig, upgradeNotificationChannelsConfig, upgradeOutboundChannelsConfig } from './application_config_migration.mjs';
 import { isValidSmtpHost } from '../stage5/email_sender.mjs';
-import { CHANNEL_IDS } from '../notification/channels.mjs';
 
 const INITIAL_OWNER_VALUES = Object.freeze({
   'title_translation.config.json': { enabled: true },
@@ -70,8 +69,6 @@ for (const [id, category, key, type, description, validation] of [
   ['smtp.from', 'Notifications', 'common.email.smtp.from', 'email', '发件人（默认使用登录邮箱）'],
   ['notification.radar', 'Notifications', 'common.notifications.radar.enabled', 'boolean', 'Daily Radar 推荐通知'],
   ['notification.weekly', 'Notifications', 'common.notifications.weekly.enabled', 'boolean', '周报完成通知'],
-  ['notification.radar.channels', 'Notifications', 'common.notifications.radar.channels', 'list', 'Daily Radar 通知渠道', { values: CHANNEL_IDS }],
-  ['notification.weekly.channels', 'Notifications', 'common.notifications.weekly.channels', 'list', '周报通知渠道', { values: CHANNEL_IDS }],
   ['notification.failure', 'Notifications', 'common.notifications.failure.enabled', 'boolean', '运行失败时通知'],
   ['notification.health', 'Notifications', 'common.notifications.health.enabled', 'boolean', '运行健康状态提醒'],
   ['runtime.mode', 'Runtime', 'mode', 'enum', '运行路径', { values: ['local', 'desktop', 'web'] }],
@@ -166,7 +163,6 @@ export class ConfigService {
         if (definition.id === 'smtp.port' && value == null) value = 465;
         if (definition.id === 'smtp.secure' && value == null) value = Number(owner.value.common?.email?.smtp?.port ?? 465) === 465;
         if (definition.id === 'email.enabled' && value == null) value = true;
-        if (/^notification\.(radar|weekly)\.channels$/.test(definition.id) && value == null) value = [...CHANNEL_IDS];
         if (['qq.enabled','wechat.enabled','feishu.enabled','wecom.enabled'].includes(definition.id) && value == null) value = false;
         ownerPresent = owner.present;
       }
@@ -196,7 +192,7 @@ export class ConfigService {
     if (new Set(resolved.map((entry) => entry.id)).size !== resolved.length) throw new Error('SETTING_BATCH_INVALID');
     const ownerFiles = [...new Set(resolved.map((entry) => entry.definition.file))].sort();
     const notificationEdit = resolved.some(({ id }) => /^(email\.|smtp\.|notification\.|qq\.|wechat\.|feishu\.|wecom\.)/.test(id));
-    const outboundEdit = resolved.some(({ id }) => /^(wechat\.|feishu\.|wecom\.|notification\.(radar|weekly)\.channels$)/.test(id));
+    const outboundEdit = resolved.some(({ id }) => /^(wechat\.|feishu\.|wecom\.)/.test(id));
     const qqEdit = resolved.some(({ id }) => id.startsWith('qq.'));
     if (notificationEdit && !readApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath })) {
       await migrateApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath, atomicOptions: this.atomicOptions });
