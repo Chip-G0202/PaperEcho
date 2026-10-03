@@ -251,7 +251,7 @@ function empty(title, text) { const box = el('section', undefined, 'empty-state'
 async function system() {
   const status = await api('/api/status'); main.append(pageIntro('系统与数据状态', '这里展示已有运行证据，不主动连接外部服务或显示敏感路径。'));
   const list = el('dl', undefined, 'status-list');
-  for (const [name, value] of [['版本', 'PaperEcho v2.4'], ['本地服务', '已响应 · 仅本机访问'], ['运行数据', '使用启动时解析的当前工作区；路径不在网页展示'], ['检索来源', status.sources.join('、') || '未配置'], ['Zotero', status.zotero === 'unknown' ? '暂无可靠记录' : '已有历史写入记录；非实时连接检测'], ['下次运行', status.nextScheduledRun || '暂无可靠调度信息'], ['兼容入口', 'XLSX / DOCX 仍受支持；不进行双向反馈同步']]) list.append(el('dt', name), el('dd', value));
+  for (const [name, value] of [['版本', 'PaperEcho v2.5'], ['本地服务', '已响应 · 仅本机访问'], ['运行数据', '使用启动时解析的当前工作区；路径不在网页展示'], ['检索来源', status.sources.join('、') || '未配置'], ['Zotero', status.zotero === 'unknown' ? '暂无可靠记录' : '已有历史写入记录；非实时连接检测'], ['下次运行', status.nextScheduledRun || '暂无可靠调度信息'], ['兼容入口', 'XLSX / DOCX 仍受支持；不进行双向反馈同步']]) list.append(el('dt', name), el('dd', value));
   main.append(list);
 }
 async function feedback() {
@@ -736,7 +736,7 @@ async function settings(group = settingsGroup, view = settingsView) {
         if (spec.required && !String(entry.value || '').trim()) input.required = true;
         currentValue = el('p', `当前：${currentSettingText(entry)}`, 'setting-current');
         row.append(currentValue, label(`${entry.description}${spec.required ? '（必填；留空保持现值）' : '（选填；留空不变）'}`, input));
-        if (id === 'web.userId') row.append(el('small', 'Zotero 数字 User ID，不是用户名或邮箱。PaperEcho v2.4 的 Web 路径使用个人文库。'));
+        if (id === 'web.userId') row.append(el('small', 'Zotero 数字 User ID，不是用户名或邮箱。PaperEcho v2.5 的 Web 路径使用个人文库。'));
         panel.append(row); records.push({ pathName, entry, input, currentValue, required: spec.required, row });
       }
       if (pathName === 'web') {

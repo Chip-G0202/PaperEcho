@@ -25,7 +25,9 @@ test('sidebar owns L1 and L2 navigation while workspace owns L3 tabs', () => {
 });
 
 test('sidebar footer offers one accessible GitHub Star link without API or tracking', () => {
-  assert.match(html, /<div class="sidebar-footer">[\s\S]*<div class="sidebar-star">[\s\S]*仅本机访问[\s\S]*PaperEcho v2\.4/);
+  assert.match(html, /<div class="sidebar-footer">[\s\S]*<div class="sidebar-star">[\s\S]*仅本机访问[\s\S]*PaperEcho v2\.5/);
+  assert.doesNotMatch(html, /PaperEcho v2\.4/); assert.doesNotMatch(app, /PaperEcho v2\.4/);
+  assert.match(app, /\['版本', 'PaperEcho v2\.5'\]/);
   assert.match(html, /<a href="https:\/\/github\.com\/Chip-G0202\/PaperEcho" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 打开 PaperEcho 仓库">/);
   assert.match(html, /<svg[^>]*aria-hidden="true"[^>]*><path fill="currentColor"/);
   assert.match(html, /<span>GitHub Star<\/span><span aria-hidden="true">★<\/span>/);
