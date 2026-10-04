@@ -2,6 +2,7 @@ import { resolveCachedTranslation } from "../lib/title_translation_support.mjs";
 import { classifyLiterature } from '../stage1/semantic_grade_synthesis.mjs';
 import { feedbackIdentity } from '../lib/control_feedback_service.mjs';
 import { matchPendingPaperRecord, manualDecisionForRecord } from '../lib/pending_paper_review.mjs';
+import { getReviewDisplayMetadata } from '../lib/review_display_metadata.mjs';
 import {
   buildStage1WritebackCorrelationKey,
   buildWritebackReadyItems,
@@ -137,7 +138,10 @@ export function buildFinalExportPayload({
     .map(item => ({ ...item, semantic_stage_status: item.semantic_stage_status || reviewContext.semanticStageStatus, 写回状态: '未写回' })));
 
   return {
-    triaged,
+    triaged:triaged.map(item => {
+      const metadata = getReviewDisplayMetadata(item,{translationCache});
+      return metadata.translatedTitle ? { ...item, translatedTitle:metadata.translatedTitle, 标题翻译:metadata.translatedTitle, 中文标题:metadata.translatedTitle } : item;
+    }),
     reportContext: {
       ...reportContext,
       translation: {

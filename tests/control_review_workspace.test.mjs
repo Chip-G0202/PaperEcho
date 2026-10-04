@@ -5,6 +5,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { getReviewDisplayMetadata } from '../workflow/tools/lib/review_display_metadata.mjs';
 import { FeedbackService, PAPER_FEEDBACK, readCanonicalFeedback } from '../workflow/tools/lib/control_feedback_service.mjs';
 import { ReviewQueryService } from '../workflow/tools/lib/control_review_query_service.mjs';
 import { getWeeklyReviewEvidence } from '../workflow/tools/stage4/spreadsheet_adapter.mjs';
@@ -63,6 +64,20 @@ function ui() {
   return { ...context.testing, main, notice, body, document, location: context.location };
 }
 const papers = (count = 100) => Array.from({ length: count }, (_, i) => ({ id: String(i), title: `English ${i} — ${'long title '.repeat(i === 0 ? 80 : 1)}`, translatedTitle: `中文副标题 ${i}`, authors: ['测试作者'], finalGrade: ['A', 'B', 'C'][i % 3], ruleGrade: 'B', semanticGrade: 'A', needsReview: i === count - 1, manualReviewPending: i === count - 1, reviewReason: i === count - 1 ? '既有等级复审依据' : '', source: 'PubMed', journal: 'Journal', year: '2026', doi: i ? '' : '10.1234/test', pmid: String(1000 + i), zotero: 'not_used_local', feedbackAllowed: true, feedback: null }));
+
+test('Feedback and Manual cards render shared translated venue metadata and escaped text', async () => {
+  for (const section of ['normal','manual']) {
+    const app=ui();
+    const metadata=getReviewDisplayMetadata({title:'Synthetic <img src=x onerror=alert(1)> paper',translated_title:'统一中文副标题',source_platform:'rss',journal:'AAAS: Science Advances: Table of Contents',publicationTitle:'Science Advances'});
+    const item={...papers(1)[0],...metadata,needsReview:section==='manual',manualReviewPending:section==='manual',pendingReview:section==='manual'};
+    app.setApi(async()=>({runId:'display-fixture',total:1,items:[item]}));
+    await app.paperReview(true,section);
+    assert.match(app.main.textContent,/统一中文副标题/);assert.match(app.main.textContent,/Science Advances · RSS/);
+    assert.doesNotMatch(app.main.textContent,/AAAS:|Table of Contents|Latest Results/);
+    assert.equal(app.main.querySelector('h3').textContent,item.title);
+    assert.equal(app.main.querySelectorAll('img').length,0);
+  }
+});
 
 test('untitled Manual card uses existing fallback and saves its stable paper ID', async () => {
   const app=ui(),calls=[],item={...papers(1)[0],id:'stable-untitled',title:'',translatedTitle:'',doi:'',pmid:'',url:'https://example.org/untitled',pendingReview:true,manualReviewPending:true};

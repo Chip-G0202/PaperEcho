@@ -614,6 +614,7 @@ Detailed inputs, outputs, gates, and tests belong in `skills/paperecho-workflow/
 - Incomplete/missing Zotero coverage uses backend exact-lookup fallback; complete coverage may avoid a redundant lookup.
 - Local is not a Zotero backend: it must not construct one, start Desktop, call Stage2/Stage3, or persist item/collection/attachment/rating fields.
 - All paths use `generateLiteratureTitleTranslations`, `translatedTitle`, and `review_results/translation_cache.json`. Stage3 alone owns Zotero metadata writeback.
+- Reachable Manual items (including held D) receive shared title enrichment in Stage1; translation failure/disablement never changes review eligibility. Feedback and Manual share `review_display_metadata.mjs`; feed provenance is not publication venue, and Control Center reads never call translation providers.
 - Stage5 is SMTP-only, must not import Zotero modules, and must not scan history to guess attachments.
 - Each business run has run-scoped Stage5 state and a schema v1 `run_group.json`; housekeeping scan state stays under the runtime housekeeping directory, and long-lived state is never deleted by age.
 - Housekeeping deletes only registered, allowed run artifacts. Ephemeral cleanup deletes only explicitly registered closed/consumed files, never lookalikes discovered by glob.

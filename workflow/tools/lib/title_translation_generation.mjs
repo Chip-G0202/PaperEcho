@@ -1,4 +1,4 @@
-import { DEFAULT_CACHE_PATH, translateTitlesBatch } from "./title_translation_support.mjs";
+import { DEFAULT_CACHE_PATH, getTranslationConfig, translateTitlesBatch } from "./title_translation_support.mjs";
 
 function normalizedTranslationText(value) {
   return String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim();
@@ -11,20 +11,22 @@ export function isMeaningfulChineseTranslation(candidate, sourceTitle = "") {
 }
 
 export function existingTranslatedTitle(item = {}) {
-  const candidate = item.translatedTitle || item["标题翻译"] || item["中文标题"] || item.shortTitle || "";
-  return isMeaningfulChineseTranslation(candidate, item.title) ? normalizedTranslationText(candidate) : "";
+  const candidate = [item.translatedTitle, item.translated_title, item.title_translation, item["标题翻译"], item["中文标题"], item.shortTitle]
+    .find(value => isMeaningfulChineseTranslation(value, item.title));
+  return candidate ? normalizedTranslationText(candidate) : "";
 }
 
 export async function generateLiteratureTitleTranslations(items = [], {
   cachePath = DEFAULT_CACHE_PATH,
   translateTitlesBatchImpl = translateTitlesBatch,
+  enabled = getTranslationConfig().enabled,
 } = {}) {
   const source = Array.isArray(items) ? items : [];
   const missingTitles = source
     .filter((item) => !existingTranslatedTitle(item))
     .map((item) => String(item?.title || "").trim())
     .filter(Boolean);
-  const translated = missingTitles.length
+  const translated = enabled && missingTitles.length
     ? await translateTitlesBatchImpl(missingTitles, undefined, { cachePath })
     : { map: new Map(), usage: { total_items: 0, cache_hits: 0, cache_misses: 0, api_calls: 0 } };
   const failures = [];
@@ -38,11 +40,11 @@ export async function generateLiteratureTitleTranslations(items = [], {
       ? normalizedTranslationText(result.zh)
       : "";
     if (!value) {
-      if (title) failures.push({ title, reason: result?.reason || (result?.ok ? "translation_not_meaningful" : "translation_failed") });
+      if (title && enabled) failures.push({ title, reason: result?.reason || (result?.ok ? "translation_not_meaningful" : "translation_failed") });
       return { ...item, translatedTitle: "", "标题翻译": "", "中文标题": "", hasTranslation: false };
     }
     generatedCount += 1;
     return { ...item, translatedTitle: value, "标题翻译": value, "中文标题": value, hasTranslation: true };
   });
-  return { items: enriched, usage: translated?.usage || null, generated_count: generatedCount, failures };
+  return { items: enriched, usage: translated?.usage || null, generated_count: generatedCount, failures, ...(!enabled ? {skipped_reason:'disabled_by_config'} : {}) };
 }

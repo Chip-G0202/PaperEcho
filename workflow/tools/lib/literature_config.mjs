@@ -28,7 +28,7 @@ export function loadRssSources({ root } = {}) {
   const sources = rawSources
     .map((entry) => typeof entry === "string" ? { url: entry, enabled: true } : entry)
     .filter((entry) => enabled(entry) && String(entry?.url || "").trim())
-    .map((entry) => ({ name: String(entry.name || entry.url).trim(), url: String(entry.url).trim() }));
+    .map((entry) => ({ name: String(entry.name || entry.url).trim(), url: String(entry.url).trim(), ...(entry.publicationTitle ? { publicationTitle: String(entry.publicationTitle).trim() } : {}) }));
   return { path: resolvedPath, sources, warnings, raw_count: rawSources.length, enabled_count: sources.length };
 }
 

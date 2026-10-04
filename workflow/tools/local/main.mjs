@@ -10,6 +10,7 @@ import { LocalTiming, formatTimingSummary } from "./local_timing.mjs";
 import { buildExportManifest, buildRunSummary } from "../lib/run_summary.mjs";
 import { buildLocalRuntimeConfig } from "../lib/runtime_config.mjs";
 import { generateLiteratureTitleTranslations } from "../lib/title_translation_generation.mjs";
+import { isManualReviewReachable } from '../stage4/finalize_exports_support.mjs';
 import { resolveStage5Request, runStage5Notification } from "../stage5/main.mjs";
 import { receiptPathFor, recipientHash } from "../stage5/email_receipt.mjs";
 import { emailDeliveryPolicy } from '../notification/policy.mjs';
@@ -183,7 +184,7 @@ export async function runLocalPipeline(options = {}, dependencies = {}) {
       zoteroBoundaries: dependencies.zoteroBoundaries || {},
     }), (result) => ({ candidate_count: result.triagedAll?.length || 0, feedback_consumed_count: normalizedFeedbackRows.length }));
     if (!stage1Result?.ok) throw new Error("LOCAL_STAGE1_INCOMPLETE");
-    const translationTargets = (stage1Result.triagedAll || []).filter((item) => ["A", "B", "C"].includes(String(item.final_grade || item.grade || "").slice(0, 1)));
+    const translationTargets = (stage1Result.triagedAll || []).filter((item) => ["A", "B", "C"].includes(String(item.final_grade || item.grade || "").slice(0, 1)) || isManualReviewReachable(item));
     const translationGenerator = dependencies.generateTitleTranslations || generateLiteratureTitleTranslations;
     const generatedTranslations = await timing.run("title_translation", async () => translationGenerator(translationTargets, {
       cachePath: dependencies.translationCachePath,

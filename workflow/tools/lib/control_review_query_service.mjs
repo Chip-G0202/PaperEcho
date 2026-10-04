@@ -10,6 +10,8 @@ import { buildLocalStage4ExportSource } from '../stage4/export_source_step.mjs';
 import { getWeeklyReviewEvidence } from '../stage4/spreadsheet_adapter.mjs';
 import { readPendingPaperReview, matchPendingPaperRecord } from './pending_paper_review.mjs';
 import { isActiveRuleSuggestion } from './unified_pending_rule_suggestions.mjs';
+import { getReviewDisplayMetadata } from './review_display_metadata.mjs';
+import { normalizeTitleCacheKey } from './title_translation_support.mjs';
 
 const inside = (root, candidate) => { const rel = path.relative(root, candidate); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
 const paperId = (runId, item, index, keys = []) => createHash('sha256').update(item._reviewScopeRunId ? `${runId}:scope:${item._reviewScopeRunId}:${keys[0] || ''}` : `${runId}:${index}:${keys[0] || ''}`).digest('hex');
@@ -158,6 +160,8 @@ export class ReviewQueryService {
     const data = await this.reviewData();
     if (!data) return { runId: null, total: 0, items: [] };
     const current = await this.feedback.current();
+    const rawCache = await this.read(path.join(this.researchRoot,'translation_cache.json'));
+    const translationCache = new Map(Object.entries(rawCache || {}).filter(([,entry]) => entry?.ok === true).map(([title,entry]) => [normalizeTitleCacheKey(title),entry]));
     const items = data.items.slice(offset, offset + limit).map((item, index) => {
       let keys = [];
       try { keys = feedbackIdentity(item); } catch {}
@@ -166,10 +170,10 @@ export class ReviewQueryService {
       const currentEntry = current.find((entry) => entry.keys.some((key) => keys.includes(key)));
       const pendingReview = item._heldReview === true;
       return {
-        id, feedbackAllowed: keys.length > 0 && ['feedback', 'manual'].includes(evidence.reviewBucket), title: String(item.title || ''),
-        translatedTitle: String(item.translatedTitle || item.translated_title || item.title_translation || item['标题翻译'] || item['中文标题'] || item.shortTitle || ''),
-        authors: (Array.isArray(item.authors) ? item.authors : [item.authors || '']).map((author) => typeof author === 'string' ? author : [author?.firstName, author?.lastName].filter(Boolean).join(' ')), journal: String(item.journal || item.publicationTitle || ''), year: String(item.year || ''),
-        doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), url: String(item.url || item.URL || ''), source: String(item.source || item.source_type || ''),
+        id, feedbackAllowed: keys.length > 0 && ['feedback', 'manual'].includes(evidence.reviewBucket),
+        ...getReviewDisplayMetadata(item._activeManualItem ? {...item,...item._activeManualItem} : item,{translationCache}),
+        authors: (Array.isArray(item.authors) ? item.authors : [item.authors || '']).map((author) => typeof author === 'string' ? author : [author?.firstName, author?.lastName].filter(Boolean).join(' ')),
+        doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), url: String(item.url || item.URL || ''),
         ...evidence,
         grade: evidence.finalGrade, zotero: pendingReview ? 'not_written' : this.localRepository ? 'not_used_local' : 'admitted',
         pendingReview, manualReviewPending: Boolean(item._activeManualItem && isActiveManualReview(item._activeManualItem, current)),

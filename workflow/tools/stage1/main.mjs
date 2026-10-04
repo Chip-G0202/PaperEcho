@@ -36,6 +36,7 @@ import { runSourceSelectionAndFetch } from "./source_selection_step.mjs";
 import { runPreferenceLearningPhase } from "./preference_learning_step.mjs";
 import { runFeedbackActionsAndWriteback } from "./feedback_actions_step.mjs";
 import { preparePendingPaperReview, attachPendingPaperReview, finalizePendingPaperReview } from "../lib/pending_paper_review.mjs";
+import { enrichManualReviewTitles } from './manual_review_translation_step.mjs';
 import {
   finalizeRadarStage1,
   isRadarProfile,
@@ -428,7 +429,7 @@ export async function runResearchOsPipeline({
       flags: scored.flags,
       triage_version: scored.triage_version,
       推荐等级: scored.grade_label,
-      中文标题: "",
+      中文标题: it['中文标题'] || "",
       推荐理由: scored.grade_reason,
       评分明细: scored,
     };
@@ -584,6 +585,13 @@ export async function runResearchOsPipeline({
       paths: weeklyPreparation.paths,
     });
     report.steps.weekly_radar_merge = { ...report.steps.weekly_radar_merge, lifecycle: weeklyFinalize };
+  }
+  if (!radarProfile) {
+    const translationStarted = Date.now();
+    const enrichment = await enrichManualReviewTitles(triagedAll, { cachePath:RUNTIME.translationCachePath, context:{current:pendingPreparation?.current || []} });
+    triagedAll = enrichment.items;
+    report.steps.manual_title_translation = { target_count:enrichment.target_count, generated_count:enrichment.generated_count, failure_count:enrichment.failures.length, skipped_reason:enrichment.skipped_reason || '', usage:enrichment.usage || null };
+    recordTiming('manual_title_translation',translationStarted,report.steps.manual_title_translation);
   }
   const preferenceAuditStarted = Date.now();
   await fs.writeFile(preferenceAuditPath, JSON.stringify(preferenceAuditWithImpact, null, 2), "utf8");

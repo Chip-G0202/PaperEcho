@@ -33,6 +33,26 @@ async function fixture(t) {
   return { root, reviewRoot, feedback, query, run, write };
 }
 
+test('current artifact and shared cache enrich historical Manual metadata without writing history', async (t) => {
+  const app=await fixture(t);
+  const old={...paper('display-history'),rule_grade:'D',llm_review_grade:'B',grade:'D',final_grade:'D',semantic_stage_status:'completed'};
+  await finalizePendingPaperReview({reviewRoot:app.reviewRoot,items:[old]});
+  const history=await fs.readFile(pendingPaperReviewPath(app.reviewRoot),'utf8');
+  const current={...old,source_platform:'rss',journal:'Latest Results',publicationTitle:'Current Artifact Journal',publication_date:'2026-10-04'};
+  const ordinary={...paper('display-feedback'),needs_human_review:false,source_platform:'rss',journal:'AAAS: Science Advances: Table of Contents',publicationTitle:'Science Advances',translated_title:'普通反馈中文标题'};
+  await app.run('display-current','2026-10-04T05:00:00Z',[current,ordinary],{weekly:true,report:{steps:{med_weekly_synthesis:{completed:true}}}});
+  const pipeline=path.join(app.query.researchRoot,'pipeline/display-current');
+  await app.write(path.join(pipeline,'desktop_daily_review_source.json'),{triaged:[ordinary]});
+  await app.write(path.join(pipeline,'zotero_writeback_summary.json'),{writeback_items:[{...ordinary,itemKey:'DISPLAY1'}]});
+  await app.write(path.join(app.query.researchRoot,'translation_cache.json'),{[`  ${old.title.toUpperCase()}  `]:{ok:true,zh:'历史人工复核缓存中文标题'}});
+  const page=await app.query.weekly();
+  const held=page.items.find(i=>i.manualReviewPending),feedback=page.items.find(i=>!i.manualReviewPending);
+  assert.equal(held.journal,'Current Artifact Journal');assert.equal(held.translatedTitle,'历史人工复核缓存中文标题');assert.equal(held.source,'RSS');assert.equal(held.year,'2026');
+  assert.equal(feedback.journal,'Science Advances');assert.equal(feedback.translatedTitle,'普通反馈中文标题');assert.equal(feedback.source,'RSS');
+  assert.equal((await app.query.resolvePaper(page.runId,held.id)).doi,old.doi);
+  assert.equal(await fs.readFile(pendingPaperReviewPath(app.reviewRoot),'utf8'),history);
+});
+
 test('142 historical unresolved records: current two are active, canonical decisions clear both without rewriting history', async (t) => {
   const app = await fixture(t);
   const historical = Array.from({ length: 142 }, (_, i) => paper(i));

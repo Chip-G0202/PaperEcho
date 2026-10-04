@@ -2,6 +2,8 @@
 
 ## 启动与使用
 
+文献卡片的 Feedback / Manual Review 共用 `review_display_metadata.mjs`：publication venue 与 RSS feed provenance 分离；通用 feed label 不作为期刊，缺失 venue 时可仅显示 RSS。已有翻译和共享 cache 只读投影；可达 Manual 项目的新翻译由 workflow 的 `manual_review_translation_step.mjs` 复用共享生成器完成，页面请求不调用模型。旧 pending 继续保存身份与历史，当前 artifact 提供展示元数据。
+
 普通用户在已有 PaperEcho 项目目录中双击：
 
 - **Windows：`PaperEcho.exe`**。GUI 启动器不显示控制台；服务就绪后打开默认浏览器。`PaperEcho.cmd` 仅用于故障排查，此时会显示终端。

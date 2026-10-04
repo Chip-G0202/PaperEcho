@@ -37,6 +37,7 @@ Local snapshots remove Zotero-only `itemKey`, collections, attachments, and rati
 
 - Pure generation boundary: `generateLiteratureTitleTranslations` in `workflow/tools/lib/title_translation_generation.mjs`.
 - Shared field: `translatedTitle`.
+- Reachable Manual items are enriched in Stage1 by `manual_review_translation_step.mjs`, including held D items. Translation failure/disablement does not change eligibility. UI reads current artifacts and the shared cache without model calls; feed provenance is not publication venue.
 - Shared cache: `review_results/translation_cache.json` from `title_translation_support.mjs`.
 - Desktop, Web, and Local use the same generation/cache boundary. Local stores `translatedTitle` and stops; Stage3 writes Zotero `shortTitle` for Desktop/Web.
 - Cache writes use a lock, same-directory temporary file, and atomic rename.

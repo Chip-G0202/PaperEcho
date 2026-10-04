@@ -12,18 +12,20 @@ import {
   sourceStatePath,
 } from "./source_state.mjs";
 
-const RSS_ADAPTER_VERSION = "rss-fast-xml-parser-v1";
+const RSS_ADAPTER_VERSION = "rss-fast-xml-parser-v2";
 const NCBI_ADAPTER_VERSION = "ncbi-esearch-efetch-v1";
 const OPENALEX_ADAPTER_VERSION = "openalex-intent-cursor-v2";
 const SOURCE_HTTP_MAX_CONCURRENCY = 4;
-const xmlParser = new XMLParser({
+const xmlOptions = {
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   removeNSPrefix: true,
   parseTagValue: false,
   trimValues: true,
   processEntities: true,
-});
+};
+const xmlParser = new XMLParser(xmlOptions);
+const rssParser = new XMLParser({ ...xmlOptions, removeNSPrefix:false });
 
 function resolveSourceHttpController(existing = null, service = "source_http") {
   return existing || createServiceConcurrencyController(service, {
@@ -71,10 +73,10 @@ function xmlText(value) {
   return "";
 }
 
-function parseXml(xml, label) {
+function parseXml(xml, label, parser = xmlParser) {
   const validity = XMLValidator.validate(String(xml || ""));
   if (validity !== true) throw new Error(`${label}_XML_INVALID`);
-  return xmlParser.parse(xml);
+  return parser.parse(xml);
 }
 
 function responseHeader(response, name) {
@@ -137,43 +139,65 @@ export async function fetchTextWithRetry(url, attempts = 3, timeoutMs = 15000, f
   return response.text();
 }
 
+function rssField(entry, name) {
+  const values = Object.entries(entry || {}).filter(([key]) => !key.startsWith('@_') && key.split(':').at(-1) === name).map(([,value]) => value);
+  return values.length > 1 ? values : values[0];
+}
+
+function rssPublicationSource(entry, root, feed) {
+  for (const [key,value] of Object.entries(entry || {})) {
+    if (!key.endsWith(':source')) continue;
+    const declaration = `@_xmlns:${key.split(':')[0]}`;
+    const namespace = entry[declaration] || feed?.[declaration] || root?.[declaration];
+    if (['http://purl.org/dc/elements/1.1/','http://purl.org/dc/terms/'].includes(namespace)) return value;
+  }
+  return '';
+}
+
 function rssLink(entry) {
-  for (const link of asArray(entry?.link)) {
+  for (const link of asArray(rssField(entry,'link'))) {
     if (typeof link === "string") return cleanText(link);
     if (link?.["@_href"] && (!link["@_rel"] || link["@_rel"] === "alternate")) return cleanText(link["@_href"]);
   }
-  return xmlText(entry?.link);
+  return xmlText(rssField(entry,'link'));
 }
 
-export function parseRssItems(xml, sourceUrl) {
-  const document = parseXml(xml, "RSS");
-  const rssChannel = document?.rss?.channel;
-  const atomFeed = document?.feed;
-  const rdf = document?.RDF;
+export function parseRssItems(xml, sourceUrl, source = {}) {
+  const document = parseXml(xml, "RSS", rssParser);
+  const rss = rssField(document,'rss');
+  const rdf = rssField(document,'RDF');
+  const atomFeed = rssField(document,'feed');
+  const rssChannel = rssField(rss,'channel');
   if (!rssChannel && !atomFeed && !rdf) throw new Error("RSS_FORMAT_UNSUPPORTED");
-  const entries = rssChannel ? asArray(rssChannel.item) : atomFeed ? asArray(atomFeed.entry) : asArray(rdf?.item);
-  const channelTitle = xmlText(rssChannel?.title || atomFeed?.title || rdf?.channel?.title);
+  const feed = rssChannel || atomFeed || rssField(rdf,'channel');
+  const root = rss || atomFeed || rdf;
+  const entries = asArray(rssChannel ? rssField(rssChannel,'item') : atomFeed ? rssField(atomFeed,'entry') : rssField(rdf,'item'));
+  const channelTitle = xmlText(rssField(feed,'title'));
   return entries.flatMap((entry) => {
-    const title = xmlText(entry?.title);
+    const title = xmlText(rssField(entry,'title'));
     if (!title) return [];
     const link = rssLink(entry);
-    const abstract = xmlText(entry?.description || entry?.summary || entry?.content || entry?.encoded);
-    const identityText = [abstract, xmlText(entry?.identifier), xmlText(entry?.id), link].join(" ");
+    const abstract = xmlText(rssField(entry,'description') || rssField(entry,'summary') || rssField(entry,'content') || rssField(entry,'encoded'));
+    const identityText = [abstract, xmlText(rssField(entry,'identifier')), xmlText(rssField(entry,'id')), link].join(" ");
     const doi = (identityText.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i) || [])[0]?.replace(/[.,;)]+$/, "") || "";
-    const publicationTitle = cleanJournalName(channelTitle) || inferJournalFromUrlSync(link) || "";
+    const journal = rssField(entry,'journal');
+    const publicationTitle = [rssField(entry,'publicationName'), rssField(journal,'title') || journal, rssPublicationSource(entry,root,feed), source.publicationTitle, rssField(feed,'publicationName'), channelTitle]
+      .map(xmlText).filter(value => !/^https?:\/\//i.test(value)).map(cleanJournalName).find(Boolean) || inferJournalFromUrlSync(link) || "";
     return [{
       source_channel: "rss",
       source_platform: "rss",
       feed_url: sourceUrl,
-      journal: channelTitle,
+      feed_title: channelTitle,
+      feed_name: source.name || '',
+      journal: publicationTitle,
       publicationTitle,
       item_type_hint: "journalArticle",
       title,
       url: link,
       abstract,
       doi: doi.toLowerCase(),
-      authors: xmlText(entry?.author || entry?.creator),
-      pubdate: xmlText(entry?.pubDate || entry?.published || entry?.updated || entry?.date),
+      authors: xmlText(rssField(entry,'author') || rssField(entry,'creator')),
+      pubdate: xmlText(rssField(entry,'pubDate') || rssField(entry,'published') || rssField(entry,'updated') || rssField(entry,'date')),
     }];
   });
 }
@@ -187,7 +211,8 @@ function rssNamespace(url) {
 export async function fetchRssAll({ root, profile = "weekly", stateRoot = "", fetchImpl = globalThis.fetch, now = new Date(), sourceConcurrencyController = null } = {}) {
   const rssConfig = loadRssSources({ root });
   const controller = resolveSourceHttpController(sourceConcurrencyController, "retrieval_rss");
-  const feedResults = await controller.map(rssConfig.sources, async ({ url }) => {
+  const feedResults = await controller.map(rssConfig.sources, async (source) => {
+    const { url } = source;
     const checkedAt = new Date(now).toISOString();
     const namespace = rssNamespace(url);
     const filePath = sourceStatePath({ stateRoot, profile, source: namespace.source, queryHash: namespace.queryHash });
@@ -215,7 +240,7 @@ export async function fetchRssAll({ root, profile = "weekly", stateRoot = "", fe
           committed: { ...(previous?.committed || {}), lastSuccessfulCheck: checkedAt },
         };
       } else {
-        parsed = parseRssItems(await response.text(), namespace.sanitizedUrl);
+        parsed = parseRssItems(await response.text(), namespace.sanitizedUrl, source);
         proposal = {
           complete: true,
           itemCount: parsed.length,

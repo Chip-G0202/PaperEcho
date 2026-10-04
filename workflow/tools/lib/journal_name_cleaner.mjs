@@ -10,6 +10,12 @@
 /** Strings that are pure noise and should map to empty. */
 const NOISE_VALUES = new Set([
   "latest results",
+  "table of contents",
+  "recent articles",
+  "current issue",
+  "latest articles",
+  "rss",
+  "rss feed",
   "wiley",
   "wiley online library",
   "sciencedirect",
@@ -174,6 +180,7 @@ export function cleanJournalName(raw) {
     .replace(/:\s*Latest Articles\s*\(.*?\)\s*$/i, "")
     .replace(/:\s*Latest Articles\s*$/i, "")
     .replace(/:\s*Table of Contents\s*$/i, "")
+    .replace(/\s*[:–—-]\s*(?:Recent Articles|Current Issue|Latest Results)\s*$/i, "")
     .replace(/\s*[-–—]\s*Wiley Online Library\s*$/i, "")
     .replace(/\s*[-–—]\s*Wiley\s*$/i, "");
 
@@ -183,4 +190,14 @@ export function cleanJournalName(raw) {
   if (NOISE_VALUES.has(s.toLowerCase())) return "";
 
   return s;
+}
+
+export function getPublicationVenue(item = {}) {
+  const rss = String(item.source_channel || item.source_platform || item.source || '').toLowerCase() === 'rss';
+  for (const value of [item.publicationTitle, item.publicationName, item.journal, item.venue]) {
+    if (typeof value !== 'string' || !value.trim() || /^https?:\/\//i.test(value)) continue;
+    const venue = rss ? cleanJournalName(value) : value.trim();
+    if (venue) return venue;
+  }
+  return '';
 }
