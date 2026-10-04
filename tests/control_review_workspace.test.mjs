@@ -411,6 +411,28 @@ test('delivery pages contain no demo entry points or bundled demo data', async (
   assert.equal(Object.hasOwn(app.parseRoute('#home/radar-demo'), 'homeView'), false);
 });
 
+test('Overview places its single action row after today task and before statistics without changing routes', async () => {
+  const app=ui();
+  app.setApi(async url => {
+    if (url === '/api/status') return {pendingSuggestions:3,needsReview:2,lastRun:{status:'completed'},integrity:{newlyConfirmedRetractions:1,newCorrections:2,newExpressionsOfConcern:3}};
+    if (url === '/api/schedule-status') return {status:'ready',scheduledTime:'15:00',today:{selectedFlow:'radar'},weekly:{lastSuccessfulPlannedSlot:'2026-10-01T07:00:00Z'}};
+    return {runId:'overview-fixture',total:2,items:papers(2)};
+  });
+  await app.home();
+  const task=app.main.querySelector('.daily-plan'), actions=app.main.querySelector('.quick-links'), grid=app.main.querySelector('.grid');
+  assert.equal(app.main.children.indexOf(actions),app.main.children.indexOf(task)+1);
+  assert.equal(app.main.children.indexOf(grid),app.main.children.indexOf(actions)+1);
+  assert.equal(app.main.querySelectorAll('.quick-links').length,1);
+  for (const name of ['开始文献评级','提交研究方向反馈']) assert.equal(app.main.querySelectorAll('button').filter(node=>node.textContent===name).length,1);
+  const [review,research]=actions.querySelectorAll('button');
+  assert.equal(review.className,'primary');assert.notEqual(research.className,'primary');
+  await review.click();assert.equal(app.location.hash,'feedback/rating/normal');
+  await research.click();assert.equal(app.location.hash,'feedback/research');
+  assert.match(app.main.textContent,/今日任务.*开始文献评级.*提交研究方向反馈.*最近周报.*最近 Radar.*本次文献数量.*待确认规则建议.*A级.*最近运行.*需人工复核.*完整性提醒/);
+  assert.equal(grid.children[2].querySelector('.metric').textContent,'2');
+  assert.equal(grid.children[3].querySelector('.metric').textContent,'3');
+});
+
 test('Overview condenses scheduled status and keeps every actionable exception visible', async () => {
   const app = ui();
   const slot = '2026-09-23T07:00:00.000Z';
