@@ -38,12 +38,16 @@ export async function readPendingPaperReview(reviewRoot) {
 }
 
 function conflictingStrongKey(candidateKeys, recordKeys) {
-  for (const type of ['doi', 'pmid', 'pmcid', 'arxiv', 'openalex', 'url']) {
+  let stableMatch = false;
+  for (const type of ['doi', 'pmid', 'pmcid', 'arxiv', 'openalex']) {
     const candidate = candidateKeys.find((key) => key.startsWith(`${type}:`));
     const record = recordKeys.find((key) => key.startsWith(`${type}:`));
     if (candidate && record && candidate !== record) return true;
+    if (candidate && candidate === record) stableMatch = true;
   }
-  return false;
+  const candidateUrl = candidateKeys.find((key) => key.startsWith('url:'));
+  const recordUrl = recordKeys.find((key) => key.startsWith('url:'));
+  return !stableMatch && Boolean(candidateUrl && recordUrl && candidateUrl !== recordUrl);
 }
 
 export function matchPendingPaperRecord(item, records = []) {

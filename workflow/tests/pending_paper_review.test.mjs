@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { FeedbackService } from '../tools/lib/control_feedback_service.mjs';
 import { isWritebackEligibleItem } from '../tools/lib/pipeline_stage_support.mjs';
 import { synthesizeFinalGrade } from '../tools/stage1/semantic_grade_synthesis.mjs';
+import { getLiteratureIdentityKeys } from '../tools/lib/literature_identity.mjs';
 import {
   attachPendingPaperReview, finalizePendingPaperReview, listPendingPaperReview,
-  preparePendingPaperReview, readPendingPaperReview,
+  preparePendingPaperReview, readPendingPaperReview, matchPendingPaperRecord,
 } from '../tools/lib/pending_paper_review.mjs';
 
 const base = fileURLToPath(new URL('./.pending-paper-test-tmp/', import.meta.url));
@@ -43,6 +44,50 @@ test('pending storage holds classification decisions including isolated missing,
   const current = await new FeedbackService({ reviewRoot: root }).current();
   assert.equal((await listPendingPaperReview({ reviewRoot: root, current })).length, 2);
   assert.equal((await readPendingPaperReview(root)).records.length, 3);
+});
+
+test('stable identifiers permit URL changes, but conflicting identifiers still fail closed', () => {
+  const title = 'Synthetic stable identifier and URL boundary study';
+  for (const stable of [{doi:'10.1234/stable'}, {pmid:'123456'}, {pmcid:'PMC123456'}, {arxiv:'2601.12345'}, {openalex_id:'W123456'}]) {
+    const first = {title, ...stable, url:'https://example.org/first'};
+    const record = {keys:getLiteratureIdentityKeys(first)};
+    assert.equal(matchPendingPaperRecord(first,[record]),record);
+    assert.equal(matchPendingPaperRecord({...first,url:'https://example.org/second'},[record]),record);
+  }
+  const first = {title,doi:'10.1234/stable',pmid:'123456',url:'https://example.org/first'};
+  const record = {keys:getLiteratureIdentityKeys(first)};
+  assert.throws(()=>matchPendingPaperRecord({...first,doi:'10.1234/conflict'},[record]),/IDENTITY_CONFLICT/);
+  assert.throws(()=>matchPendingPaperRecord({...first,pmid:'654321'},[record]),/IDENTITY_CONFLICT/);
+});
+
+test('weak title fallback preserves URL conflicts and existing missing-URL behavior', () => {
+  const first = {title:'Synthetic weak identity and URL fallback boundary study',url:'https://example.org/paper/'};
+  const record = {keys:getLiteratureIdentityKeys(first)};
+  assert.equal(matchPendingPaperRecord(first,[record]),record);
+  assert.equal(matchPendingPaperRecord({...first,url:'https://example.org/paper#section'},[record]),record);
+  assert.throws(()=>matchPendingPaperRecord({...first,url:'https://example.org/another'},[record]),/IDENTITY_CONFLICT/);
+  assert.equal(matchPendingPaperRecord({...first,url:''},[record]),record);
+  const titleOnly = {keys:getLiteratureIdentityKeys({...first,url:''})};
+  assert.equal(matchPendingPaperRecord(first,[titleOnly]),titleOnly);
+});
+
+test('changed URLs reuse stable pending identity and replay canonical manual decisions', async (t) => {
+  const root = await fixture(t);
+  const first = {...paper('10.1234/url-replay','C','D'),url:'https://example.org/first'};
+  await finalizePendingPaperReview({reviewRoot:root,items:[first]});
+  const next = {...paper(first.doi,'C','D'),url:'https://example.org/second'};
+  await finalizePendingPaperReview({reviewRoot:root,items:[next]});
+  assert.equal(next.pending_review_id,first.pending_review_id);
+  assert.equal((await readPendingPaperReview(root)).records.length,1);
+  const feedback = new FeedbackService({reviewRoot:root});
+  await feedback.submit({kind:'manual_grade',paper:first,manualGrade:'B',requestId:'changed-url-replay'});
+  const prepared = await preparePendingPaperReview({reviewRoot:root,candidates:[{...next,url:'https://example.org/third'}]});
+  assert.equal(prepared.injectedCount,0);
+  attachPendingPaperReview(prepared.input,prepared);
+  assert.equal(prepared.input[0].manual_confirmed_grade,'B');
+  await finalizePendingPaperReview({reviewRoot:root,items:prepared.input});
+  assert.equal(prepared.input[0].final_grade,'B');
+  assert.equal((await readPendingPaperReview(root)).records.length,1);
 });
 
 test('pending review survives a later run, and manual A/B/C is replayed before writeback', async (t) => {
