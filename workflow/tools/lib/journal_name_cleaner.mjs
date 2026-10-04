@@ -194,7 +194,7 @@ export function cleanJournalName(raw) {
 
 export function getPublicationVenue(item = {}) {
   const rss = String(item.source_channel || item.source_platform || item.source || '').toLowerCase() === 'rss';
-  for (const value of [item.publicationTitle, item.publicationName, item.journal, item.venue]) {
+  for (const value of [item.publicationTitle, item.publicationName, item.journal, item.venue, item['container-title']]) {
     if (typeof value !== 'string' || !value.trim() || /^https?:\/\//i.test(value)) continue;
     const venue = rss ? cleanJournalName(value) : value.trim();
     if (venue) return venue;

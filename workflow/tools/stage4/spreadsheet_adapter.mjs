@@ -3,7 +3,8 @@ import { classifyLiterature } from '../stage1/semantic_grade_synthesis.mjs';
 import { buildFinalReviewMembership } from './finalize_exports_support.mjs';
 import path from "node:path";
 import { buildStandardSummary } from "../stage1/preference_refinement.mjs";
-import { cleanJournalName, getPublicationVenue } from "../lib/journal_name_cleaner.mjs";
+import { cleanJournalName } from "../lib/journal_name_cleaner.mjs";
+import { getReviewDisplayMetadata } from '../lib/review_display_metadata.mjs';
 import { inspectXlsxWorkbook } from "../lib/review_workbook_reader.mjs";
 
 export const EXPORT_METHODS = {
@@ -110,8 +111,9 @@ function extractGradeLetter(item, keys) {
  * Delegates to shared journal_name_cleaner module.
  */
 function cleanJournalSource(item) {
-  const venue = getPublicationVenue(item);
-  if (venue) return venue;
+  const metadata = getReviewDisplayMetadata(item);
+  if (metadata.journal) return metadata.journal;
+  if (metadata.source === 'RSS') return metadata.source;
   // Try each candidate independently: if a field is present but cleans to
   // noise (e.g. "Latest Results", "Example Topic Current Issue"), fall through to
   // the next candidate instead of stopping at the first truthy value.
