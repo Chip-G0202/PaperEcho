@@ -312,8 +312,8 @@ async function paperReview(showIntro = true, section = reviewSection) {
   // Pending candidates are shown only in manual review, not in admitted Weekly papers.
   const visibleItems = displayablePapers(data.items);
   const groups = {
-    normal: visibleItems.filter((item) => !item.needsReview),
-    manual: data.items.filter((item) => item.manualReviewPending && item.feedbackAllowed && !item.manualGrade),
+    normal: visibleItems.filter((item) => item.reviewScopeBucket === undefined ? !item.needsReview : item.reviewScopeBucket === 'feedback'),
+    manual: data.items.filter((item) => (item.reviewScopeBucket === undefined ? item.manualReviewPending : item.reviewScopeBucket === 'manual') && item.feedbackAllowed),
   };
   const queues = Object.fromEntries(Object.entries(groups).map(([key, items]) => [key, createReviewQueue(items, (item) => Boolean(key === 'manual' ? item.manualGrade : item.feedback), (item) => item.feedbackAllowed)]));
   let queue = queues[reviewSection]; let message = ''; let messageKind = 'success';
@@ -333,7 +333,7 @@ async function paperReview(showIntro = true, section = reviewSection) {
     );
     workspace.append(el('p', `${manual ? '本次已处理' : '已处理'} ${processed} / 共 ${queue.items.length} · 待处理 ${queue.items.length - processed}`, 'queue-progress'));
     if (message) { const receipt = el('p', message, `queue-receipt ${messageKind}`); receipt.setAttribute('role', 'status'); workspace.append(receipt); }
-    if (processed === queue.items.length) workspace.append(el('p', '本队列已完成。可用上 / 下一篇回看并修改已记录反馈。', 'completion'));
+    if (processed === queue.items.length) workspace.append(el('p', manual ? '本轮人工复核已完成。可用上 / 下一篇回看并修改已确认等级。' : '本队列已完成。可用上 / 下一篇回看并修改已记录反馈。', 'completion'));
     const item = queue.items[queue.index]; const card = el('article', undefined, 'focused-card paper-card'); paperHeading(card, item, { showGrade: false });
     card.append(gradeEvidence(item));
     const selectedValue = reviewSection === 'manual' ? item.manualGrade : item.feedback;

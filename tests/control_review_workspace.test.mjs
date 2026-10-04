@@ -109,7 +109,7 @@ test('Weekly view model reuses exporter grade precedence and every legacy manual
   assert.equal(data.items.filter((item) => item.manualReviewPending).length, 6);
   assert.deepEqual({ ...(await query.pendingSummary()) }, { normal: 4, manual: 6, rules: 2 });
 });
-test('manual queue scopes 142 historical records to two actionable items and keeps only this session results', async (t) => {
+test('manual queue scopes history to current items and retains completed results across reload', async (t) => {
   const base = new URL('./runs/control-review/', import.meta.url); await fs.mkdir(base, { recursive: true });
   const root = await fs.mkdtemp(path.join(fileURLToPath(base), 'pending-queue-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -149,9 +149,15 @@ test('manual queue scopes 142 historical records to two actionable items and kee
   assert.match(app.main.textContent, /已人工评级：A/);
   await byText(app.main, 'B 2').click(); // Just-decided ID still resolves for a revision.
   app.main.replaceChildren(); await app.paperReview(true, 'manual');
-  assert.match(app.main.textContent, /本次已处理 0 \/ 共 1 · 待处理 1/);
+  assert.match(app.main.textContent, /本次已处理 1 \/ 共 2 · 待处理 1/);
   await byText(app.main, 'D 4').click();
-  assert.match(app.main.textContent, /本次已处理 1 \/ 共 1 · 待处理 0/);
+  assert.match(app.main.textContent, /本次已处理 2 \/ 共 2 · 待处理 0/);
+  app.main.replaceChildren();await app.paperReview(true,'manual');
+  assert.match(app.main.textContent,/本轮人工复核已完成/);
+  assert.match(app.main.textContent,/已人工评级：B/);
+  assert.equal(byText(app.main,'B 2').getAttribute('aria-pressed'),'true');
+  assert.equal(byText(app.main,'D 4').disabled,false);
+  assert.doesNotMatch(app.main.textContent,/此队列暂无文献/);
   assert.equal((await query.pendingSummary()).manual, 0);
   const completedSummary = await app.loadPendingSummary();
   assert.equal(completedSummary.manual, 0);
@@ -159,7 +165,7 @@ test('manual queue scopes 142 historical records to two actionable items and kee
   assert.equal((await readPendingPaperReview(root)).records.length, 145);
   assert.equal((await readCanonicalFeedback(root)).history.length, 14);
   app.main.replaceChildren(); await app.paperReview(true, 'manual');
-  assert.match(app.main.textContent, /此队列暂无文献/);
+  assert.match(app.main.textContent, /本次已处理 2 \/ 共 2 · 待处理 0/);
   const denied = ui(); denied.setApi(async () => ({ runId: 'denied', total: 1, items: [{ ...papers(1)[0], manualReviewPending: true, feedbackAllowed: false }] }));
   await denied.paperReview(true, 'manual'); assert.match(denied.main.textContent, /此队列暂无文献/);
 });

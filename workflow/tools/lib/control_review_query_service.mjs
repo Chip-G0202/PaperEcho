@@ -22,6 +22,23 @@ const identityKeys = (item) => { try { return feedbackIdentity(item); } catch { 
 export function isActiveManualReview(item, current = []) {
   return isManualReviewReachable(item, { current });
 }
+
+// Artifact scope owns visibility for both queues. Canonical decisions overlay
+// progress immediately; they never remove an item from that selected scope.
+export function getCurrentReviewLifecycle(item, current = []) {
+  const keys = identityKeys(item);
+  const decision = current.find(entry => entry.keys.some(key => keys.includes(key)));
+  const manualVisible = Boolean(item._activeManualItem && isActiveManualReview(item._activeManualItem));
+  const reviewScopeBucket = manualVisible ? 'manual' : getWeeklyReviewEvidence(item).reviewBucket === 'feedback' ? 'feedback' : null;
+  const manualReviewPending = manualVisible && isActiveManualReview(item._activeManualItem, current);
+  return {
+    reviewScopeBucket,
+    reviewPending: keys.length > 0 && (manualVisible ? manualReviewPending : reviewScopeBucket === 'feedback' && !decision?.value),
+    manualReviewPending,
+    feedback: decision?.value || null,
+    manualGrade: decision?.manual_grade || null,
+  };
+}
 export class ReviewQueryService {
   constructor({ root, context = buildRuntimeConfig({ cwd: root, env: {}, argv: [] }), reviewRoot = context.reviewRoot, feedback, rules }) {
     Object.assign(this, { root: path.resolve(root), reviewRoot, feedback, rules });
@@ -126,7 +143,6 @@ export class ReviewQueryService {
     const state = this.localRepository ? { records: [] } : await readPendingPaperReview(this.reviewRoot);
     const scope = await this.currentReviewScope(weekly, { pendingRecords: state.records });
     if (!scope && !weekly) return null;
-    const current = await this.feedback.current();
     const seen = new Set();
     const scopeItems = [];
     for (const item of scope?.items || []) {
@@ -136,7 +152,7 @@ export class ReviewQueryService {
       if (!keys.length || keys.some((key) => seen.has(key))) continue;
       keys.forEach((key) => seen.add(key)); scopeItems.push(scoped);
     }
-    const active = scopeItems.filter((item) => isActiveManualReview(item, current));
+    const active = scopeItems.filter((item) => isActiveManualReview(item));
     const admittedKeys = new Set((weekly?.items || []).flatMap(identityKeys));
     const admittedReviews = new Set();
     const weeklyMembership = buildFinalReviewMembership(weekly?.items || []);
@@ -167,7 +183,6 @@ export class ReviewQueryService {
       try { keys = feedbackIdentity(item); } catch {}
       const id = paperId(data.run.runId, item, offset + index, keys);
       const evidence = getWeeklyReviewEvidence(item);
-      const currentEntry = current.find((entry) => entry.keys.some((key) => keys.includes(key)));
       const pendingReview = item._heldReview === true;
       return {
         id, feedbackAllowed: keys.length > 0 && ['feedback', 'manual'].includes(evidence.reviewBucket),
@@ -176,11 +191,9 @@ export class ReviewQueryService {
         doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), url: String(item.url || item.URL || ''),
         ...evidence,
         grade: evidence.finalGrade, zotero: pendingReview ? 'not_written' : this.localRepository ? 'not_used_local' : 'admitted',
-        pendingReview, manualReviewPending: Boolean(item._activeManualItem && isActiveManualReview(item._activeManualItem, current)),
+        pendingReview, ...getCurrentReviewLifecycle(item, current),
         abstract: typeof item.abstract === 'string' ? item.abstract : '',
         integrity: item.integrity_status || null,
-        feedback: currentEntry?.value || null,
-        manualGrade: currentEntry?.manual_grade || null,
       };
     });
     return { runId: data.run.runId, total: data.items.length, items };
@@ -206,8 +219,8 @@ export class ReviewQueryService {
       if (!page.items.length) break;
     } while (offset < total);
     return {
-      normal: items.filter((item) => item.reviewBucket === 'feedback' && !item.pendingReview && item.feedbackAllowed && !item.feedback).length,
-      manual: items.filter((item) => item.manualReviewPending && item.feedbackAllowed && !item.manualGrade).length,
+      normal: items.filter((item) => item.reviewScopeBucket === 'feedback' && !item.pendingReview && item.feedbackAllowed && item.reviewPending).length,
+      manual: items.filter((item) => item.reviewScopeBucket === 'manual' && item.feedbackAllowed && item.reviewPending).length,
       rules: (await this.rules.list()).filter(isActiveRuleSuggestion).length,
     };
   }

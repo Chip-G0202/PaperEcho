@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { FeedbackService, feedbackIdentity } from '../tools/lib/control_feedback_service.mjs';
 import { ReviewQueryService } from '../tools/lib/control_review_query_service.mjs';
 import { finalizePendingPaperReview, pendingPaperReviewPath, readPendingPaperReview, preparePendingPaperReview, attachPendingPaperReview } from '../tools/lib/pending_paper_review.mjs';
-import { buildStage4StandaloneExportSource, buildFinalExportPayload, buildProspectiveStage4ExportSource, buildFinalReviewMembership } from '../tools/stage4/finalize_exports_support.mjs';
+import { buildStage4StandaloneExportSource, buildFinalExportPayload, buildProspectiveStage4ExportSource, buildFinalReviewMembership, isManualReviewReachable } from '../tools/stage4/finalize_exports_support.mjs';
 import { getWeeklyReviewEvidence, exportAllResearchOsXlsxWithNodeFallback } from '../tools/stage4/spreadsheet_adapter.mjs';
 import { readXlsxSheets } from '../tools/lib/review_workbook_reader.mjs';
 import { prepareStage4ExportSource } from '../tools/stage4/export_source_step.mjs';
@@ -70,7 +70,9 @@ test('142 historical unresolved records: current two are active, canonical decis
     assert.equal((await app.query.resolvePaper(page.runId, item.id)).doi, resolved.doi);
   }
   assert.equal((await app.query.pendingSummary()).manual, 0);
-  assert.equal((await app.query.weekly()).total, 0);
+  const retained=await app.query.weekly();
+  assert.equal(retained.total,2);
+  assert.ok(retained.items.every(item=>item.reviewScopeBucket==='manual'&&!item.reviewPending&&item.manualGrade==='D'));
   assert.equal(await fs.readFile(pendingPaperReviewPath(app.reviewRoot), 'utf8'), stored);
   assert.equal((await readPendingPaperReview(app.reviewRoot)).records.length, 142);
 });
@@ -89,6 +91,48 @@ test('current artifacts admit re-seen identities once and release consensus, dou
   assert.equal((await app.query.pendingSummary()).manual, 0);
   await assert.rejects(app.query.resolvePaper(page.runId, page.items[0].id), /WEEKLY_CHANGED_RELOAD/);
   assert.equal((await readPendingPaperReview(app.reviewRoot)).records.length, 5);
+});
+
+test('shared current-scope lifecycle retains 13 completed Manual items and Feedback until artifact rollover', async (t) => {
+  const app=await fixture(t);
+  const holds=Array.from({length:13},(_,index)=>({...paper(900+index),rule_grade:'D',llm_review_grade:'B',grade:'D',final_grade:'D',semantic_stage_status:'completed'}));
+  await finalizePendingPaperReview({reviewRoot:app.reviewRoot,items:holds});
+  const ordinary={...paper(999),needs_human_review:false};
+  const writeWeekly=async(id,at,items,admitted)=>{
+    const run=await app.run(id,at,items,{weekly:true,report:{steps:{med_weekly_synthesis:{completed:true}}}});
+    await app.write(path.join(app.query.pipeline(run),'desktop_daily_review_source.json'),{triaged:admitted});
+    await app.write(path.join(app.query.pipeline(run),'zotero_writeback_summary.json'),{writeback_items:admitted.map((item,index)=>({...item,itemKey:`FIXTURE${index}`}))});
+  };
+  await writeWeekly('lifecycle-first','2026-10-01T05:00:00Z',[ordinary,...holds],[ordinary]);
+  const original=await app.query.weekly({limit:200}),manual=original.items.filter(item=>item.reviewScopeBucket==='manual');
+  const pendingBefore=await fs.readFile(pendingPaperReviewPath(app.reviewRoot),'utf8');
+  assert.equal(manual.length,13);assert.equal((await app.query.pendingSummary()).manual,13);
+  await app.feedback.submit({kind:'paper_feedback',paper:ordinary,value:'irrelevant',requestId:'lifecycle-feedback'});
+  for(const [index,item] of manual.entries()) {
+    const manualGrade=['A','B','C','D'][index%4];
+    await app.feedback.submit({kind:'manual_grade',paper:await app.query.resolvePaper(original.runId,item.id),manualGrade,requestId:`lifecycle-${index}`});
+    const page=await app.query.weekly({limit:200}),visible=page.items.filter(entry=>entry.reviewScopeBucket==='manual');
+    assert.equal(visible.length,13);assert.equal(visible.filter(entry=>entry.reviewPending).length,12-index);
+    assert.deepEqual(visible.map(entry=>entry.id),manual.map(entry=>entry.id));
+    assert.equal(visible[index].manualGrade,manualGrade);
+    assert.equal(page.items.find(entry=>entry.doi===ordinary.doi).feedback,'irrelevant');
+    assert.equal((await app.query.status()).needsReview,12-index);
+    assert.equal(isManualReviewReachable(holds[index],{current:await app.feedback.current()}),false);
+    const next={...holds[index],manual_confirmed_grade:manualGrade};
+    assert.equal(getWeeklyReviewEvidence(next).reviewBucket,manualGrade==='D'?'excluded':'feedback');
+    assert.equal(buildFinalExportPayload({allAbcItems:[],manualCandidates:[holds[index]],reviewContext:{current:await app.feedback.current()}}).triaged.length,0);
+  }
+  assert.equal((await app.query.pendingSummary()).manual,0);
+  assert.equal((await app.query.pendingSummary()).normal,0);
+  assert.equal(await fs.readFile(pendingPaperReviewPath(app.reviewRoot),'utf8'),pendingBefore);
+  const fresh=paper(1000),again={...holds[0]},normalNext={...paper(1001),needs_human_review:false};
+  await writeWeekly('lifecycle-next','2026-10-02T05:00:00Z',[fresh,again,normalNext],[normalNext]);
+  const nextPage=await app.query.weekly({limit:200});
+  assert.equal(nextPage.items.filter(item=>item.reviewScopeBucket==='manual').length,2);
+  assert.equal((await app.query.pendingSummary()).manual,1);
+  assert.equal(nextPage.items.find(item=>item.doi===again.doi).manualGrade,'A');
+  assert.ok(!nextPage.items.some(item=>item.doi===holds[1].doi||item.doi===ordinary.doi));
+  await assert.rejects(app.query.resolvePaper(original.runId,manual[0].id),/WEEKLY_CHANGED_RELOAD/);
 });
 
 test('newer Weekly evidence outranks older held artifacts; Radar does not produce a manual review batch', async (t) => {
@@ -163,7 +207,10 @@ test('completed export and Control Center share qualified held Manual identities
     assert.equal((await app.query.weekly({limit:200})).items.filter(item => item.manualReviewPending).length, 3 - index);
     assert.equal((await app.query.resolvePaper(initial.runId, item.id)).doi, item.doi);
   }
-  assert.equal((await app.query.weekly()).items.length, 49); // Ordinary Feedback membership is unchanged.
+  const retained=await app.query.weekly({limit:200});
+  assert.equal(retained.items.length,51);
+  assert.equal(retained.items.filter(item=>item.reviewScopeBucket==='feedback').length,47);
+  assert.equal(retained.items.filter(item=>item.reviewScopeBucket==='manual').length,4);
   assert.equal(await fs.readFile(pendingPaperReviewPath(app.reviewRoot), 'utf8'), pendingBefore);
 });
 

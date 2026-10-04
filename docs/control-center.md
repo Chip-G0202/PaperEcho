@@ -60,7 +60,7 @@ UI 定向验证：`node --test workflow/tests/control_ui.test.mjs workflow/tests
 
 ### 连续等级审阅
 
-反馈回答“最终等级是否正确”，不会改写本次 rule / semantic / final grade、Weekly 结果或即时修改 Zotero。分类 policy 归 Stage1 `semantic_grade_synthesis.mjs#classifyLiterature`；Stage4 的既有最终 eligibility boundary 决定可见范围，`finalize_exports_support.mjs#buildFinalReviewMembership` 在该范围内划分 Feedback / Manual / Excluded，workbook 和查询服务共同消费。`getWeeklyReviewEvidence` 只投影等级证据和分类结果，Web 不复制 truth table；展示标签不能决定 membership。队列互斥并保留输入顺序，actionable 是 base 减去 canonical 已决定项，history 和当前 session 回看保留。
+反馈回答“最终等级是否正确”，不会改写本次 rule / semantic / final grade、Weekly 结果或即时修改 Zotero。分类 policy 归 Stage1 `semantic_grade_synthesis.mjs#classifyLiterature`；Stage4 的既有最终 eligibility boundary 决定可见范围，`finalize_exports_support.mjs#buildFinalReviewMembership` 在该范围内划分 Feedback / Manual / Excluded，workbook 和查询服务共同消费。`getWeeklyReviewEvidence` 只投影等级证据和分类结果，Web 不复制 truth table；展示标签不能决定 membership。查询层 `getCurrentReviewLifecycle` 为两类队列共享 current-scope visibility 与 canonical decision overlay：actionable 是 scope membership 减去已决定项，已处理项在刷新、回看和改评时仍保留，只有正式 artifact scope 替换才退出；不建立第二 ledger，也不改变 export/writeback eligibility。Feedback 的 scope 来自最新有效成功 Weekly，Manual 来自现有 `currentReviewScope`；Radar、skipped、stale artifact 不建立新 review scope。
 
 一次仅突出一篇，卡片与文献页共享同一左对齐内容列，统一显示英文标题、中文标题、期刊/年份/来源、规则评级、语义评级、最终评级和已有推荐理由；三个系统评级始终是不可覆盖的证据。普通 Feedback 保持相对纠正：A 级仅禁用升级，B/C 级四个动作均可用，C 级降级与排除分别保留为 `downgrade` / `drop`，D 不进入普通队列。人工复核改为直接选择 A/B/C/D；canonical revision 额外保存 `manual_grade` 与 `original_final_grade`，并派生旧 feedback 动作用于现有学习/条目动作兼容。点击即保存，成功后前进，失败停留并允许重试；回看改评继续追加 revision，不改写原 rule / semantic / final grade。
 
