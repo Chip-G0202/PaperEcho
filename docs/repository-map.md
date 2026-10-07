@@ -37,4 +37,6 @@
 
 `control_http.test.mjs` 导入根 `tests/control_launcher.test.mjs`；`control_ui.test.mjs` 导入根 `tests/control_review_workspace.test.mjs`，两者都在正式 gate 内。Benchmark 不等同于普通单元测试，不应因为整理目录而自动执行。
 
+LLM feature 测试必须覆盖最终 provider request assembly；业务 input 参与 cache hash 不代表它已进入模型请求。`literature_overview.test.mjs` 同时保留 orchestration mock 与最终 HTTP messages regression。
+
 定向示例：`node --test workflow/tests/control_ui.test.mjs workflow/tests/control_http.test.mjs`。语法检查为 `npm run check`；完整回归为 `npm test`（或 `npm run verify`）。纯文档调整检查本地链接与语法 gate 即可，不必重复全量回归。
