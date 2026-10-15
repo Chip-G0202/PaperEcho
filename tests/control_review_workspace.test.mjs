@@ -662,6 +662,16 @@ test('Research Feedback shares the document content column', async () => {
   const app = ui(); await app.research(); const form = app.main.querySelector('.research-form');
   assert.match(form.className, /page-content/); assert.match(form.className, /document-column/); assert.ok(form.querySelector('textarea'));
 });
+test('Research Feedback confirms durable saving and waits for workflow without exposing new suggestions', async () => {
+  const app = ui(); const calls = [];
+  app.setApi(async (url, input) => { calls.push([url, input]); return { saved: true, status: 'pending', suggestions: 0, warnings: [] }; });
+  await app.research(); const input = app.main.querySelector('textarea'); input.value = '需要更多机制研究';
+  await byText(app.main, '提交研究反馈').click();
+  assert.equal(calls.length, 1); assert.equal(calls[0][0], '/api/research');
+  assert.match(app.main.textContent, /已保存，等待下一次工作流处理/);
+  assert.equal(byText(app.main, '查看规则建议').hidden, true); assert.equal(input.value, '');
+  assert.doesNotMatch(app.main.textContent, /产生 \d+ 条/);
+});
 
 for (const [emailEnabled, qqEnabled] of [[false, false], [true, false], [false, true], [true, true]]) test(`notification cards independently render Email=${emailEnabled}, QQ=${qqEnabled}`, async () => {
   const app = ui();

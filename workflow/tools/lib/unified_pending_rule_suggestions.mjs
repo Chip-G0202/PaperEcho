@@ -44,6 +44,7 @@ const CHANGE_TYPE_ALLOWLIST = new Set([
   "delete_rule",
   "add_keyword",
   "remove_keyword",
+  "update_keywords",
   "add_downgrade_signal",
   "other",
 ]);
@@ -127,6 +128,59 @@ function normalizedRuleText(candidate = {}) {
   return String(candidate.rule_text || candidate.suggested_rule || candidate.revised_rule || "").trim();
 }
 
+// Exact operation sets, never fuzzy prose similarity, own search-change identity.
+export function normalizeSearchChange(candidate = {}) {
+  let change = candidate.search_change;
+  if (!change && ['add_keyword', 'remove_keyword', 'update_keywords'].includes(candidate.change_type)) {
+    change = { additions: { required: [], optional: [], negative: [] }, removals: [] };
+    for (const clause of normalizedRuleText(candidate).split('；')) {
+      const match = /^(?:添加(必含|可选|排除)检索词|移除检索词)：(.+)$/.exec(clause);
+      if (!match) return null;
+      const terms = match[2].split('、');
+      if (match[1]) change.additions[{ 必含: 'required', 可选: 'optional', 排除: 'negative' }[match[1]]].push(...terms);
+      else change.removals.push(...terms);
+    }
+  }
+  if (!change) return null;
+  const terms = value => {
+    if (!Array.isArray(value) || value.some(term => typeof term !== 'string' || !term.trim())) throw new Error('SEARCH_CHANGE_INVALID');
+    const unique = new Map(value.map(term => [normalizeText(term), term.trim()]));
+    return [...unique].sort(([a], [b]) => a.localeCompare(b, 'en')).map(([, term]) => term);
+  };
+  return {
+    data_source: String(change.data_source || candidate.data_source || 'pubmed_pmc'),
+    strategy_id: String(change.strategy_id || candidate.strategy_id || 'main'),
+    application_boundary: String(change.application_boundary || candidate.application_boundary || 'keyword_groups'),
+    additions: Object.fromEntries(['required', 'optional', 'negative'].map(group => [group, terms(change.additions?.[group] || [])])),
+    removals: terms(change.removals || []),
+  };
+}
+
+export function searchChangeText(change) {
+  const labels = { required: '必含', optional: '可选', negative: '排除' };
+  return [...Object.entries(change.additions).filter(([, terms]) => terms.length).map(([group, terms]) => `添加${labels[group]}检索词：${terms.join('、')}`), ...(change.removals.length ? [`移除检索词：${change.removals.join('、')}`] : [])].join('；');
+}
+
+export function consolidateResearchSuggestions(candidates = []) {
+  const out = []; const groups = new Map();
+  for (const candidate of candidates) {
+    const change = normalizeSearchChange(candidate);
+    if (!change) { out.push({ ...candidate }); continue; }
+    const key = stableJson([candidate.target || inferTarget(candidate), change.data_source, change.strategy_id, change.application_boundary, normalizeRiskLevel(candidate.risk_level, candidate.target || inferTarget(candidate))]);
+    let grouped = groups.get(key);
+    if (!grouped) {
+      grouped = { ...candidate, change_type: 'update_keywords', search_change: change, rationale: '归并本批研究反馈的同一检索策略变更，待人工确认。', evidence_text_excerpt: '' };
+      groups.set(key, grouped); out.push(grouped);
+    } else {
+      grouped.search_change = normalizeSearchChange({ search_change: { ...change, additions: Object.fromEntries(Object.keys(change.additions).map(group => [group, [...grouped.search_change.additions[group], ...change.additions[group]]])), removals: [...grouped.search_change.removals, ...change.removals] } });
+      addEvidence(grouped, candidate);
+    }
+    grouped.rule_text = searchChangeText(grouped.search_change);
+    grouped.suggested_rule = grouped.rule_text;
+  }
+  return out;
+}
+
 function hardDuplicateKeys(entry = {}) {
   const target = entry.target || inferTarget(entry);
   const changeType = entry.change_type || inferChangeType(entry);
@@ -134,8 +188,11 @@ function hardDuplicateKeys(entry = {}) {
   const canonicalTheme = String(entry.canonical_theme || entry.theme || "").trim();
   const titlesHash = hash(evidenceTitles(entry).map(normalizeText).sort(), 12);
   const keys = [];
-  if (ruleText) keys.push(`${target}|${changeType}|rule|${normalizeText(ruleText)}`);
-  if (canonicalTheme) keys.push(`${target}|${changeType}|theme|${normalizeText(canonicalTheme)}|${titlesHash}`);
+  const change = normalizeSearchChange(entry);
+  if (change) return [`search|${target}|${normalizeRiskLevel(entry.risk_level, target)}|${hash({ ...change, additions: Object.fromEntries(Object.entries(change.additions).map(([group, terms]) => [group, terms.map(normalizeText)])), removals: change.removals.map(normalizeText) }, 32)}`];
+  const scope = stableJson([entry.data_source || '', entry.strategy_id || '', entry.application_boundary || '', normalizeRiskLevel(entry.risk_level, target)]);
+  if (ruleText) keys.push(`${target}|${changeType}|${scope}|rule|${normalizeText(ruleText)}`);
+  if (canonicalTheme) keys.push(`${target}|${changeType}|${scope}|theme|${normalizeText(canonicalTheme)}|${titlesHash}`);
   if (entry.hard_duplicate_key) keys.push(String(entry.hard_duplicate_key));
   return keys.filter(Boolean);
 }
@@ -200,6 +257,13 @@ export function normalizePendingRuleSuggestionCandidate(candidate = {}, {
     example_items: titles,
     revised_rule: String(candidate.revised_rule || ""),
     feedback_source: String(candidate.feedback_source || ""),
+    data_source: String(candidate.data_source || ''),
+    strategy_id: String(candidate.strategy_id || ''),
+    application_boundary: String(candidate.application_boundary || ''),
+    ...(normalizeSearchChange(candidate) ? { search_change: normalizeSearchChange(candidate) } : {}),
+    feedback_event_ids: uniq(candidate.feedback_event_ids || []),
+    feedback_content_hashes: uniq(candidate.feedback_content_hashes || []),
+    publication_batch_ids: uniq(candidate.publication_batch_ids || []),
   };
   const keys = hardDuplicateKeys(entry);
   entry.hard_duplicate_key = keys[0] || `${target}|${changeType}|hash|${inputHash}`;
@@ -215,6 +279,7 @@ function addEvidence(target, incoming) {
   target.evidence_feedback_types = uniq([...(target.evidence_feedback_types || []), ...(incoming.evidence_feedback_types || [])]);
   target.evidence_count = Math.max(Number(target.evidence_count || 0), target.evidence_titles.length);
   target.updated_at = incoming.updated_at;
+  for (const field of ['feedback_event_ids', 'feedback_content_hashes', 'publication_batch_ids']) target[field] = uniq([...(target[field] || []), ...(incoming[field] || [])]);
 }
 
 export function generateUnifiedPendingRuleSuggestions({
@@ -235,7 +300,7 @@ export function generateUnifiedPendingRuleSuggestions({
   for (const existing of log.suggestions) {
     const normalized = normalizePendingRuleSuggestionCandidate(existing, { generatedAt, defaultStatus: existing.status || "pending" });
     existing.hard_duplicate_key = existing.hard_duplicate_key || normalized.hard_duplicate_key;
-    existing.hard_duplicate_keys = existing.hard_duplicate_keys || normalized.hard_duplicate_keys;
+    existing.hard_duplicate_keys = uniq([...(existing.hard_duplicate_keys || []), ...normalized.hard_duplicate_keys]);
     existing.possible_duplicate_key = existing.possible_duplicate_key || normalized.possible_duplicate_key;
     for (const key of existing.hard_duplicate_keys || []) existingByHardKey.set(key, existing);
     if (existing.possible_duplicate_key && !existingByPossibleKey.has(existing.possible_duplicate_key)) {
@@ -261,6 +326,7 @@ export function generateUnifiedPendingRuleSuggestions({
     const hardMatch = (normalized.hard_duplicate_keys || []).map((key) => existingByHardKey.get(key)).find(Boolean);
     if (hardMatch) {
       if (hardMatch.status === "rejected" && !normalized.previous_rejected_id && normalized.input_hash === hardMatch.input_hash) {
+        if (normalized.feedback_event_ids.length) addEvidence(hardMatch, normalized);
         rejectedDuplicateSkippedCount += 1;
         continue;
       }
@@ -302,7 +368,7 @@ export async function writeUnifiedPendingRuleSuggestions(logPath, log) {
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (!Array.isArray(current.suggestions) || !Array.isArray(log.suggestions)) throw new Error('SUGGESTION_LOG_INVALID');
     const terminal = new Set(current.suggestions.filter((entry) => ['accepted', 'revised', 'rejected', 'superseded', 'expired'].includes(entry.status)).map((entry) => entry.id || entry.suggestion_id));
-    const candidates = log.suggestions.filter((entry) => !terminal.has(entry.id || entry.suggestion_id));
+    const candidates = log.suggestions.filter((entry) => !terminal.has(entry.id || entry.suggestion_id) || entry.publication_batch_ids?.length);
     const merged = generateUnifiedPendingRuleSuggestions({ existingSuggestionsLog: current, legacySuggestions: candidates, generatedAt: log.updated_at || new Date().toISOString() });
     await writeAtomicJson(logPath, merged.log);
     return merged.log;

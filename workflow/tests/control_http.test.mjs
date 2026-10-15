@@ -7,6 +7,7 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { startControlCenter, MAX_BODY_BYTES, safeLink } from '../tools/web/server.mjs';
 import { createControlServices } from '../tools/lib/control_application_services.mjs';
+import { createRunRecoveryCoordinator } from '../tools/recovery/run_recovery.mjs';
 import { finalizePendingPaperReview } from '../tools/lib/pending_paper_review.mjs';
 import { ruleSuggestionsLogPath } from '../tools/lib/screening_standards_paths.mjs';
 const base = fileURLToPath(new URL('./.control-test-tmp/', import.meta.url));
@@ -26,7 +27,8 @@ async function setup(t, count = 0) {
   await write(path.join(pipeline, 'run_report.json'), { steps: { med_weekly_synthesis: { completed: true } } });
   await write(path.join(pipeline, 'desktop_daily_review_source.json'), { triaged: items });
   await write(path.join(pipeline, 'zotero_writeback_summary.json'), { writeback_items: items.map((item, i) => ({ ...item, itemKey: `KEY${i}` })) });
-  const services = createControlServices({ root, reviewRoot, env: { SMTP_PASS: 'fixture-private-key' }, llmClient: mockLlm });
+  let llmCalls = 0;
+  const services = createControlServices({ root, reviewRoot, env: { SMTP_PASS: 'fixture-private-key' }, llmClient: async (...args) => { llmCalls++; return mockLlm(...args); } });
   const running = await startControlCenter({ root, port: 0, services });
   t.after(async () => { running.server.closeAllConnections(); await new Promise((resolve) => running.server.close(resolve)); await fs.rm(root, { recursive: true, force: true }); });
   const url = new URL(running.url);
@@ -38,7 +40,7 @@ async function setup(t, count = 0) {
   const auth = { cookie: session.headers['set-cookie'][0].split(';')[0], origin: running.url, 'x-csrf-token': session.json.token, 'content-type': 'application/json' };
   const get = (route) => request(route, { headers: auth });
   const post = (route, value, headers = {}) => request(route, { method: 'POST', headers: { ...auth, ...headers }, data: JSON.stringify(value) });
-  return { ...running, root, reviewRoot, pipeline, request, auth, get, post, write, services };
+  return { ...running, root, reviewRoot, pipeline, request, auth, get, post, write, services, llmCalls: () => llmCalls };
 }
 
 test('suggestions API and all counters expose only active rules while durable history stays complete', async (t) => {
@@ -146,12 +148,20 @@ test('held paper remains reviewable when no Weekly export completed', async (t) 
   assert.equal((await app.post('/api/feedback', decision)).json.duplicate, true);
   assert.equal((await app.get('/api/pending-summary')).json.manual, 0);
 });
-test('research submit, generated suggestion, accept and replay; settings valid/invalid; no secrets', async (t) => {
+test('research POST only saves; successful workflow publishes for existing accept/replay; no secrets', async (t) => {
   const app = await setup(t);
   const result = await app.post('/api/research', { text: '需要更多机制研究', requestId: 'research-test' });
   assert.equal(result.status, 200);
-  assert.equal(result.json.status, 'processed');
-  assert.equal(result.json.suggestions, 1);
+  assert.equal(result.json.status, 'pending'); assert.equal(result.json.saved, true);
+  assert.equal(result.json.suggestions, 0); assert.equal(app.llmCalls(), 0);
+  assert.deepEqual((await app.get('/api/suggestions')).json, []);
+  assert.equal((await app.post('/api/research', { text: '需要更多机制研究', requestId: 'research-test' })).json.duplicate, true);
+  assert.equal((await app.post('/api/research', { text: '不同的反馈', requestId: 'research-test' })).status, 400);
+  const { store } = await createRunRecoveryCoordinator({ runRoot: path.join(app.reviewRoot, 'runs'), runId: 'research-publish', mode: 'desktop', profile: 'standard', launcherId: 'fixture', configHash: 'a'.repeat(64), inputHash: 'b'.repeat(64) });
+  await app.services.research.prepare({ store }); assert.equal(app.llmCalls(), 1);
+  assert.deepEqual((await app.get('/api/suggestions')).json, []);
+  for (const name of ['stage1', 'stage2_writeback', 'stage3_translation', 'stage4_exports']) await store.setStage(name, 'verified');
+  await app.services.research.publish({ store });
   const suggestions = (await app.get('/api/suggestions')).json;
   const decision = { id: suggestions[0].id, decision: 'accepted', humanApproval: true };
   assert.equal((await app.post('/api/decision', decision)).json.status, 'accepted');

@@ -5,13 +5,13 @@ import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { writeAtomicJson, writeAtomicText, withAtomicJsonLock } from './atomic_json.mjs';
 import { ruleSuggestionsLogPath, screeningStandardsPath } from './screening_standards_paths.mjs';
 import { normalizeRuleForDedup, syncSuggestionsToScreeningStandardsMd } from './screening_standards_rule_suggestions.mjs';
-import { suggestionContentIssue, isActiveRuleSuggestion } from './unified_pending_rule_suggestions.mjs';
+import { suggestionContentIssue, isActiveRuleSuggestion, normalizeSearchChange } from './unified_pending_rule_suggestions.mjs';
 import { applyKeywordModifications, buildPubMedQueryFromKeywordGroups, loadPubMedKeywordGroupsFromConfig } from './literature_config.mjs';
 
 const targetOf = (item) => item.target || 'screening_standards.md';
 const typeOf = (item) => item.change_type || 'add_rule';
 const applicable = (item) => (targetOf(item) === 'screening_standards.md' && ['add_rule', 'add_downgrade_signal', 'delete_rule', 'revise_rule'].includes(typeOf(item)))
-  || (targetOf(item) === 'pubmed_pmc_search.json' && ['add_keyword', 'remove_keyword'].includes(typeOf(item)));
+  || (targetOf(item) === 'pubmed_pmc_search.json' && ['add_keyword', 'remove_keyword', 'update_keywords'].includes(typeOf(item)));
 
 function exactRuleLine(content, needle) {
   const lines = content.split('\n');
@@ -51,6 +51,18 @@ function planMarkdown(content, item, rule, decision) {
 }
 
 function planKeywordConfig(content, item, rule) {
+  if (typeOf(item) === 'update_keywords') {
+    const change = normalizeSearchChange({ ...item, search_change: rule === (item.rule_text || item.suggested_rule) ? item.search_change : null, rule_text: rule });
+    if (!change || change.data_source !== 'pubmed_pmc' || change.strategy_id !== 'main' || change.application_boundary !== 'keyword_groups') throw new Error('SEARCH_MUTATION_UNCLEAR');
+    const labels = { required: '必含', optional: '可选', negative: '排除' };
+    const additions = Object.values(change.additions).flat();
+    const all = [...additions, ...change.removals].map(term => term.normalize('NFKC').toLowerCase());
+    if (!all.length || new Set(all).size !== all.length) throw new Error('SEARCH_CHANGE_CONFLICT');
+    let planned = content;
+    for (const [group, terms] of Object.entries(change.additions)) for (const term of terms) planned = planKeywordConfig(planned, { change_type: 'add_keyword' }, `添加${labels[group]}检索词：${term}`);
+    for (const term of change.removals) planned = planKeywordConfig(planned, { change_type: 'remove_keyword' }, `移除检索词：${term}`);
+    return planned;
+  }
   const adding = typeOf(item) === 'add_keyword';
   const match = adding ? /^添加(必含|可选|排除)检索词：(.+)$/.exec(rule) : /^移除检索词：(.+)$/.exec(rule);
   if (!match) throw new Error('SEARCH_MUTATION_UNCLEAR');

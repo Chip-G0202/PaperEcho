@@ -390,16 +390,17 @@ async function research(showIntro = true) {
   input.addEventListener('input', () => { researchDraft = input.value; researchRequestId = crypto.randomUUID(); });
   const submit = button('提交研究反馈', async () => {
     if (!input.value.trim()) throw new Error('请先描述你的研究需求或推荐质量反馈。');
-    input.disabled = true; receipt.textContent = '正在提交与处理，请稍候…';
+    input.disabled = true; receipt.textContent = '正在保存，请稍候…';
     try {
       const result = await api('/api/research', { text: input.value, requestId: researchRequestId });
-      receipt.textContent = `已接收 · ${result.status === 'processed' ? '处理完成' : '暂未完成处理，输入已保留'} · 产生 ${result.suggestions} 条待确认建议。${result.warnings.length ? '存在处理提醒，请检查模型配置后重试。' : ''}`;
-      viewRules.hidden = false;
-      if (result.status === 'processed') { input.value = ''; researchDraft = ''; researchRequestId = crypto.randomUUID(); }
+      if (!result.saved) throw new Error('反馈保存未确认，请重试。');
+      receipt.textContent = result.status === 'processed' || result.status === 'consumed' ? '该反馈已处理，可在规则建议中查看。' : '已保存，等待下一次工作流处理；业务成功后发布待审核建议。';
+      viewRules.hidden = !['processed', 'consumed'].includes(result.status);
+      input.value = ''; researchDraft = ''; researchRequestId = crypto.randomUUID();
     } catch (error) { receipt.textContent = '提交未完成，输入已保留。'; throw error; } finally { input.disabled = false; }
   }); submit.className = 'primary';
   form.append(label('你的评价', input), el('p', '生成的建议会先进入人工确认，不会直接修改正式规则。', 'meta'), submit, receipt); const viewRules = button('查看规则建议', () => navigate('feedback/rules')); viewRules.hidden = true; form.append(viewRules);
-  main.append(workspaceColumns([form], [contextCard('提交后会发生什么', ['反馈会生成待确认建议，不直接修改正式规则。', '处理成功后可前往“规则建议”继续审阅。'])]));
+  main.append(workspaceColumns([form], [contextCard('提交后会发生什么', ['反馈立即保存，提交时不生成建议。', '下一次 Radar/Weekly 业务成功后发布建议，审核接受前不改变正式规则。'])]));
 }
 async function suggestions(showIntro = true) {
   if (showIntro) main.append(pageIntro('规则建议审阅', '接受、拒绝或修改后提交，自动保存并继续下一条。'));
@@ -435,6 +436,7 @@ async function suggestions(showIntro = true) {
     const card = el('article', undefined, 'focused-card rule-card');
     const badges = el('div', undefined, 'badge-row'); badges.append(el('span', statusLabels[item.status] || '状态未提供', 'badge'), el('span', `风险：${riskLabels[item.risk_level] || '待核对'}`, item.risk_level === 'high' ? 'badge warning' : 'badge'));
     card.append(badges, el('h3', ruleTitle(item)), el('p', `目标：${({ 'screening_standards.md': '长期筛选标准', 'pubmed_pmc_search.json': 'PubMed 检索条件', 'openalex_search.json': 'OpenAlex 检索条件' })[item.target] || '待核对配置'}`), el('p', `建议理由：${rationaleText(item)}`));
+    if (item.feedback_event_ids?.length) card.append(el('p', `关联研究反馈 ${item.feedback_event_ids.length} 条${item.search_change ? ` · ${item.search_change.data_source} / ${item.search_change.strategy_id}` : ''}`, 'meta'));
     if (pending(item) && item.content_issue) card.append(el('p', '旧建议原文需要核对。请修改为清晰中文，或拒绝。', 'meta'));
     const details = el('details'); details.append(el('summary', '查看依据与技术详情'), el('p', item.evidence_text_excerpt || (item.evidence_titles || []).join('；') || '没有附加证据。'), el('p', `编号：${id} · 目标：${item.target || 'screening_standards.md'} · 变更类型：${item.change_type || 'add_rule'}`, 'meta')); card.append(details);
     if (receipt?.application_status === 'requires_manual_action' && pending(item)) card.append(el('p', '此前的接受意向未应用。可再次接受以尝试写入，或拒绝。', 'meta'));

@@ -376,7 +376,7 @@ export class RunRecoveryCoordinator {
   }
 }
 
-export async function resumeRunFromLedger({ runRoot, runId, mode, profile, configHash, inputHash = "", buildReconcilers, beforeReconcile = null, context = {}, notification = {} }, dependencies = {}) {
+export async function resumeRunFromLedger({ runRoot, runId, mode, profile, configHash, inputHash = "", buildReconcilers, beforeReconcile = null, onBusinessVerified = null, context = {}, notification = {} }, dependencies = {}) {
   const safeRunId = validateRecoveryRunId(runId);
   const lease = await acquireRunLease({ runRoot, runId: safeRunId, ttlMs: dependencies.ttlMs || 60_000 }, dependencies);
   if (!lease.acquired) return { runId: safeRunId, run_id: safeRunId, resume: true, status: "blocked", reason: lease.reason || "active_lease" };
@@ -403,10 +403,16 @@ export async function resumeRunFromLedger({ runRoot, runId, mode, profile, confi
     if (actualArtifactHash !== store.ledger.artifact.hash) throw new Error("RECOVERY_ARTIFACT_HASH_MISMATCH");
     if (store.ledger.inputHash !== actualArtifactHash) throw new Error("RECOVERY_INPUT_ARTIFACT_HASH_MISMATCH");
     let artifact = JSON.parse(await fsApi.readFile(store.ledger.artifact.path, "utf8"));
+    const publish = async () => {
+      if (!onBusinessVerified) return null;
+      try { return await onBusinessVerified({ store }); }
+      catch { return { status: 'pending', reason: 'research_publication_failed' }; }
+    };
+    let researchFeedback = await publish();
     const notificationRecovery = await resumeCompletedBusinessNotification({ store, ...notification, fsApi });
     if (notificationRecovery) {
       if (notificationRecovery.status === "completed") await finishRunGroup({ manifestPath: runGroupPath(runRoot, safeRunId), status: "completed", notificationRecovered: true, finishedAt: new Date().toISOString(), fsApi });
-      return { runId: safeRunId, run_id: safeRunId, resume: true, ...notificationRecovery };
+      return { runId: safeRunId, run_id: safeRunId, resume: true, ...notificationRecovery, ...(researchFeedback ? { researchFeedback } : {}) };
     }
     if (typeof beforeReconcile === "function") {
       const prepared = await beforeReconcile({ store, artifact, context });
@@ -414,10 +420,11 @@ export async function resumeRunFromLedger({ runRoot, runId, mode, profile, confi
     }
     const reconcilers = await buildReconcilers({ store, artifact, context });
     const recovery = await reconcileOperationLedger({ store, reconcilers, context: { ...context, artifact } });
+    researchFeedback = await publish();
     if (recovery.status === "completed") {
       await finishRunGroup({ manifestPath: runGroupPath(runRoot, safeRunId), status: "completed", finishedAt: new Date().toISOString() });
     }
-    return { runId: safeRunId, run_id: safeRunId, resume: true, status: recovery.status, outcomes: recovery.outcomes };
+    return { runId: safeRunId, run_id: safeRunId, resume: true, status: recovery.status, outcomes: recovery.outcomes, ...(researchFeedback ? { researchFeedback } : {}) };
   } finally {
     await releaseRunLease(lease, { fsApi: dependencies.fsApi || fs });
   }

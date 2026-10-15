@@ -52,6 +52,7 @@ tests/*
 !tests/spreadsheet_adapter_compat.test.mjs
 !tests/stage4_no_write_fallback.test.mjs
 !tests/unified_pending_rule_suggestions.test.mjs
+!tests/research_evaluation.test.mjs
 !tests/workflow_classifier.test.mjs
 
 # Personal release materials

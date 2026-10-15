@@ -82,7 +82,13 @@ UI 定向验证：`node --test workflow/tests/control_ui.test.mjs workflow/tests
 
 Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/无反馈时仍使用原 XLSX adapter。原有 Local 显式 JSONL 输入优先级保留。论文动作使用稳定 DOI/PMID/PMCID 匹配；无法匹配时保留人工处理，不回退到猜标题。下一次 workflow 通过既有 collection guard 执行动作，网页提交不会直接操作 Zotero。
 
-研究评价收据位于 `review_results/文献评价/research_evaluations/`；pending schema、去重与状态仍使用 `standards_rule_suggestions_log.json`。这些存储边界不合并。
+研究反馈由 `ResearchEvaluationService` 保存到原 `review_results/文献评价/research_evaluations/<requestId>.json`，保留原始反馈（按现有 Secret 脱敏边界）、digest、时间和 requestId；同一 requestId 同内容返回原收据，不调用 LLM。提交后显示“已保存，等待下一次工作流处理”。旧 `processed` 事件不会重新生成。
+
+正式 Desktop/Web Radar/Weekly 在已有 workflow lease、调度 claim 和启动门禁通过后冻结事件。状态为 `pending → preparing → prepared → consumed`；隐藏的 `research_evaluation_batch.json` 位于原受保护 run-state 目录，保存版本、确定性事件/上下文 hash、结果 hash 及原批次引用。单批 LLM 输入最多 20,000 字符，尚未冻结或运行期间新增的事件留到下一批。相同内容的多个事件保留，只合并模型输入；prepared 结果可跨失败运行复用。
+
+同一数据源、策略、应用边界及风险的关键词 additions/removals 归并为一条结构化建议；冲突操作保留并阻止接受，不能静默抵消。统一 suggestion owner 以结构化操作集合去重，既有 active 建议关联新反馈，终态审核历史不复活。正文规则不使用模糊相似度合并不同意图。明确的 PubMed 组合关键词修改仍由原 RuleSuggestionService 验证并原子 apply；修订需保持明确的添加/移除词语格式。
+
+Radar 在正式无写回业务结果验证完成后发布；Weekly 在正式 Stage4 导出验证完成后发布，不等待通知。只有此时才写入原 `standards_rule_suggestions_log.json` 的 pending 队列，审核接受前不影响检索或评级。发布先提交幂等建议日志，再标记批次及事件消费；中断后 resume 可补齐，已接受/拒绝的建议不会被重新激活。已确认生成失败保留 pending，当前 run 不重试 LLM；若进程在模型调用中中断、结果未知，则保留 preparing 并审计 `generation_outcome_unknown`，不自动重发同批付费请求。建议服务失败不会改变成功的文献业务结果。
 
 ## Legacy compatibility 与单向 import
 

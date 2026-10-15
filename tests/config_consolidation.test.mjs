@@ -12,6 +12,7 @@ import { parseRunnerArgs } from '../workflow/tools/runner/args.mjs';
 import { ConfigService } from '../workflow/tools/lib/control_config_service.mjs';
 import { createControlServices } from '../workflow/tools/lib/control_application_services.mjs';
 import { startControlCenter } from '../workflow/tools/web/server.mjs';
+import { createRunRecoveryCoordinator } from '../workflow/tools/recovery/run_recovery.mjs';
 import { loadRssSources, loadPubMedPmcSearchConfig, loadSourceSelectionConfig, loadWorkflowRules, updatePubMedPmcKeywordGroups } from '../workflow/tools/lib/literature_config.mjs';
 import { SecretService } from '../workflow/tools/lib/control_credentials_service.mjs';
 import { RuleSuggestionService } from '../workflow/tools/lib/control_rule_suggestion_service.mjs';
@@ -61,7 +62,7 @@ test('Runner explicit capability override is invocation-only; next ordinary run 
   assert.equal(JSON.parse(await fs.readFile(f.configPath, 'utf8')).preference.model, 'model-R');
 });
 
-test('isolated Control Center HTTP Settings -> Research Feedback uses exactly the saved model/endpoint', async (t) => {
+test('isolated HTTP research submission defers LLM until workflow preparation uses saved Settings', async (t) => {
   const f = await fixture(t);
   await migrateApplicationConfig({ root: f.root, env: f.env });
   await f.write('config/pubmed_pmc_search.json', { keyword_groups: { required: [['fixture']], optional: [], negative: [] } });
@@ -85,6 +86,9 @@ test('isolated Control Center HTTP Settings -> Research Feedback uses exactly th
   assert.equal(saved.status, 200);
   const result = await request('/api/research', { text: '优先关注机制研究', requestId: 'config-regression' }, auth);
   assert.equal(result.status, 200);
+  assert.equal(result.value.status, 'pending'); assert.equal(used, undefined);
+  const { store } = await createRunRecoveryCoordinator({ runRoot: path.join(f.root, 'review_results/文献评价/runs'), runId: 'config-preparation', mode: 'desktop', profile: 'standard', launcherId: 'fixture', configHash: 'a'.repeat(64), inputHash: 'b'.repeat(64) });
+  await services.research.prepare({ store });
   assert.deepEqual(used, { model: 'model-A', endpoint: 'https://a.example/v1/chat/completions' });
   assert.ok(!JSON.stringify((await request('/api/settings', null, auth)).value).includes('fake-key'));
 });

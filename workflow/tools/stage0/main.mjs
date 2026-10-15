@@ -35,6 +35,7 @@ import { claimWeeklyRadarWritebackCandidates } from "../stage1/weekly_merge_step
 import { radarNotificationReceiptPath, sendRadarAggregateNotification } from "../stage5/radar_notification.mjs";
 import { createRunRecoveryCoordinator, resumeRunFromLedger, RunRecoveryCoordinator } from "../recovery/run_recovery.mjs";
 import { acquireWorkflowLease, releaseRunLease } from "../recovery/operation_ledger.mjs";
+import { ResearchEvaluationService } from '../lib/research_evaluation_service.mjs';
 import { buildZoteroRecoveryReconcilers } from "../recovery/zotero_reconciliation.mjs";
 import { dayLabel, monthLabel } from "../lib/report_period_support.mjs";
 import {
@@ -215,6 +216,7 @@ export async function runZoteroLiteratureFilter({
   scheduledRuntimeStateReader = readScheduledRuntimeState,
   runId = `zlf-${Date.now()}-${randomUUID().slice(0, 8)}`,
   recoveryCoordinator = null,
+  researchEvaluationService = null,
 } = {}) {
   const startedAt = iso(clock());
   const profile = String(env.PAPERECHO_RUN_PROFILE || "standard").trim().toLowerCase();
@@ -245,6 +247,7 @@ export async function runZoteroLiteratureFilter({
     }
   }
   const dryRun = Boolean(runtimeSafety.dry_run);
+  const research = recoveryCoordinator && !dryRun && !stage1Only ? researchEvaluationService || new ResearchEvaluationService({ root: config.projectRoot, reviewRoot: config.reviewRoot, env }) : null;
   const runContext = buildRunContext({
     automationName: AUTOMATION_NAME,
     runId,
@@ -461,6 +464,7 @@ export async function runZoteroLiteratureFilter({
     return await completeRunGroup(report);
   }
 
+  if (research) artifacts.research_feedback = await research.safely('prepare', recoveryCoordinator.store);
   stages.push(await executeStage(stageDefs.stage1, runSameProcessStage, clock));
   notificationHealthObservations = Array.isArray(stages.at(-1).data?.report?.notification_health_observations) ? stages.at(-1).data.report.notification_health_observations : [];
   if (stage1Only && stages.at(-1).exitCode === 0) {
@@ -526,6 +530,7 @@ export async function runZoteroLiteratureFilter({
       await recoveryCoordinator.store.setStage("stage4_exports", "skipped", { reason: "radar_json_only" });
     }
     const urgentItems = Array.isArray(radarResult.urgentItems) ? radarResult.urgentItems : [];
+    if (research) artifacts.research_feedback_publication = await research.safely('publish', recoveryCoordinator.store);
     const indexPath = getDefaultZoteroLibraryIndexPath(config.projectRoot);
     const notificationSelection = await selectRadarNotificationCandidates(indexPath, urgentItems);
     const selectedItems = notificationSelection.selected.map((entry) => entry.item);
@@ -771,6 +776,7 @@ export async function runZoteroLiteratureFilter({
   }
   stages.push(stage4);
   const stage4Ok = stages.at(-1).exitCode === 0;
+  if (stage4Ok && research) artifacts.research_feedback_publication = await research.safely('publish', recoveryCoordinator.store);
   let stage5Notification = { status: "skipped", reason: "stage4_not_completed", attachments: [] };
   if (stage4Ok) {
     const stage5Request = resolveStage5Request(argv, env);
@@ -904,6 +910,7 @@ async function main() {
         profile,
         configHash,
         inputHash: "",
+        onBusinessVerified: ({ store }) => new ResearchEvaluationService({ root: config.projectRoot, reviewRoot: config.reviewRoot, env: process.env }).safely('publish', store),
         notification: { recipient: resolveStage5Request(process.argv.slice(2), process.env, profile === "radar" ? "radar" : "weekly").recipient, env: process.env, recordRadarOutcome: (selected, outcome) => recordRadarNotificationOutcome(getDefaultZoteroLibraryIndexPath(config.projectRoot), selected, outcome) },
         beforeReconcile: async ({ store, artifact }) => {
           const items = Array.isArray(artifact) ? artifact : [];

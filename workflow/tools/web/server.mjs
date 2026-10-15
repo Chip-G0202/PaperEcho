@@ -92,7 +92,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
         if (decoded === '/api/notifications') return send(200, await services.notifications.settings());
         if (decoded === '/api/suggestions') {
           const list = await services.rules.listPending();
-          return send(200, list.map((entry) => Object.fromEntries(['id', 'suggestion_id', 'target', 'change_type', 'rule_text', 'suggested_rule', 'rationale', 'evidence_titles', 'evidence_text_excerpt', 'risk_level', 'status', 'content_issue', 'can_apply', 'decision_receipt'].map((key) => [key, entry[key]]))));
+          return send(200, list.map((entry) => Object.fromEntries(['id', 'suggestion_id', 'target', 'change_type', 'rule_text', 'suggested_rule', 'rationale', 'evidence_titles', 'evidence_text_excerpt', 'risk_level', 'status', 'content_issue', 'can_apply', 'decision_receipt', 'search_change', 'feedback_event_ids'].map((key) => [key, entry[key]]))));
         }
       }
       if (req.method !== 'POST') return send(405, { error: 'METHOD_NOT_ALLOWED' });

@@ -13,7 +13,8 @@
 
 Control Center application boundary：
 
-- `workflow/tools/lib/control_application_services.mjs`：组合 services；纯文本评价调用 `stage1/manual_standard_evaluation.mjs` 的共享核心，propose 默认不变。
+- `workflow/tools/lib/control_application_services.mjs`：组合 services；研究反馈提交只调用 `research_evaluation_service.mjs` 持久保存，不即时调用 LLM。
+- `research_evaluation_service.mjs`：原 `research_evaluations` 事件生命周期及 run-scoped 准备/发布 owner；复用 `manual_standard_evaluation.mjs` 的 prepare-only 核心与统一 suggestion owner，不创建第二套建议队列。
 - `control_feedback_service.mjs`：canonical paper feedback history/current、幂等提交和批量原子写入；`control_legacy_feedback_adapter.mjs`：单向 XLSX import。
 - `control_config_service.mjs`：固定字段 registry，映射 canonical application config（迁移前兼容 domain JSON）；Runner 对象校验仍由 `runner/config_loader.mjs` 持有。
 - `control_rule_suggestion_service.mjs`：人工决策及安全 apply 编排；schema/dedup 仍归 `unified_pending_rule_suggestions.mjs`，正文插入逻辑复用 `screening_standards_rule_suggestions.mjs`。DOCX adapter 调同一 service。
