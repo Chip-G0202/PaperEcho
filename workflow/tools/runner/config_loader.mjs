@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { MODES, PROFILES, RUNNER_SCHEMA_VERSION, SUPPORTED_RUNNER_CONFIG_SCHEMAS } from "./constants.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
 import { DOMAIN_SECTIONS, validateApplicationSections, normalizeNotificationPreferences } from '../lib/application_config.mjs';
+import { copyEnvironment, mapCredentialReference } from '../lib/credential_registry.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const DEFAULT_CONFIG_PATH = path.join(REPO_ROOT, "config", "paperecho.config.json");
@@ -218,6 +219,7 @@ function mapSecretReference({ target, sourceEnv, canonicalName, envName, secretS
   const value = String(sourceEnv[sourceName] || "");
   if (value) target[canonicalName] = value;
   else delete target[canonicalName];
+  mapCredentialReference(target, sourceEnv, canonicalName, sourceName);
   secretStatus[canonicalName] = { env: sourceName, configured: Boolean(value) };
 }
 
@@ -301,7 +303,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   const common = validateCommon(config?.common, configSchemaVersion || 1);
   const pathSection = validatePathSection(mode, config?.[mode]);
   const configDir = loaded.configPath ? path.dirname(loaded.configPath) : cwd;
-  const effectiveEnv = { ...env };
+  const effectiveEnv = copyEnvironment(env);
   if (configSchemaVersion >= 3) {
     effectiveEnv.PAPERECHO_APPLICATION_CONFIG = loaded.configPath;
     effectiveEnv.review_results_RUN_INTERVAL_DAYS = String(config.weekly?.intervalDays || 7);

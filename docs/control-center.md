@@ -142,9 +142,11 @@ canonical feedback、研究评价收据和 pending suggestions 均使用解析�
 
 `control_credentials_service.mjs` 中的 SecretService 是唯一网页凭据写入 owner；持久存储仍为项目 `.env`。只接受 allowlist key 和最多 4096 字符的单行值，不接受控制字符或同时包含两种引号的值。格式检查复用既有 loader 的解析结果，并仅支持无重复 key 的单行赋值、空行及注释；多行、export、含糊引号等格式拒绝写入，请通过原环境配置入口维护。未知 entries 保持原样。
 
-写入使用既有原子文件 owner 和锁，临时文件 POSIX mode 为 0600（Windows 继承目录 ACL），不生成含 secret 的备份；`.env`、临时文件和锁均被 gitignore 排除。写入失败不更新当前环境，错误仅返回固定代码。旧值在当前服务进程内继续用于脱敏，清除不会使旧值重新出现在响应中。
+写入复用既有原子文件 owner 和锁；凭据锁最多等待 15 秒，不抢占旧锁。POSIX 使用 0600；Windows 在临时文件写入任何凭据字节前设置受保护 DACL，并校验临时文件及替换后的最终文件，已有文件中无法确认的授权主体会阻止保存。回滚副本先收紧权限再写入，正常成功或失败后清理；最终校验失败恢复旧内容，恢复本身失败则保留受保护副本并报告需要恢复。成功前不更新当前环境，错误仅返回固定代码。
 
-当前进程中的外部环境值与本地文件不一致时该项只读，需在原注入入口维护后重启。本地修改对当前 Control Center 和下一次 workflow 生效，已运行的其他进程需重启。Clear 将目标值置空，不修改其他 key；例如 preference learning 仍可能按既有规则回退使用 title translation key。
+来源由环境加载器记录并随 runtime 副本传递，不比较密钥值；外部注入即使与本地值相同也只读，自定义引用及无法确认来源的项同样禁止通过默认凭据入口写入。保存收据分别记录文件保存、当前凭据服务更新和新 workflow 启动时加载的语义；外部环境仍优先，已运行的其他进程需重启。Clear 将目标值置空，不修改其他 key；例如 preference learning 仍可能按既有规则回退使用 title translation key。
+
+SecretService 与 Runner 复用 `credential_registry.mjs` 的 allowlist 和脱敏规则：先按长度从长到短移除全部完整值，再移除前后缀片段，避免共享片段破坏后续匹配。旧值在当前服务进程内继续脱敏，清除后也不回显。安全测试使用隔离假凭据；hardlink 的目标位于新建目录、创建前不存在，验证真实 link count 及拒绝写入后源内容不变，不关闭正式文件检查。
 
 ## 安全与验证
 

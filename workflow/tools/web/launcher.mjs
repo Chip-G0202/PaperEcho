@@ -2,6 +2,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
+import { environmentForControlChild } from '../lib/env_file_bootstrap.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startControlCenter, resolveControlCenterStartup, controlCenterInstance, CONTROL_CENTER_HOST, CONTROL_CENTER_PORT, CONTROL_CENTER_ROOT, CONTROL_CENTER_PRODUCT } from './server.mjs';
 
@@ -112,7 +113,7 @@ export async function launchControlCenter({ root = CONTROL_CENTER_ROOT, env = pr
     if (selected.status === 'same') { await openBrowser(url); return { status: 'reused', url }; }
     // OS port binding arbitrates concurrent launchers. A losing child exits;
     // no PID files, locks, unrelated process termination or daemon manager.
-    const child = spawnImpl(process.execPath, [launcherPath, '--serve', '--port', String(selectedPort), ...argv], { cwd: startup.root, env, detached: true, windowsHide: true, shell: false, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+    const child = spawnImpl(process.execPath, [launcherPath, '--serve', '--port', String(selectedPort), ...argv], { cwd: startup.root, env: environmentForControlChild(env), detached: true, windowsHide: true, shell: false, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
     let failure = null; let bound = false;
     child.on('error', () => { failure = 'START_FAILED'; });
     child.on('message', (message) => { if (message?.ready) bound = true; if (message?.error) failure = message.error === 'EADDRINUSE' ? 'EADDRINUSE' : 'START_FAILED'; });

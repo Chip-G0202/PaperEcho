@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createControlServices } from '../tools/lib/control_application_services.mjs';
+import { secureCredentialFile } from '../tools/lib/credential_file_security.mjs';
 import { migrateApplicationConfig } from '../tools/lib/application_config_migration.mjs';
 import { validateRunnerConfigObject } from '../tools/runner/config_loader.mjs';
 import { readNotificationReceipt, testNotificationReceiptPathFor } from '../tools/stage5/email_receipt.mjs';
@@ -86,6 +87,8 @@ test('disabled QQ explicit Test is generic, independently deduped and does not e
 
 test('QQ credential Replace/Clear remains redacted and preserves channel config', async t => {
   const f = await fixture(t);
+  // Existing dummy credentials need an explicit ACL, independent of host groups.
+  await secureCredentialFile(path.join(f.root, '.env'));
   const before = await f.read();
   await f.services.secrets.replace('QQ_BOT_APP_SECRET', 'replacement-fixture');
   assert.equal((await qqChannel(f)).credential.configured, true);

@@ -17,16 +17,10 @@ import { extractLastJsonObject, validateProductionResult } from "./result_valida
 import { notifyRunFailure } from "../notification/failure_notifier.mjs";
 import { processHealthNotifications } from "../notification/health_notifier.mjs";
 import { emailDeliveryPolicy } from '../notification/policy.mjs';
-
-const SECRET_NAMES = ["SMTP_PASS", "ZOTERO_API_KEY", "TITLE_TRANSLATION_API_KEY", "PREFERENCE_LEARNING_API_KEY", "EASYSCHOLAR_SECRET_KEY"];
+import { redactSecrets, secretValues } from '../lib/credential_registry.mjs';
 
 export function redactText(text, env = process.env) {
-  let safe = String(text || "");
-  for (const name of SECRET_NAMES) {
-    const value = String(env[name] || "");
-    if (value) safe = safe.split(value).join("[REDACTED]");
-  }
-  return safe;
+  return redactSecrets(text, secretValues(env));
 }
 
 export function runProduction(plan, dependencies = {}) {
@@ -40,21 +34,30 @@ export function runProduction(plan, dependencies = {}) {
     const child = spawnImpl(process.execPath, [plan.entry, ...plan.args], { cwd: plan.cwd, env: plan.childEnv, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["inherit", "pipe", "pipe", "ipc"] });
     let rawStdout = "";
     let rawStderr = "";
+    const pending = { stdout: '', stderr: '' };
+    const output = { stdout, stderr };
+    const flush = (name, chunk = '', final = false) => {
+      pending[name] += chunk;
+      const end = final ? pending[name].length : pending[name].lastIndexOf('\n') + 1;
+      if (end) { output[name].write(redactText(pending[name].slice(0, end), plan.childEnv)); pending[name] = pending[name].slice(end); }
+      // ponytail: bounded line buffering; oversized log lines are suppressed.
+      if (pending[name].length > 1048576) { pending[name] = ''; output[name].write('[oversized log line suppressed]\n'); }
+    };
     const watchdog = watchProductionChild(child, { timeoutMs, graceMs: dependencies.graceMs, processApi: dependencies.processApi || process,
       force: dependencies.forceChildTree,
       onStop: (status) => stderr.write(`[runner] ${status}: terminating owned production child\n`),
-      onUnreaped: (status) => { watchdog.cleanup(); child.unref?.(); child.stdout?.destroy?.(); child.stderr?.destroy?.(); if (child.connected) child.disconnect?.(); resolve({ code: 1, status, childExitConfirmed: false, stdout: rawStdout, stderr: rawStderr }); },
+      onUnreaped: (status) => { flush('stdout', '', true); flush('stderr', '', true); watchdog.cleanup(); child.unref?.(); child.stdout?.destroy?.(); child.stderr?.destroy?.(); if (child.connected) child.disconnect?.(); resolve({ code: 1, status, childExitConfirmed: false, stdout: rawStdout, stderr: redactText(rawStderr, plan.childEnv) }); },
     });
     child.stdout?.on("data", (chunk) => {
       rawStdout += chunk;
-      stdout.write(redactText(chunk, plan.childEnv));
+      flush('stdout', chunk);
     });
     child.stderr?.on("data", (chunk) => {
       rawStderr += chunk;
-      stderr.write(redactText(chunk, plan.childEnv));
+      flush('stderr', chunk);
     });
     child.once("error", (error) => { watchdog.cleanup(); reject(error); });
-    child.once("close", (code, signal) => { const status = watchdog.status || (signal ? "interrupted" : Number(code) === 0 ? "completed" : "failed"); watchdog.cleanup(); resolve({ code: status === "completed" ? 0 : Number(code || 1), status, signal, childExitConfirmed: true, stdout: rawStdout, stderr: rawStderr }); });
+    child.once("close", (code, signal) => { flush('stdout', '', true); flush('stderr', '', true); const status = watchdog.status || (signal ? "interrupted" : Number(code) === 0 ? "completed" : "failed"); watchdog.cleanup(); resolve({ code: status === "completed" ? 0 : Number(code || 1), status, signal, childExitConfirmed: true, stdout: rawStdout, stderr: redactText(rawStderr, plan.childEnv) }); });
   });
 }
 
@@ -82,8 +85,9 @@ function notificationSummary(result) {
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
-  const stdout = dependencies.stdout || process.stdout;
-  const stderr = dependencies.stderr || process.stderr;
+  let outputEnv = dependencies.env || process.env;
+  const stdout = { write: value => (dependencies.stdout || process.stdout).write(redactText(value, outputEnv)) };
+  const stderr = { write: value => (dependencies.stderr || process.stderr).write(redactText(value, outputEnv)) };
   let cliOptions;
   try { cliOptions = parseRunnerArgs(argv, { cwd: dependencies.cwd || process.cwd(), allowUnresolvedMode: true }); }
   catch (error) {
@@ -94,7 +98,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   try {
     resolved = await (dependencies.resolveRunnerConfigurationImpl || resolveRunnerConfiguration)(cliOptions, dependencies);
   } catch (error) {
-    stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "invalid_configuration", code: String(error?.code || "CONFIG_INVALID"), error: redactText(error?.message || error, dependencies.env || process.env), details: error?.details || {} })}\n`);
+    stderr.write(`${redactText(JSON.stringify({ schemaVersion: 1, status: "invalid_configuration", code: String(error?.code || "CONFIG_INVALID"), error: String(error?.message || error), details: error?.details || {} }), dependencies.env || process.env)}\n`);
     return EXIT_CODES.configuration;
   }
   if (cliOptions.scheduledDaily) {
@@ -117,6 +121,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     resolved = { ...selection.resolved, options: { ...selection.resolved.options, scheduledDecision: selection.decision } };
   }
   const options = resolved.options;
+  outputEnv = resolved.env;
   const runtimeDependencies = { ...dependencies, env: resolved.env };
   const preflight = await (dependencies.runPreflightImpl || runPreflight)(options, runtimeDependencies);
   stdout.write(`${formatPreflightSummary(preflight)}\n${JSON.stringify({ type: "preflight", ...preflight })}\n`);

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseEnvFile } from './env_file_parser.mjs';
+import { markLocalCredential, credentialOrigin, copyEnvironment } from './credential_registry.mjs';
 export { parseEnvFile } from './env_file_parser.mjs';
 
 export function resolveDotEnvPath() {
@@ -11,9 +12,8 @@ export function resolveDotEnvPath() {
   return path.join(repoRoot, ".env");
 }
 
-function loadDotEnv() {
-  if (process.env.PAPERECHO_SKIP_DOTENV === '1') return;
-  const envPath = resolveDotEnvPath();
+export function loadDotEnv({ env = process.env, envPath = resolveDotEnvPath() } = {}) {
+  if (env.PAPERECHO_SKIP_DOTENV === '1') return env;
   if (!fs.existsSync(envPath)) return;
 
   let parsed = null;
@@ -24,10 +24,20 @@ function loadDotEnv() {
   }
 
   for (const [key, value] of Object.entries(parsed || {})) {
-    if (!(key in process.env)) {
-      process.env[key] = value;
+    if (!(key in env)) {
+      env[key] = value;
+      markLocalCredential(env, key, path.resolve(envPath));
     }
   }
+  return env;
+}
+
+// A freshly launched Control Center must load local values itself. External
+// injections, including identical values, remain untouched and win as before.
+export function environmentForControlChild(env) {
+  const child = copyEnvironment(env);
+  for (const name of Object.keys(child)) if (credentialOrigin(env, name).kind === 'local-managed') delete child[name];
+  return child;
 }
 
 loadDotEnv();

@@ -11,6 +11,7 @@ import { resolveLlmRuntime } from "../lib/llm_json_support.mjs";
 import { buildRuntimeConfig } from "../lib/runtime_config.mjs";
 import { RUNNER_SCHEMA_VERSION } from "./constants.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
+import { copyEnvironment } from '../lib/credential_registry.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const ENTRY_BY_MODE = Object.freeze({
@@ -112,7 +113,7 @@ export function buildExecutionPlan(options, { env = process.env, repoRoot = REPO
   if (!options.resume && options.email) args.push("--email", options.email);
   if (!options.resume && options.forceResend) args.push("--force-resend");
   if (options.resume) args.push("--resume", options.resume);
-  const childEnv = { ...env };
+  const childEnv = copyEnvironment(env);
   if (options.resume && options.email) childEnv.PAPERFLOW_REPORT_TO = options.email;
   if (options.mode === "desktop") {
     childEnv.ZOTERO_BACKEND = "cli";

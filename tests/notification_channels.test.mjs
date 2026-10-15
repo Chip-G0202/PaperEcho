@@ -5,6 +5,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { createControlServices } from '../workflow/tools/lib/control_application_services.mjs';
+import { secureCredentialFile } from '../workflow/tools/lib/credential_file_security.mjs';
 import { migrateApplicationConfig } from '../workflow/tools/lib/application_config_migration.mjs';
 import { validateRunnerConfigObject, resolveRunnerConfiguration } from '../workflow/tools/runner/config_loader.mjs';
 import { parseRunnerArgs } from '../workflow/tools/runner/args.mjs';
@@ -101,6 +102,8 @@ test('invalid/unknown Settings are rejected atomically, preserving saved configu
 });
 test('SMTP Replace/Clear uses SecretService and immediately changes channel readiness', async (t) => {
   const f = await fixture(t);
+  // Existing dummy credentials need an explicit ACL, independent of host groups.
+  await secureCredentialFile(path.join(f.root, '.env'));
   await f.services.secrets.replace('SMTP_PASS', 'new-fixture-secret');
   assert.equal((await channel(f)).credential.configured, true);
   assert.equal(JSON.stringify(await channel(f)).includes('new-fixture-secret'), false);

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { yyMd, isoWeek } from "./date_label_support.mjs";
+import { copyEnvironment } from './credential_registry.mjs';
 
 function toPosix(p) {
   return String(p || "").replace(/\\/g, "/");
@@ -232,7 +233,7 @@ export async function resolveApplicationRuntimeContext({ cwd = process.cwd(), en
   let localRepository = null;
   if (resolved.options.mode === 'local') {
     const local = buildLocalRuntimeConfig({ cwd, argv: resolved.options.outputRoot ? ['--output-root', resolved.options.outputRoot] : [] });
-    runtimeEnv = { ...runtimeEnv, review_results_OUTPUT_ROOT: local.outputRoot };
+    runtimeEnv = copyEnvironment(runtimeEnv, { review_results_OUTPUT_ROOT: local.outputRoot });
     const { LocalRepository } = await import('../local/local_repository.mjs');
     localRepository = new LocalRepository(local.outputRoot);
   }
