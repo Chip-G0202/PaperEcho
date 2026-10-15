@@ -1,5 +1,29 @@
 # PaperEcho Control Center — v2.4 使用与兼容说明
 
+## Electron 技术 PoC（独立实验入口）
+
+`desktop/electron-poc/` 固定 Electron 版本，只加载现有 Control Center 静态资源与 HTTP/application services。服务复用原 workspace 指纹、候选端口及 foreign listener 检查；同 workspace 复用，退出仅关闭本窗口持有的服务对象。renderer 保持 Node 关闭、context isolation/sandbox/webSecurity 开启，无 preload 或 IPC；外部导航、新窗口和非本实例请求均拒绝。
+
+PoC 仅使用 `tests/runs/electron-poc/` 下隔离数据，Electron profile/session/logs 也位于该目录，不加载开发 `.env` 或继承 provider 凭据。它不替换根目录 Windows/macOS 启动器，不执行真实 workflow。安装依赖需要开发 Node >= 22.12；依赖完整时，窗口与下述 smoke 的 Electron 子进程可在空 PATH 下启动。
+
+仓库根目录中的 PowerShell 7 命令（已有根目录依赖）：
+
+```powershell
+$env:TEMP = Join-Path $PWD 'tests/runs/electron-poc/tmp'
+$env:TMP = $env:TEMP
+$env:electron_config_cache = Join-Path $PWD 'tests/runs/electron-cache'
+New-Item -ItemType Directory -Force $env:TEMP | Out-Null
+npm ci --prefix desktop/electron-poc --cache tests/runs/electron-npm-cache --no-audit --no-fund
+node desktop/electron-poc/node_modules/electron/install.js
+node tests/helpers/electron_smoke_runner.mjs
+```
+
+下载器采用 Node fetch；需要环境代理时在下载命令前设置 `NODE_USE_ENV_PROXY=1`。GUI 验证需要可启动 Electron 子进程的正常桌面执行环境：本机 Codex 受限执行环境曾产生 renderer launch-failed 49、GPU 0xC0000135；同二进制在普通进程边界下正常，无须改变产品 sandbox 或禁用 GPU。
+
+Smoke 使用真实 BrowserWindow、fixture、DOM、精确 viewport 和原安全断言，覆盖桌面及 390px 响应式。当前 Windows 主机的 `capturePage()` surface copy 会拒绝并报 `UnknownVizError`；测试通过 Electron 原生 debugger 的 `Page.captureScreenshot`、`fromSurface:false` 获取同窗口视图，结束 detach，不开启远程调试端口。console/runtime 错误仍须为零，主动验证 CSP 拒绝的消息除外。旧证据先归档；PNG、报告等运行产物不提交。
+
+Shell GUI 验证与发行分开：源码依赖布局尚不能证明 packaged module resolution、发行 fuses 或只读安装目录兼容。`ELECTRON_RUN_AS_NODE=1` 的无窗口依赖加载、子进程和正式 launcher `--check` 仅证明开发目录下的运行时路径；未执行真实 `--run --scheduled-daily`，也未完成独立 bundled Node 比较或 macOS 实测。Runtime Distribution、正式 Headless 与 macOS 仍为后续 Gate。[Electron debugger](https://www.electronjs.org/docs/latest/api/debugger) 与 [fuses](https://www.electronjs.org/docs/latest/tutorial/fuses) 为对应官方接口说明。
+
 ## 启动与使用
 
 文献卡片的 Feedback / Manual Review 共用 `review_display_metadata.mjs`：publication venue 与 RSS feed provenance 分离；通用 feed label 不作为期刊，缺失 venue 时可仅显示 RSS。已有翻译和共享 cache 只读投影；可达 Manual 项目的新翻译由 workflow 的 `manual_review_translation_step.mjs` 复用共享生成器完成，页面请求不调用模型。旧 pending 继续保存身份与历史，当前 artifact 提供展示元数据。

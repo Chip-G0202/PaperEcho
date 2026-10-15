@@ -1,0 +1,9 @@
+{
+  "name": "paperecho-electron-poc",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": { "start": "electron ." },
+  "devDependencies": { "electron": "44.7.2" }
+}

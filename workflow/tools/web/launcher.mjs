@@ -52,7 +52,7 @@ export function controlCenterPorts(instance, port = CONTROL_CENTER_PORT) {
   // ponytail: eight deterministic alternates; exhaustion fails closed.
   return [...new Set([port, ...Array.from({ length: 8 }, (_, index) => first + index)])];
 }
-async function discoverControlCenter(ports, instance, probe) {
+export async function discoverControlCenter(ports, instance, probe = inspectControlCenter) {
   let vacant = null;
   for (const port of ports) {
     const url = localUrl(port); const status = await probe(url, instance);
