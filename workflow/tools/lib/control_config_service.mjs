@@ -1,9 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { isIP } from 'node:net';
 import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { buildPubMedQueryFromKeywordGroups } from './literature_config.mjs';
-import { readApplicationConfig, applicationConfigPath, DOMAIN_SECTIONS } from './application_config.mjs';
+import { readApplicationConfig, applicationConfigPath, DOMAIN_SECTIONS, isValidRssPublicationTitle } from './application_config.mjs';
+import { sanitizeSourceUrl } from '../stage1/source_state.mjs';
 import { migrateApplicationConfig, upgradeNotificationConfig, upgradeNotificationChannelsConfig, upgradeOutboundChannelsConfig } from './application_config_migration.mjs';
 import { isValidSmtpHost } from '../stage5/email_sender.mjs';
 
@@ -105,7 +107,16 @@ export function validateSetting(definition, value) {
     if (type === 'url') {
       let url;
       try { url = new URL(value); } catch { fail(); }
-      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail();
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || (!rules.allowQuery && url.search) || url.hash) fail();
+      if (rules.rss) {
+        const host = url.hostname.replace(/\.$/, '');
+        // Static configuration check only; DNS/redirect policy belongs to retrieval.
+        if (isIP(host.replace(/^\[|\]$/g, '')) || !host.includes('.') || /(?:^|\.)(?:localhost|local|localdomain|internal|home|lan)$/i.test(host) || /[\\\u007f-\u009f]|%(?:0[0-9a-f]|1[0-9a-f]|7f)/iu.test(value)) fail();
+        if ([...new URL(sanitizeSourceUrl(value)).searchParams].length !== [...url.searchParams].length) fail();
+        for (const [name, parameter] of url.searchParams) {
+          if (/^(?:auth|sig(?:nature)?|access[-_]?key|pass(?:wd)?|pwd|jwt)$/i.test(name) || /[\u0000-\u001f\u007f]|%(?:0[0-9a-f]|1[0-9a-f]|7f)|https?:\/\/[^/\s]*@/i.test(name + parameter)) fail();
+        }
+      }
     }
   }
   if (type === 'list' && (!Array.isArray(value) || value.some((entry) => !rules.values.includes(entry)) || new Set(value).size !== value.length)) fail();
@@ -117,9 +128,9 @@ export function validateSetting(definition, value) {
   if (type === 'rss') {
     if (!Array.isArray(value) || value.length > 500) fail();
     for (const source of value) {
-      if (!source || Object.keys(source).some((key) => !['name', 'url', 'enabled'].includes(key))) fail();
+      if (!source || Object.keys(source).some((key) => !['name', 'url', 'enabled', 'publicationTitle'].includes(key)) || !isValidRssPublicationTitle(source.publicationTitle)) fail();
       validateSetting({ type: 'string', validation: { maxLength: 200 } }, source.name);
-      validateSetting({ type: 'url', validation: {} }, source.url);
+      validateSetting({ type: 'url', validation: { allowQuery: true, rss: true } }, source.url);
       if (typeof source.enabled !== 'boolean') fail();
     }
     if (new Set(value.map((entry) => entry.url)).size !== value.length) fail();

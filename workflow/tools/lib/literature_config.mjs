@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readDomainConfig, readApplicationConfig, applicationConfigPath } from './application_config.mjs';
+import { readDomainConfig, readApplicationConfig, applicationConfigPath, isValidRssPublicationTitle } from './application_config.mjs';
 import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 
 function repoRoot() {
@@ -28,7 +28,10 @@ export function loadRssSources({ root } = {}) {
   const sources = rawSources
     .map((entry) => typeof entry === "string" ? { url: entry, enabled: true } : entry)
     .filter((entry) => enabled(entry) && String(entry?.url || "").trim())
-    .map((entry) => ({ name: String(entry.name || entry.url).trim(), url: String(entry.url).trim(), ...(entry.publicationTitle ? { publicationTitle: String(entry.publicationTitle).trim() } : {}) }));
+    .map((entry) => {
+      if (!isValidRssPublicationTitle(entry.publicationTitle)) throw new Error('RSS_PUBLICATION_TITLE_INVALID');
+      return { name: String(entry.name || entry.url).trim(), url: String(entry.url).trim(), ...(entry.publicationTitle ? { publicationTitle: entry.publicationTitle.trim() } : {}) };
+    });
   return { path: resolvedPath, sources, warnings, raw_count: rawSources.length, enabled_count: sources.length };
 }
 

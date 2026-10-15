@@ -507,8 +507,9 @@ function rssEditor(setting, container) {
     list.replaceChildren();
     entries.forEach((entry, index) => {
       const row = el('div', undefined, 'rss-row'); const name = el('input'); name.value = entry.name; name.placeholder = '例如：期刊或机构名称'; const url = el('input'); url.type = 'url'; url.value = entry.url; url.placeholder = '例如：https://example.com/feed.xml'; const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = entry.enabled;
-      name.oninput = () => { entry.name = name.value; }; url.oninput = () => { entry.url = url.value; }; enabled.onchange = () => { entry.enabled = enabled.checked; };
-      row.append(label('名称', name), label('RSS URL', url), label('启用', enabled), button('删除该订阅', () => { entries.splice(index, 1); draw(); })); list.append(row);
+      const publicationTitle = el('input'); publicationTitle.value = entry.publicationTitle ?? ''; publicationTitle.maxLength = 200; publicationTitle.placeholder = '仅填写该 Feed 对应的正式期刊名；综合来源留空';
+      name.oninput = () => { entry.name = name.value; }; url.oninput = () => { entry.url = url.value; }; enabled.onchange = () => { entry.enabled = enabled.checked; }; publicationTitle.oninput = () => { entry.publicationTitle = publicationTitle.value; };
+      row.append(label('Feed 名称（订阅源显示名称）', name), label('期刊名称 / Publication Title（可选）', publicationTitle), label('RSS URL', url), label('启用', enabled), button('删除该订阅', () => { entries.splice(index, 1); draw(); })); list.append(row);
     });
   };
   draw(); container.append(list, button('添加 RSS', () => { entries.push({ name: '', url: '', enabled: false }); draw(); }));

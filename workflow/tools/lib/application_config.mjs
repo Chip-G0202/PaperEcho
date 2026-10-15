@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
+import { cleanJournalName } from './journal_name_cleaner.mjs';
 
 export const APPLICATION_SCHEMA_VERSION = 6;
 export const DOMAIN_SECTIONS = Object.freeze({
@@ -13,6 +14,12 @@ export const DOMAIN_SECTIONS = Object.freeze({
   'preference_learning.config.json': 'preference',
 });
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
+export function isValidRssPublicationTitle(value) {
+  if (value === undefined) return true;
+  if (typeof value !== 'string' || value.length > 200 || /[<>\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/u.test(value)) return false;
+  const venue = cleanJournalName(value);
+  return !value.trim() || Boolean(venue) && !/[<>]|https?:\/\//i.test(venue);
+}
 export function assertNonSecret(value) {
   if (!value || typeof value !== 'object') return;
   for (const [key, child] of Object.entries(value)) {
@@ -35,6 +42,7 @@ export function validateApplicationSections(config) {
     for (const key of ['model', 'endpoint', 'prompt_file', 'query']) if (value[key] !== undefined && typeof value[key] !== 'string') throw new Error('APPLICATION_CONFIG_VALUE_INVALID');
     if (value.temperature !== undefined && (typeof value.temperature !== 'number' || !Number.isFinite(value.temperature))) throw new Error('APPLICATION_CONFIG_VALUE_INVALID');
     if (value.sources !== undefined && !Array.isArray(value.sources)) throw new Error('APPLICATION_CONFIG_VALUE_INVALID');
+    if (section === 'rss' && value.sources?.some(source => object(source) && !isValidRssPublicationTitle(source.publicationTitle))) throw new Error('APPLICATION_CONFIG_VALUE_INVALID');
   }
   if (config.weekly !== undefined && (!object(config.weekly) || !Number.isInteger(config.weekly.intervalDays) || config.weekly.intervalDays < 1)) throw new Error('APPLICATION_CONFIG_WEEKLY_INVALID');
   return config;

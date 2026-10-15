@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 import { FeedbackService, readCanonicalFeedback, canonicalFeedbackPath, canonicalFeedbackActionRows, manualGradeFeedback } from '../tools/lib/control_feedback_service.mjs';
 import { importLegacyWorkbook } from '../tools/lib/control_legacy_feedback_adapter.mjs';
-import { ConfigService } from '../tools/lib/control_config_service.mjs';
+import { ConfigService, validateSetting } from '../tools/lib/control_config_service.mjs';
+import { validateRunnerConfigObject } from '../tools/runner/config_loader.mjs';
+import { loadRssSources } from '../tools/lib/literature_config.mjs';
+import { parseRssItems } from '../tools/stage1/retrieval_step.mjs';
+import { getReviewDisplayMetadata } from '../tools/lib/review_display_metadata.mjs';
 import { getTranslationConfig } from '../tools/lib/title_translation_support.mjs';
 import { getPreferenceLearningConfig } from '../tools/lib/preference_learning_support.mjs';
 import { RuleSuggestionService } from '../tools/lib/control_rule_suggestion_service.mjs';
@@ -184,6 +188,72 @@ test('config valid round trip and invalid/verification failure preserve old valu
   await assert.rejects(service.update('../outside', true), /UNKNOWN/);
   await assert.rejects(service.update('rss.sources', [{ name: 'bad', url: 'javascript:alert(1)', enabled: true }]), /INVALID/);
   await assert.rejects(service.updateMany([{ id: 'translation.model', value: 'one' }, { id: 'translation.model', value: 'two' }]), /BATCH_INVALID/);
+});
+test('RSS venue round trips through legacy and canonical owners without changing other Settings', async (t) => {
+  for (const schemaVersion of [1, 2, 3, 4, 5, 6]) {
+    const root = await fixture(t);
+    const file = path.join(root, 'config', 'paperecho.config.json');
+    const legacyFile = path.join(root, 'config', 'rss_sources.json');
+    const old = [{ name: 'Combined research feed', url: 'https://example.org/rss?query=research&facet-journal-id=123', enabled: true }];
+    const config = { schemaVersion, mode: 'local', common: {}, local: { enabled: true }, ...(schemaVersion >= 3 ? { rss: { sources: old }, translation: { model: 'unchanged' } } : {}) };
+    await fs.writeFile(file, JSON.stringify(config));
+    await fs.writeFile(legacyFile, JSON.stringify({ sources: old }));
+    const service = new ConfigService({ root, env: {} });
+    const listed = () => service.list().then(rows => rows.find(row => row.id === 'rss.sources').value);
+    assert.deepEqual(await listed(), old);
+    assert.equal(loadRssSources({ root }).sources[0].publicationTitle, undefined);
+    const next = [
+      { ...old[0], publicationTitle: 'Journal of Neuroinflammation' },
+      { name: 'Combined source', url: 'https://example.org/combined', enabled: true, publicationTitle: '' },
+      { name: 'Legacy source', url: 'http://example.org/legacy', enabled: false },
+    ];
+    await service.update('rss.sources', next);
+    assert.deepEqual(await listed(), next);
+    await service.update('rss.sources', (await listed()).map(source => ({ ...source, enabled: !source.enabled })));
+    await service.update('rss.sources', next);
+    assert.deepEqual(await listed(), next);
+    const saved = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (schemaVersion >= 3) { const { rss, ...rest } = saved; const { rss: originalRss, ...originalRest } = config; assert.deepEqual(rest, originalRest); }
+    else assert.deepEqual(saved, config);
+    assert.deepEqual(JSON.parse(await fs.readFile(legacyFile, 'utf8')), { sources: schemaVersion >= 3 ? old : next });
+    const source = loadRssSources({ root }).sources[0];
+    const [item] = parseRssItems('<rss><channel><title>Latest Results</title><item><title>Synthetic paper</title></item></channel></rss>', source.url, source);
+    assert.equal(item.publicationTitle, next[0].publicationTitle);
+    assert.equal(getReviewDisplayMetadata(item).journal, next[0].publicationTitle);
+    assert.equal(item.feed_title, 'Latest Results'); assert.equal(item.feed_name, old[0].name); assert.equal(item.feed_url, old[0].url);
+  }
+});
+test('RSS Settings accept public query parameters and reject unsafe URLs before saving', async (t) => {
+  const root = await fixture(t); const file = path.join(root, 'config', 'rss_sources.json');
+  const source = { name: 'Public feed', url: 'https://example.org/rss?facet-journal-id=123&query=%28brain+OR+cell%29&search-within=Journal', enabled: true };
+  await fs.writeFile(file, JSON.stringify({ sources: [source] }));
+  const service = new ConfigService({ root, env: {} });
+  await service.update('rss.sources', [source]);
+  const before = await fs.readFile(file, 'utf8');
+  const unsafe = ['not a URL', 'javascript:alert(1)', 'file:///tmp/feed', 'ftp://example.org/feed', 'https://user:password@example.org/rss', 'https://example.org/rss#fragment', 'https://localhost/rss', 'https://service.local/rss', 'https://service.internal/rss', 'https://127.1/rss', 'https://[::1]/rss', 'https://10.0.0.1/rss', 'https://example.org/rss?query=%0Ahidden', 'https://example.org/%0dhidden', 'https://example.org/rss?query=%250ahidden', 'https://example.org/rss\n', 'https://example.org\\feed'];
+  for (const name of ['token', 'access_token', 'api_key', 'apiKey', 'password', 'secret', 'key', 'authorization', 'credential', 'signature', 'auth', 'access_key', 'pwd', '%74oken']) unsafe.push(`https://example.org/rss?${name}=synthetic-value`);
+  for (const url of unsafe) {
+    await assert.rejects(service.update('rss.sources', [{ ...source, url }]), /SETTING_VALUE_INVALID/);
+    assert.equal(await fs.readFile(file, 'utf8'), before);
+  }
+  await assert.rejects(service.update('translation.endpoint', 'https://example.org/api?query=public'), /SETTING_VALUE_INVALID/);
+});
+test('RSS publication title schema accepts absent/empty values and rejects noise or unsafe metadata', async (t) => {
+  const root = await fixture(t); const file = path.join(root, 'config', 'rss_sources.json');
+  const definition = { type: 'rss', validation: {} };
+  const source = { name: 'Combined feed', url: 'https://example.org/rss', enabled: true };
+  for (const publicationTitle of [undefined, '', 'Journal of Neuroinflammation', 'Science Advances']) {
+    const sources = [{ ...source, ...(publicationTitle === undefined ? {} : { publicationTitle }) }];
+    assert.doesNotThrow(() => validateSetting(definition, sources));
+    assert.doesNotThrow(() => validateRunnerConfigObject({ schemaVersion: 6, rss: { sources } }));
+  }
+  for (const publicationTitle of [null, 12, {}, 'x'.repeat(201), 'RSS', 'Latest Results', 'Table of Contents', '<b>Journal</b>', '&lt;script&gt;', 'https://example.org/journal', 'Journal\nName', 'Journal\u200bName']) {
+    const sources = [{ ...source, publicationTitle }];
+    assert.throws(() => validateSetting(definition, sources), /SETTING_VALUE_INVALID/);
+    assert.throws(() => validateRunnerConfigObject({ schemaVersion: 6, rss: { sources } }), /APPLICATION_CONFIG_VALUE_INVALID/);
+    await fs.writeFile(file, JSON.stringify({ sources }));
+    assert.throws(() => loadRssSources({ root }), /RSS_PUBLICATION_TITLE_INVALID/);
+  }
 });
 test('missing model owners remain configurable and initialize atomically on first save', async (t) => {
   const root = await fixture(t); const service = new ConfigService({ root });

@@ -241,7 +241,7 @@ node skills/paperecho-local/scripts/run.mjs --check --config config/paperecho.co
 | 文件 | 用户配置项 | 默认/缺失行为 | 实际读取模块 |
 |---|---|---|---|
 | `source_selection.json` | `research_domain`、`domain_options`、`override_enabled_sources`、`require_manual_confirmation` | 默认 biomedical -> PubMed/PMC + RSS；非法 domain 变 unknown 并 warning | `literature_config.mjs` / Stage1 source selection |
-| `rss_sources.json` | `sources[].name/url/enabled` | 缺失为空；`enabled=false` 或空 URL 不运行该条 | `loadRssSources` |
+| `rss_sources.json` | `sources[].name/url/enabled`，可选 `publicationTitle` | 缺失为空；`enabled=false` 或空 URL 不运行该条 | `loadRssSources` |
 | `pubmed_pmc_search.json` | `databases`、`days_back`、`retmax`、`sort`、`datetype`、`query`、`keyword_groups`，以及受支持的 `adaptive_query` | days_back 10、retmax 300、PubMed/date/pdat；无效值 warning + fallback | `loadPubMedPmcSearchConfig` |
 | `openalex_search.json` | `enabled`、`query`、`days_back`、`per_page`、`mailto`、`filters`、`sort`、`select` | 默认 disabled；per_page 最大 200；空 query warning/空结果 | `loadOpenAlexConfig` |
 | `review-workflow-rules.json` | `triage`、`llm_review`、`manual_standard_evaluation`、`feedback_learning` | 缺失用代码内保守规则；解析错误失败 | `loadWorkflowRules`、classifier、quality gate、feedback learning |
@@ -249,6 +249,10 @@ node skills/paperecho-local/scripts/run.mjs --check --config config/paperecho.co
 | `preference_learning.config.json` | endpoint/model、sampling、stream/thinking、timeout/retries/tokens、user_id、response format、prompt、key fallback order | 字段缺失/非法时使用代码默认；首选 preference key、再用 translation key | `preference_learning_support.mjs` |
 | 两个 prompt Markdown | prompt text 与 `${sourceText}` 等既有占位 | 使用领域 config 指向的文件 | 对应 LLM owner |
 | `screening_standards.md` | 用户长期筛选边界与理由 | 缺失初始化中文基线；是长期标准唯一来源 | Stage1 preference learning |
+
+RSS Settings 中，`name` 是 Feed 显示名称；可选 `publicationTitle` 是用户明确声明的正式期刊名，最多 200 字符。旧配置不必补字段；综合来源可留空，保存不会从 `name` 自动复制。非空值拒绝 URL、HTML、控制字符及 `RSS` / `Latest Results` / `Table of Contents` 等噪声。现有 parser 保留 feed provenance，并将显式期刊名作为 venue 候选；无可靠 venue 时 UI/XLSX 安全显示 RSS。已有历史产物不会因此自动回填。
+
+RSS URL 继续使用 Settings 的 URL 校验，接受公开 HTTP(S) feed 的普通查询参数（推荐 HTTPS，例如 `facet-journal-id`、`query`、`search-within`），拒绝敏感凭据参数、userinfo、fragment、不安全 scheme、控制字符、本地名称和 IP 字面地址。敏感值应由独立 Secret owner 管理，不得嵌入 Feed URL；不会静默删除参数后声称保存成功。此处是静态配置检查，不执行 DNS/redirect 检查，也不改变检索器网络策略；其他 Settings URL 的校验保持原样。
 
 ## 12. 高级/兼容配置，不进入普通填写问卷
 

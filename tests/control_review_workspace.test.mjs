@@ -65,6 +65,36 @@ function ui() {
 }
 const papers = (count = 100) => Array.from({ length: count }, (_, i) => ({ id: String(i), title: `English ${i} — ${'long title '.repeat(i === 0 ? 80 : 1)}`, translatedTitle: `中文副标题 ${i}`, authors: ['测试作者'], finalGrade: ['A', 'B', 'C'][i % 3], ruleGrade: 'B', semanticGrade: 'A', needsReview: i === count - 1, manualReviewPending: i === count - 1, reviewReason: i === count - 1 ? '既有等级复审依据' : '', source: 'PubMed', journal: 'Journal', year: '2026', doi: i ? '' : '10.1234/test', pmid: String(1000 + i), zotero: 'not_used_local', feedbackAllowed: true, feedback: null }));
 
+test('RSS Settings preserve optional venue on repeated edits without copying Feed names', async () => {
+  const app = ui(); const calls = [];
+  const sources = [
+    { name: 'Combined research feed', url: 'https://example.org/rss?query=public', enabled: true },
+    { name: 'Journal Feed', url: 'https://example.org/journal', enabled: true, publicationTitle: 'Journal of Neuroinflammation' },
+  ];
+  app.setApi(async (url, payload) => {
+    if (url === '/api/credentials') return [];
+    if (payload) { calls.push(payload); sources.splice(0, sources.length, ...structuredClone(payload.updates[0].value)); return { saved: true }; }
+    return [{ category: 'RSS', available: true, id: 'rss.sources', description: 'RSS 来源列表', type: 'rss', value: sources, validation: {} }];
+  });
+  await app.settings('common', 'rss');
+  let rows = app.main.querySelectorAll('.rss-row');
+  assert.match(rows[0].textContent, /Feed 名称（订阅源显示名称）.*期刊名称 \/ Publication Title（可选）/);
+  const venueInput = row => row.querySelectorAll('input').find(input => input.maxLength === 200);
+  assert.equal(venueInput(rows[0]).value, ''); assert.equal(venueInput(rows[1]).value, sources[1].publicationTitle);
+  await byText(app.main, '保存本组').click();
+  assert.deepEqual(Object.keys(calls[0].updates[0].value[0]).sort(), ['enabled', 'name', 'url']);
+  app.main.replaceChildren(); await app.settings('common', 'rss'); rows = app.main.querySelectorAll('.rss-row');
+  const venue = venueInput(rows[0]); venue.value = 'Science Advances'; venue.oninput();
+  await byText(app.main, '保存本组').click();
+  assert.equal(sources[0].name, 'Combined research feed'); assert.equal(sources[0].publicationTitle, 'Science Advances');
+  assert.equal(sources[0].url, 'https://example.org/rss?query=public');
+  assert.deepEqual(Array.from(calls[1].updates, entry => entry.id), ['rss.sources']);
+  app.main.replaceChildren(); await app.settings('common', 'rss'); rows = app.main.querySelectorAll('.rss-row');
+  assert.equal(venueInput(rows[0]).value, 'Science Advances');
+  venueInput(rows[0]).value = ''; venueInput(rows[0]).oninput();
+  await byText(app.main, '保存本组').click(); assert.equal(sources[0].publicationTitle, '');
+  assert.equal(sources[1].publicationTitle, 'Journal of Neuroinflammation');
+});
 test('Feedback and Manual cards render shared translated venue metadata and escaped text', async () => {
   for (const section of ['normal','manual']) {
     const app=ui();
