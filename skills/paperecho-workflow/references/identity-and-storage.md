@@ -1,5 +1,9 @@
 # Identity and Storage Reference
 
+## Deployment roots
+
+`runtime_config.mjs::resolveRuntimePaths/prepareRuntimePaths` is the sole layout owner. Portable/Installed resolve canonical config, `.env`, all mutable state and child temporary paths under explicit user/cache roots; Dev keeps the v2.5 layout. No implicit migration or legacy fallback is allowed in new layouts. See [configuration](../../../docs/configuration.md) for bootstrap parameters, root precedence, legacy conflicts and rollback boundaries. Packaging and platform acceptance are separate from the path contract.
+
 ## Canonical identity
 
 - Owner: `workflow/tools/lib/literature_identity.mjs`.

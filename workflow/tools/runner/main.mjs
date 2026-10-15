@@ -18,6 +18,7 @@ import { notifyRunFailure } from "../notification/failure_notifier.mjs";
 import { processHealthNotifications } from "../notification/health_notifier.mjs";
 import { emailDeliveryPolicy } from '../notification/policy.mjs';
 import { redactSecrets, secretValues } from '../lib/credential_registry.mjs';
+import { resolveRuntimePaths } from '../lib/runtime_config.mjs';
 
 export function redactText(text, env = process.env) {
   return redactSecrets(text, secretValues(env));
@@ -89,7 +90,10 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const stdout = { write: value => (dependencies.stdout || process.stdout).write(redactText(value, outputEnv)) };
   const stderr = { write: value => (dependencies.stderr || process.stderr).write(redactText(value, outputEnv)) };
   let cliOptions;
-  try { cliOptions = parseRunnerArgs(argv, { cwd: dependencies.cwd || process.cwd(), allowUnresolvedMode: true }); }
+  try {
+    const paths = resolveRuntimePaths({ env: outputEnv });
+    cliOptions = parseRunnerArgs(argv, { cwd: paths.layout === 'dev' ? dependencies.cwd || process.cwd() : paths.userDataRoot, allowUnresolvedMode: true });
+  }
   catch (error) {
     stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "invalid_input", error: String(error?.message || error) })}\n`);
     return EXIT_CODES.input;

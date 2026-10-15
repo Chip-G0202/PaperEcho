@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { cleanJournalName } from './journal_name_cleaner.mjs';
+import { resolveRuntimePaths, assertRuntimeDataPath } from './runtime_config.mjs';
 
 export const APPLICATION_SCHEMA_VERSION = 6;
 export const DOMAIN_SECTIONS = Object.freeze({
@@ -48,6 +49,8 @@ export function validateApplicationSections(config) {
   return config;
 }
 export function applicationConfigPath({ root, env = process.env, configPath } = {}) {
+  const paths = resolveRuntimePaths({ applicationRoot: root, env });
+  if (paths.layout !== 'dev') return assertRuntimeDataPath(paths, path.resolve(paths.userDataRoot, configPath || env.PAPERECHO_APPLICATION_CONFIG || env.PAPERECHO_CONFIG || paths.configPath));
   return path.resolve(configPath || env.PAPERECHO_APPLICATION_CONFIG || env.PAPERECHO_CONFIG || path.join(root || env.ZOTERO_PROJECT_ROOT || process.cwd(), 'config', 'paperecho.config.json'));
 }
 export function readApplicationConfig(options = {}) {

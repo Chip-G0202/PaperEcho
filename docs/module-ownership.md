@@ -11,6 +11,8 @@
 
 ## 1. 能力归属表
 
+Deployment paths：`workflow/tools/lib/runtime_config.mjs` 独占 `resolveRuntimePaths/prepareRuntimePaths`。config resolver、`.env` bootstrap、SecretService、Control Center 与 Runner 复用它；业务状态仍由原 owner 管理，不另建 root resolver。Portable/Installed/Dev、旧布局与安全失败规则见 [配置指南](configuration.md)。
+
 Control Center application boundary：
 
 - `workflow/tools/lib/control_application_services.mjs`：组合 services；研究反馈提交只调用 `research_evaluation_service.mjs` 持久保存，不即时调用 LLM。

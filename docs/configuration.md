@@ -1,5 +1,29 @@
 # PaperEcho 配置指南
 
+## v2.6 程序与数据路径契约
+
+唯一 root owner 仍是 `workflow/tools/lib/runtime_config.mjs`：`resolveRuntimePaths()` 解析 Application/User Data/Cache/Temporary roots，`prepareRuntimePaths()` 校验边界和目录写权限。部署 layout 与业务 mode（Desktop/Web/Local）独立，不自动切换 backend。下列是新增的 bootstrap 环境参数，必须在启动前提供，不能通过 `.env` 改变自身位置；本轮不增加 CLI 参数或安装器。
+
+| 参数 | 契约 |
+|---|---|
+| `PAPERECHO_LAYOUT` | `dev`（默认）、`portable`、`installed`；不根据 cwd、只读目录或凭据猜测 layout |
+| `PAPERECHO_APPLICATION_ROOT` | 可选绝对程序根；默认由模块位置确定，代码、静态资源与未来 bundled runtime 位于这里 |
+| `PAPERECHO_DATA_ROOT` | Portable 默认 `<application>/data`，覆盖值相对程序根且必须为其子目录；Installed 覆盖值必须为绝对、独立数据根；Dev 不接受此新参数，保留旧配置契约 |
+| `PAPERECHO_WORKSPACE_ID` | Installed 未显式给 data root 时必填；1–64 位字母数字/下划线/短横线，以字母数字起始；不从安装路径派生，更新程序目录不会换 workspace |
+| `PAPERECHO_CACHE_ROOT` | Portable 默认 `<application>/cache`；Installed 显式 data root 时默认 `<data>/.cache`，可选独立绝对 cache root；cache 不能包含 data 或程序目录 |
+
+Installed 默认 Windows 数据根为 `%LOCALAPPDATA%/PaperEcho/workspaces/<id>`，cache 为 `%LOCALAPPDATA%/PaperEcho/cache/<id>`；使用本机非漫游目录，未设置合法 `LOCALAPPDATA` 时明确失败。macOS 路径契约为 `~/Library/Application Support/PaperEcho/<id>` 与 `~/Library/Caches/PaperEcho/<id>`，目前仅模拟路径测试，未实机验收。依据：[Microsoft 本机应用数据约定](https://learn.microsoft.com/en-us/windows/apps/develop/windows-app-restore)、[Apple 支持文件与缓存约定](https://developer.apple.com/documentation/foundation/using-the-file-system-effectively)。
+
+新模式的 canonical 配置仍是 `<data>/config/paperecho.config.json`，SecretService 与 loader 只用 `<data>/.env`，不复制、不合并文件，不改变 schema。相对 canonical 配置字段继续相对其 config 目录解析；如 `common.projectRoot: ".."` 指向数据根。相对调用路径以选定 data root 为基准，程序脚本仍来自 Application Root；业务结果、研究规则、反馈/审核历史、claim、ledger、receipt 与恢复信息继续由现有 owner 管理。Local 默认 `<data>/review_results/local`。新模式拒绝越出 data root 的可变状态 override；外部只读导入输入保持显式指定。Temporary Root 为 `<cache>/tmp`，传递给 workflow 子进程的 TEMP/TMP/TMPDIR；旧业务 cache 仍保留在既有数据路径，不在本轮移动或删除。
+
+Portable 用相对配置随整个程序目录移动；指向旧绝对位置的配置不会被自动重写或猜测修复。Installed 的 data/cache 与程序目录必须互不包含，不允许写入 app.asar。启动时拒绝 root/配置路径的 symlink/junction 越界；凭据文件原有 hardlink、格式、原子写入、锁与 Windows ACL 检查保留。目录采用并发安全创建、独占空探针确认可写，不放宽已有目录 ACL。不可写或布局冲突必须停止，不回退到程序目录或另一数据根。
+
+兼容边界：默认 Dev 继续读取 v2.5 程序根 `config/paperecho.config.json` 与 `.env`，已有 `common.projectRoot`、Local output 等旧契约保留；内部默认程序位置由模块定位，不随启动 cwd 改变。新模式只检查程序根的已知旧数据标记（`.env`、canonical config、runtime state、研究规则、runs、pipeline），不扫描历史目录。发现旧标记且未显式选定 `PAPERECHO_DATA_ROOT` 时返回 `RUNTIME_LEGACY_DATA_FOUND`，不自动选择或复制；显式选定 data root 后旧根仍原样保留，不作为 fallback。多个工作区须分别指定 id/root，配置与凭据不能跨根拼接。
+
+本轮没有迁移、卸载或自动回滚动作。回滚代码不得清理新数据根；旧 v2.5 不认识新 layout，回用旧版本前须保留两套目录并人工核对旧版本路径/凭据入口，不能假定它会自动发现新根。安装更新不得将 data/cache 当程序产物替换，实际 packaging/installer/headless runtime 仍需后续验收。
+
+验证：`node --test workflow/tests/runtime_paths.test.mjs`（隔离 Portable/Installed HTTP、移动、并发目录、Secret 与状态 owner），加 `runner_config`、`control_credentials`、`control_runtime_roots`、`control_http`、`operation_ledger`、recovery、scheduled-daily 定向回归，再运行 `npm run check` 和 `npm test`。测试 TEMP/TMP 及产物限定 `tests/runs/`，无真实外部操作；只读程序目录用拒写文件系统注入验证，不修改真实安装目录 ACL。
+
 v2.5 的 schema v3 收敛非敏感配置，v4 增加 Radar/Weekly 通知偏好，v5 增加 QQ outbound，v6 一次增加默认关闭的微信、飞书、企业微信群机器人渠道。Settings → 通知与推送可独立多选五个渠道；凭据由 SecretService 管理。迁移、字段、产品长度预算与 provider 边界以 [Config map](../config/README.md) 为准。本文以下表格继续描述 v1/v2 compatibility；迁移后旧领域文件不再是保存目标，旧模型 env 不再覆盖 Settings。
 
 **日常首选 Control Center → Settings。当前 schemaVersion 为 6，非敏感应用配置的唯一 canonical 文件是 `config/paperecho.config.json`；密钥通过 Credentials、本机 `.env` 或外部环境维护，不进入 JSON。** 长期研究规则正文 `screening_standards.md` 由 Research Feedback / Rule Suggestions 或正式编辑入口维护；它不是第二份应用配置。pending/feedback/规则建议及决策历史、runtime/schedule state、ledger、receipts、reports、history、logs 都是运行数据，不应手工编辑来配置应用。

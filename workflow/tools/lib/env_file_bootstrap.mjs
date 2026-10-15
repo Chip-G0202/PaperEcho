@@ -1,20 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolveRuntimePaths, assertRuntimeDataPath } from './runtime_config.mjs';
 
 import { parseEnvFile } from './env_file_parser.mjs';
 import { markLocalCredential, credentialOrigin, copyEnvironment } from './credential_registry.mjs';
 export { parseEnvFile } from './env_file_parser.mjs';
 
-export function resolveDotEnvPath() {
-  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-  const repoRoot = path.resolve(moduleDir, "../../..");
-  return path.join(repoRoot, ".env");
+export function resolveDotEnvPath({ env = process.env } = {}) {
+  const paths = resolveRuntimePaths({ env });
+  return assertRuntimeDataPath(paths, paths.secretPath);
 }
 
-export function loadDotEnv({ env = process.env, envPath = resolveDotEnvPath() } = {}) {
+export function loadDotEnv({ env = process.env, envPath = resolveDotEnvPath({ env }) } = {}) {
   if (env.PAPERECHO_SKIP_DOTENV === '1') return env;
+  const paths = resolveRuntimePaths({ env });
+  assertRuntimeDataPath(paths, path.resolve(envPath));
   if (!fs.existsSync(envPath)) return;
+  if (paths.layout !== 'dev') {
+    const stat = fs.lstatSync(envPath);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error('RUNTIME_SECRET_PATH_UNSAFE');
+  }
 
   let parsed = null;
   try {
@@ -24,6 +29,7 @@ export function loadDotEnv({ env = process.env, envPath = resolveDotEnvPath() } 
   }
 
   for (const [key, value] of Object.entries(parsed || {})) {
+    if (['PAPERECHO_LAYOUT', 'PAPERECHO_APPLICATION_ROOT', 'PAPERECHO_DATA_ROOT', 'PAPERECHO_CACHE_ROOT', 'PAPERECHO_WORKSPACE_ID'].includes(key)) continue;
     if (!(key in env)) {
       env[key] = value;
       markLocalCredential(env, key, path.resolve(envPath));

@@ -7,6 +7,7 @@ import { MODES, PROFILES, RUNNER_SCHEMA_VERSION, SUPPORTED_RUNNER_CONFIG_SCHEMAS
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
 import { DOMAIN_SECTIONS, validateApplicationSections, normalizeNotificationPreferences } from '../lib/application_config.mjs';
 import { copyEnvironment, mapCredentialReference } from '../lib/credential_registry.mjs';
+import { resolveRuntimePaths, prepareRuntimePaths, assertRuntimeDataPath } from '../lib/runtime_config.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const DEFAULT_CONFIG_PATH = path.join(REPO_ROOT, "config", "paperecho.config.json");
@@ -266,11 +267,12 @@ function selectConfigMode(config) {
 }
 
 export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) {
-  const cwd = dependencies.cwd || process.cwd();
   const env = dependencies.env || process.env;
+  const paths = resolveRuntimePaths({ applicationRoot: dependencies.cwd || REPO_ROOT, env });
+  const cwd = paths.layout === 'dev' ? dependencies.cwd || process.cwd() : paths.userDataRoot;
   const fsApi = dependencies.fsApi || fs;
   const existsSync = dependencies.existsSync || fsSync.existsSync;
-  const defaultConfigPath = dependencies.defaultConfigPath || DEFAULT_CONFIG_PATH;
+  const defaultConfigPath = dependencies.defaultConfigPath || (paths.layout === 'dev' ? DEFAULT_CONFIG_PATH : paths.configPath);
   const explicitConfigPath = String(cliOptions.configPath || "").trim();
   const envConfigPath = String(env.PAPERECHO_CONFIG || "").trim();
   let requestedPath = "";
@@ -286,6 +288,8 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
     configSource = "default_file";
   }
 
+  if (requestedPath) assertRuntimeDataPath(paths, requestedPath);
+  prepareRuntimePaths(paths);
   const loaded = await loadConfigFile({ requestedPath, source: configSource, fsApi, cwd });
   const config = normalizeNotificationPreferences(loaded.config);
   const configSelection = selectConfigMode(config);
@@ -304,6 +308,15 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   const pathSection = validatePathSection(mode, config?.[mode]);
   const configDir = loaded.configPath ? path.dirname(loaded.configPath) : cwd;
   const effectiveEnv = copyEnvironment(env);
+  if (paths.layout !== 'dev') {
+    effectiveEnv.PAPERECHO_APPLICATION_ROOT = paths.applicationRoot;
+    effectiveEnv.PAPERECHO_DATA_ROOT = paths.userDataRoot;
+    effectiveEnv.ZOTERO_PROJECT_ROOT = path.resolve(paths.userDataRoot, env.ZOTERO_PROJECT_ROOT || '.');
+    if (env.review_results_OUTPUT_ROOT) effectiveEnv.review_results_OUTPUT_ROOT = path.resolve(paths.userDataRoot, env.review_results_OUTPUT_ROOT);
+    if (env.review_results_ROOT) effectiveEnv.review_results_ROOT = path.resolve(effectiveEnv.review_results_OUTPUT_ROOT || paths.userDataRoot, env.review_results_ROOT);
+    effectiveEnv.PAPERECHO_APPLICATION_CONFIG = loaded.configPath || paths.configPath;
+    effectiveEnv.TEMP = paths.tempRoot; effectiveEnv.TMP = paths.tempRoot; effectiveEnv.TMPDIR = paths.tempRoot;
+  }
   if (configSchemaVersion >= 3) {
     effectiveEnv.PAPERECHO_APPLICATION_CONFIG = loaded.configPath;
     effectiveEnv.review_results_RUN_INTERVAL_DAYS = String(config.weekly?.intervalDays || 7);
@@ -396,8 +409,13 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   }
 
   const input = provided.input ? cliOptions.input : resolveRelative(pathSection.input, configDir);
-  const outputRoot = provided.outputRoot ? cliOptions.outputRoot : resolveRelative(pathSection.outputRoot, configDir);
+  const outputRoot = provided.outputRoot ? cliOptions.outputRoot : resolveRelative(pathSection.outputRoot, configDir) || (paths.layout !== 'dev' && mode === 'local' ? path.join(paths.userDataRoot, 'review_results', 'local') : '');
   const feedback = provided.feedback ? cliOptions.feedback : resolveRelative(pathSection.feedback, configDir);
+  if (paths.layout !== 'dev') {
+    for (const value of [effectiveEnv.ZOTERO_PROJECT_ROOT, effectiveEnv.review_results_OUTPUT_ROOT, effectiveEnv.review_results_ROOT, effectiveEnv.PAPERECHO_APPLICATION_CONFIG, effectiveEnv.PAPERECHO_SOURCE_STATE_ROOT, effectiveEnv.PAPERECHO_NOTIFICATION_RECEIPT_ROOT, effectiveEnv.PAPERECHO_NOTIFICATION_HEALTH_ROOT, outputRoot]) {
+      if (value) assertRuntimeDataPath(paths, path.resolve(value));
+    }
+  }
   const configPathDisplay = safeConfigPath(loaded.configPath, cwd);
   const options = {
     ...cliOptions,

@@ -12,6 +12,7 @@ import { NotificationChannelService } from './control_notification_service.mjs';
 
 export function createControlServices({ root, reviewRoot, env = process.env, llmClient = null, notificationTransport, qqTransport, channelTransports, context = buildRuntimeConfig({ cwd: root, env, argv: [] }) } = {}) {
   reviewRoot ||= context.reviewRoot;
+  if (context.layout && context.layout !== 'dev') root = context.userDataRoot;
   env = copyEnvironment(context.env || env, { PAPERECHO_APPLICATION_CONFIG: context.configPath || path.join(root, 'config', 'paperecho.config.json') });
   const secrets = new SecretService({ root, env });
   const research = new ResearchEvaluationService({ root, reviewRoot, env, llmClient, redact: text => secrets.redact(text) });

@@ -1,4 +1,7 @@
 import path from "node:path";
+import fs from 'node:fs';
+import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from "node:url";
 import { yyMd, isoWeek } from "./date_label_support.mjs";
 import { copyEnvironment } from './credential_registry.mjs';
@@ -61,17 +64,98 @@ function defaultProjectRoot() {
   return normalizePath(path.resolve(here, "../../.."));
 }
 
-export function buildRuntimeConfig({ cwd = process.cwd(), env = process.env, argv = process.argv, now } = {}) {
+function pathFailure(code) { throw Object.assign(new Error(code), { code }); }
+const within = (root, value, paths = path) => {
+  const relative = paths.relative(root, value);
+  return !relative.startsWith('..') && !paths.isAbsolute(relative);
+};
+// Deployment layout is bootstrap input, never inferred from cwd, credentials or config contents.
+export function resolveRuntimePaths({ applicationRoot = defaultProjectRoot(), env = process.env, platform = process.platform, homeDir = os.homedir() } = {}) {
+  const paths = platform === 'win32' ? path.win32 : path.posix;
+  const absolute = value => paths.isAbsolute(value) && (platform !== 'win32' || !/^\\\\[?.]\\/.test(value) && /^[a-z]:[\\/]|^\\\\[^\\/]+[\\/][^\\/]+/i.test(value));
+  const layout = env.PAPERECHO_LAYOUT || 'dev';
+  if (!['dev', 'portable', 'installed'].includes(layout)) pathFailure('RUNTIME_LAYOUT_INVALID');
+  applicationRoot = env.PAPERECHO_APPLICATION_ROOT || applicationRoot;
+  if (!absolute(applicationRoot) && layout !== 'dev') pathFailure('RUNTIME_APPLICATION_ROOT_ABSOLUTE_REQUIRED');
+  applicationRoot = paths.resolve(applicationRoot);
+  let userDataRoot = applicationRoot; let cacheRoot = paths.join(applicationRoot, '.cache');
+  if (layout === 'dev' && (env.PAPERECHO_DATA_ROOT || env.PAPERECHO_CACHE_ROOT)) pathFailure('RUNTIME_LAYOUT_REQUIRED');
+  if (layout === 'portable') {
+    userDataRoot = paths.resolve(applicationRoot, env.PAPERECHO_DATA_ROOT || 'data');
+    cacheRoot = paths.resolve(applicationRoot, env.PAPERECHO_CACHE_ROOT || 'cache');
+    if (paths.relative(applicationRoot, userDataRoot) === '' || !within(applicationRoot, userDataRoot, paths) || !within(applicationRoot, cacheRoot, paths)) pathFailure('RUNTIME_PORTABLE_BOUNDARY');
+  }
+  if (layout === 'installed') {
+    if (env.PAPERECHO_DATA_ROOT) {
+      if (!absolute(env.PAPERECHO_DATA_ROOT)) pathFailure('RUNTIME_DATA_ROOT_ABSOLUTE_REQUIRED');
+      userDataRoot = paths.normalize(env.PAPERECHO_DATA_ROOT);
+      cacheRoot = paths.join(userDataRoot, '.cache');
+    } else {
+      const id = env.PAPERECHO_WORKSPACE_ID;
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id || '')) pathFailure('RUNTIME_WORKSPACE_ID_REQUIRED');
+      if (platform === 'win32') {
+        if (!absolute(env.LOCALAPPDATA || '')) pathFailure('RUNTIME_LOCAL_APPDATA_REQUIRED');
+        userDataRoot = paths.join(env.LOCALAPPDATA, 'PaperEcho', 'workspaces', id);
+        cacheRoot = paths.join(env.LOCALAPPDATA, 'PaperEcho', 'cache', id);
+      } else if (platform === 'darwin') {
+        if (!paths.isAbsolute(homeDir)) pathFailure('RUNTIME_HOME_ABSOLUTE_REQUIRED');
+        userDataRoot = paths.join(homeDir, 'Library', 'Application Support', 'PaperEcho', id);
+        cacheRoot = paths.join(homeDir, 'Library', 'Caches', 'PaperEcho', id);
+      } else pathFailure('RUNTIME_PLATFORM_UNSUPPORTED');
+    }
+    if (env.PAPERECHO_CACHE_ROOT) {
+      if (!absolute(env.PAPERECHO_CACHE_ROOT)) pathFailure('RUNTIME_CACHE_ROOT_ABSOLUTE_REQUIRED');
+      cacheRoot = paths.normalize(env.PAPERECHO_CACHE_ROOT);
+    }
+    if (within(applicationRoot, userDataRoot, paths) || within(userDataRoot, applicationRoot, paths) || within(applicationRoot, cacheRoot, paths) || within(cacheRoot, applicationRoot, paths)) pathFailure('RUNTIME_INSTALLED_BOUNDARY');
+  }
+  if (layout !== 'dev' && (paths.dirname(userDataRoot) === userDataRoot || paths.relative(userDataRoot, homeDir) === '' || within(cacheRoot, userDataRoot, paths) || /(^|[\\/])[^\\/]*\.asar([\\/]|$)/i.test(userDataRoot + '/' + cacheRoot))) pathFailure('RUNTIME_DATA_BOUNDARY');
+  return { layout, applicationRoot, userDataRoot, cacheRoot, explicitDataRoot: Boolean(env.PAPERECHO_DATA_ROOT), tempRoot: paths.join(cacheRoot, 'tmp'), configPath: paths.join(userDataRoot, 'config', 'paperecho.config.json'), secretPath: paths.join(userDataRoot, '.env') };
+}
+function assertNoLinkedAncestors(value, fsApi) {
+  for (let current = path.resolve(value); ; current = path.dirname(current)) {
+    try { if (fsApi.lstatSync(current).isSymbolicLink()) pathFailure('RUNTIME_PATH_LINK_UNSAFE'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (path.dirname(current) === current) break;
+  }
+}
+export function assertRuntimeDataPath(paths, value, { cache = false, fsApi = fs } = {}) {
+  if (paths.layout === 'dev') return value;
+  if (!path.isAbsolute(value)) pathFailure('RUNTIME_DATA_PATH_ABSOLUTE_REQUIRED');
+  if (!within(paths.userDataRoot, value) && !(cache && within(paths.cacheRoot, value))) pathFailure('RUNTIME_DATA_PATH_OUTSIDE_ROOT');
+  assertNoLinkedAncestors(value, fsApi);
+  return value;
+}
+export function prepareRuntimePaths(paths, { fsApi = fs } = {}) {
+  if (paths.layout === 'dev') return paths;
+  assertNoLinkedAncestors(paths.applicationRoot, fsApi);
+  const legacy = ['.env', 'config/paperecho.config.json', 'review_results/runtime_state.json', 'review_results/文献评价/screening_standards.md', 'review_results/文献评价/runs', 'review_results/pipeline'];
+  if (!paths.explicitDataRoot && legacy.some(name => fsApi.existsSync(path.join(paths.applicationRoot, name)))) pathFailure('RUNTIME_LEGACY_DATA_FOUND');
+  for (const directory of [paths.userDataRoot, path.dirname(paths.configPath), paths.tempRoot]) {
+    assertRuntimeDataPath(paths, directory, { cache: true, fsApi });
+    try {
+      fsApi.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      assertRuntimeDataPath(paths, directory, { cache: true, fsApi });
+      const probe = path.join(directory, `.paperecho-write-${randomUUID()}`);
+      const fd = fsApi.openSync(probe, 'wx', 0o600);
+      fsApi.closeSync(fd); fsApi.unlinkSync(probe);
+    } catch (error) { if (error.code?.startsWith('RUNTIME_')) throw error; pathFailure('RUNTIME_DATA_UNWRITABLE'); }
+  }
+  return paths;
+}
+
+export function buildRuntimeConfig({ cwd = defaultProjectRoot(), env = process.env, argv = process.argv, now } = {}) {
   if (!now) {
     const overrideDate = String(env.review_results_OVERRIDE_DATE || "").trim();
     now = overrideDate ? new Date(overrideDate) : new Date();
   }
-  const repoRoot = defaultProjectRoot();
+  const paths = resolveRuntimePaths({ applicationRoot: cwd, env });
+  const repoRoot = paths.layout === 'dev' ? defaultProjectRoot() : paths.applicationRoot;
   const fixtureRoot = argValue(argv, "fixture-root");
   const outputRootRaw = argValue(argv, "output-root") || env.review_results_OUTPUT_ROOT || "";
-  const projectRoot = normalizePath(env.ZOTERO_PROJECT_ROOT || cwd || repoRoot);
+  const projectRoot = normalizePath(paths.layout === 'dev' ? env.ZOTERO_PROJECT_ROOT || cwd : path.resolve(paths.userDataRoot, env.ZOTERO_PROJECT_ROOT || '.'));
   const resolvedFixtureRoot = fixtureRoot ? normalizePath(fixtureRoot) : "";
-  const outputRoot = outputRootRaw ? normalizePath(outputRootRaw) : "";
+  const outputRoot = outputRootRaw ? normalizePath(paths.layout === 'dev' ? outputRootRaw : path.resolve(paths.userDataRoot, outputRootRaw)) : "";
   const outputBase = outputRoot || projectRoot;
   const researchRoot = resolveUnderRoot(outputBase, env.review_results_ROOT, "review_results");
   const reviewRoot = resolveUnderRoot(outputBase, "", "review_results/文献评价");
@@ -85,8 +169,11 @@ export function buildRuntimeConfig({ cwd = process.cwd(), env = process.env, arg
   const day = yyMd(now);
   const pipelineDir = normalizePath(path.join(researchRoot, "pipeline", day));
   const toolsDir = normalizePath(path.join(repoRoot, "workflow/tools"));
+  const runRoot = path.join(reviewRoot, 'runs');
+  for (const value of [projectRoot, researchRoot, reviewRoot, legacyDesktopReviewRoot, translationCachePath, runRoot, path.join(researchRoot, 'pipeline'), path.join(researchRoot, 'schedule_decisions'), path.join(researchRoot, 'run_manifests'), path.join(reviewRoot, 'research_evaluations')]) assertRuntimeDataPath(paths, value);
 
   return {
+    ...paths,
     platform: process.platform,
     now,
     repoRoot,
@@ -95,6 +182,7 @@ export function buildRuntimeConfig({ cwd = process.cwd(), env = process.env, arg
     outputRoot,
     researchRoot,
     reviewRoot,
+    runRoot,
     legacyDesktopReviewRoot,
     translationCachePath,
     week,
@@ -113,12 +201,15 @@ export function buildRuntimeConfig({ cwd = process.cwd(), env = process.env, arg
   };
 }
 
-export function buildLocalRuntimeConfig({ cwd = process.cwd(), argv = process.argv.slice(2), defaultRoot = "" } = {}) {
-  const fallbackRoot = defaultRoot || path.join(cwd, "review_results", "local");
-  const outputRoot = normalizePath(argValue(argv, "output-root") || fallbackRoot);
+export function buildLocalRuntimeConfig({ cwd = defaultProjectRoot(), env = process.env, argv = process.argv.slice(2), defaultRoot = "" } = {}) {
+  const paths = resolveRuntimePaths({ applicationRoot: cwd, env });
+  const fallbackRoot = paths.layout === 'dev' ? defaultRoot || path.join(cwd, 'review_results', 'local') : path.join(paths.userDataRoot, 'review_results', 'local');
+  const outputRoot = normalizePath(path.resolve(paths.layout === 'dev' ? cwd : paths.userDataRoot, argValue(argv, 'output-root') || fallbackRoot));
+  assertRuntimeDataPath(paths, outputRoot);
+  for (const name of ['state', 'feedback', 'runs', 'exports', 'review_results']) assertRuntimeDataPath(paths, path.join(outputRoot, name));
   const resolveOptional = (name) => {
     const value = argValue(argv, name);
-    return value ? normalizePath(path.isAbsolute(value) ? value : path.join(cwd, value)) : "";
+    return value ? normalizePath(path.resolve(paths.layout === 'dev' ? cwd : paths.userDataRoot, value)) : "";
   };
   return {
     mode: "local",
@@ -220,19 +311,21 @@ export function applySampleLimit(items = [], limit = null, appliedAt = "pre_tria
 }
 
 // Optional interfaces share Runner configuration precedence and the workflow path owners.
-export async function resolveApplicationRuntimeContext({ cwd = process.cwd(), env = process.env, argv = [] } = {}) {
+export async function resolveApplicationRuntimeContext({ cwd = defaultProjectRoot(), env = process.env, argv = [] } = {}) {
   const { parseRunnerArgs } = await import('../runner/args.mjs');
   const { resolveRunnerConfiguration } = await import('../runner/config_loader.mjs');
   const { existsSync } = await import('node:fs');
-  const cli = parseRunnerArgs(['--check', ...argv], { cwd, allowUnresolvedMode: true });
-  const defaultConfigPath = path.join(cwd, 'config', 'paperecho.config.json');
+  const paths = resolveRuntimePaths({ applicationRoot: cwd, env });
+  const invocationRoot = paths.layout === 'dev' ? cwd : paths.userDataRoot;
+  const cli = parseRunnerArgs(['--check', ...argv], { cwd: invocationRoot, allowUnresolvedMode: true });
+  const defaultConfigPath = paths.configPath;
   // The optional UI remains usable before a Runner config has been initialized.
   if (!cli.mode && !cli.configPath && !env.PAPERECHO_CONFIG && !existsSync(defaultConfigPath)) cli.mode = 'desktop';
   const resolved = await resolveRunnerConfiguration(cli, { cwd, env, defaultConfigPath });
   let runtimeEnv = resolved.env;
   let localRepository = null;
   if (resolved.options.mode === 'local') {
-    const local = buildLocalRuntimeConfig({ cwd, argv: resolved.options.outputRoot ? ['--output-root', resolved.options.outputRoot] : [] });
+    const local = buildLocalRuntimeConfig({ cwd, env: resolved.env, argv: resolved.options.outputRoot ? ['--output-root', resolved.options.outputRoot] : [] });
     runtimeEnv = copyEnvironment(runtimeEnv, { review_results_OUTPUT_ROOT: local.outputRoot });
     const { LocalRepository } = await import('../local/local_repository.mjs');
     localRepository = new LocalRepository(local.outputRoot);

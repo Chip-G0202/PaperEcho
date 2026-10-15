@@ -13,11 +13,12 @@ export const CONTROL_CENTER_PORT = 8765;
 export const CONTROL_CENTER_PRODUCT = 'PaperEcho Control Center';
 export const CONTROL_CENTER_ROOT = path.resolve(here, '../../..');
 export function controlCenterInstance(root, context = {}) {
+  if (context.layout && context.layout !== 'dev') root = context.userDataRoot;
   return createHash('sha256').update(JSON.stringify([path.resolve(root), context.configPath, context.mode, context.reviewRoot, context.researchRoot, context.localRepository?.root])).digest('hex');
 }
 export async function resolveControlCenterStartup({ root = CONTROL_CENTER_ROOT, env = process.env, argv = [] } = {}) {
   const context = await resolveApplicationRuntimeContext({ cwd: root, env, argv });
-  return { root, env, argv, context };
+  return { root, env: context.layout !== 'dev' ? context.env : env, argv, context };
 }
 const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/paperecho-mark.svg', ['paperecho-mark.svg', 'image/svg+xml']]]);
 export const MAX_BODY_BYTES = 65536;

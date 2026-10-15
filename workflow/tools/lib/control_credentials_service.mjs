@@ -5,6 +5,7 @@ import { parseEnvFile } from './env_file_parser.mjs';
 import { writeAtomicText, withAtomicJsonLock } from './atomic_json.mjs';
 import { CONTROL_SECRET_NAMES, credentialOrigin, markLocalCredential, redactSecrets, secretValues } from './credential_registry.mjs';
 import { secureCredentialFile } from './credential_file_security.mjs';
+import { resolveRuntimePaths, assertRuntimeDataPath } from './runtime_config.mjs';
 export { CONTROL_SECRET_NAMES } from './credential_registry.mjs';
 
 // Editing supports a strict subset of the existing loader's single-line format.
@@ -25,8 +26,11 @@ function inspect(text) {
 export class SecretService {
   #env; #file; #seen = new Set(); #atomicOptions;
   constructor({ root, env = process.env, atomicOptions } = {}) {
+    const paths = resolveRuntimePaths({ applicationRoot: root, env });
+    if (paths.layout !== 'dev') root = paths.userDataRoot;
     this.#env = env;
     this.#file = root ? path.join(path.resolve(root), '.env') : null;
+    if (this.#file) assertRuntimeDataPath(paths, this.#file);
     this.#atomicOptions = atomicOptions;
     this.#remember(env);
   }

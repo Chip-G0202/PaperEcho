@@ -5,6 +5,8 @@ description: use when running or changing the PaperEcho Zotero Web API path, inc
 
 # PaperEcho - Zotero Web
 
+Deployment paths reuse the shared `runtime_config.mjs` Portable/Installed/Dev contract, independently of Web backend selection. See [configuration](../../docs/configuration.md). Do not add adapter root discovery or implicitly migrate data.
+
 No-desktop Zotero Web path for PaperEcho. Keep work narrow: prefer Stage2-only benchmark and targeted tests, and run the full workflow only for final end-to-end acceptance.
 
 ## Execution Intent Routing
