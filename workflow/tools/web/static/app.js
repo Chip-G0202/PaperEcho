@@ -16,6 +16,7 @@ const decisionReceipts = new Map();
 const pageNames = { home: '概览 · Overview', weekly: '文献 · Literature', feedback: '反馈 · Feedback', settings: '设置 · Settings', system: '系统 · System' };
 const errorMessages = { SETTING_VALUE_INVALID: '请检查字段格式或允许范围，原设置未改变。', SEARCH_KEYWORD_OWNER_REQUIRED: '请使用检索词分组修改检索式。', CREDENTIAL_VALUE_INVALID: '请输入有效单行凭据（最多 4096 字符）；请勿同时包含两种引号。', CREDENTIAL_EXTERNALLY_MANAGED: '该凭据由外部环境管理，请在原入口修改。', CREDENTIAL_WRITE_FAILED: '凭据未保存，请检查本地配置权限后重试。', CREDENTIAL_ENV_FORMAT_UNSUPPORTED: '凭据文件格式无法安全编辑，原文件未改变。', WEEKLY_CHANGED_RELOAD: '当前文献已更新，请刷新页面后重试。' };
 // Keep the existing API/canonical values; the stored learning action is unchanged.
+Object.assign(errorMessages, { SESSION_REQUIRED: '会话已失效，请刷新页面后重试。', CSRF_REQUIRED: '安全校验未通过，请刷新页面后重试。', ORIGIN_REJECTED: '请求来源未通过安全校验。', CREDENTIAL_ACL_UNSAFE: '文件权限无法安全确认，凭据未保存，请在原配置入口检查权限。', CREDENTIAL_CONCURRENT_CHANGE: '凭据文件已被其他操作更改，请重新读取后重试。', CREDENTIAL_RECOVERY_REQUIRED: '凭据恢复未完成，请通过原配置入口检查后再继续。', CREDENTIAL_KEY_NOT_ALLOWED: '此凭据字段不允许修改。' });
 const feedbackLabels = { highly_relevant: '升级', relevant: '不变', maybe: '降级', irrelevant: '排除', do_not_recommend_similar: '排除（原强负反馈）' };
 const feedbackActions = ['highly_relevant', 'relevant', 'maybe', 'irrelevant'];
 const manualGrades = ['A', 'B', 'C', 'D'];
@@ -48,6 +49,7 @@ function button(text, action) { const node = el('button', text); node.type = 'bu
     notice.dataset.kind = 'error'; notice.textContent = error.message;
     if (scope) { const message = el('p', error.message, 'field-error'); message.id = `error-${crypto.randomUUID()}`; message.setAttribute('role', 'alert'); message.tabIndex = -1; scope.append(message); if (modal) message.focus(); scope.querySelectorAll('input,select,textarea').forEach((entry) => { entry.setAttribute('aria-invalid', 'true'); entry.setAttribute('aria-describedby', message.id); }); }
   } finally { modal?.setBusy(false); if (!modal) node.disabled = false; node.removeAttribute('aria-busy'); }
+  node.syncDisabled?.();
 }); return node; }
 function select(values, selected) { const node = el('select'); for (const [value, label] of values) { const option = el('option', label); option.value = value; node.append(option); } node.value = selected || ''; return node; }
 function label(text, input) { const node = el('label', text); input.id ||= `field-${crypto.randomUUID()}`; input.setAttribute('aria-label', text); node.htmlFor = input.id; node.append(input); return node; }
@@ -569,29 +571,60 @@ function settingValue(setting, input) {
   return input.value;
 }
 function appendCredentialEditor(section, item, onStatusChange = () => {}) {
-  if (!item) return null;
-  const names = { TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key', QQ_BOT_APP_SECRET: 'QQ 机器人 AppSecret', WXPUSHER_APP_TOKEN: 'WxPusher appToken', WECOM_WEBHOOK_URL: '企业微信群机器人 Webhook', FEISHU_WEBHOOK_URL: '飞书机器人 Webhook', FEISHU_SIGNING_SECRET: '飞书签名密钥（可选；开启签名校验时必填）' };
-  const row = el('div', undefined, 'setting'); const status = el('p');
-  let configure; let clear;
-  const zoteroKey = item.id === 'ZOTERO_API_KEY';
-  const configureLabel = () => zoteroKey ? (item.configured ? '替换 API Key' : '配置 API Key') : (item.configured ? '替换凭据' : '配置凭据');
+  const names = { TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', SEMANTIC_SCHOLAR_API_KEY: 'Semantic Scholar API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key', QQ_BOT_APP_SECRET: 'QQ 机器人 AppSecret', WXPUSHER_APP_TOKEN: 'WxPusher appToken', WECOM_WEBHOOK_URL: '企业微信群机器人 Webhook', FEISHU_WEBHOOK_URL: '飞书机器人 Webhook', FEISHU_SIGNING_SECRET: '飞书签名密钥（可选；开启签名校验时必填）' };
+  if (!item || !Object.hasOwn(names, item.id)) return null;
+  const writable = () => item.writable === true && ['local-managed', 'unconfigured'].includes(item.storageClass);
+  const row = el('div', undefined, 'setting credential-setting'); row.dataset.credential = item.id;
+  const status = el('p'); status.setAttribute('role', 'status');
+  const statusText = () => `${names[item.id]}：${item.storageClass === 'external-managed' ? '由外部环境管理' : !['local-managed', 'unconfigured'].includes(item.storageClass) ? '来源无法确认（只读）' : item.configured ? '已配置' : '未配置'}`;
+  status.textContent = statusText(); row.append(status); section.append(row);
+  if (!writable()) { row.append(el('p', item.reason || '请在原配置入口维护并重启；此处不允许写入。', 'muted')); return row; }
+  let editing = !item.configured, busy = false, focusTarget = null;
+  const input = el('input'); input.type = 'password'; input.value = ''; input.autocomplete = 'new-password'; input.maxLength = 4096; input.placeholder = '输入新值；原值不会回显';
+  const editor = el('div', undefined, 'credential-editor');
   const sync = () => {
-    status.textContent = `${names[item.id] || '凭据'}：${item.configured ? '已配置' : '未配置'}`;
-    if (configure) configure.textContent = configureLabel();
-    if (clear) clear.hidden = !item.configured;
+    status.textContent = statusText();
+    if (!writable()) input.value = '';
+    editor.hidden = !writable() || !editing;
+    configure.hidden = !writable() || editing || !item.configured;
+    clear.hidden = !writable() || editing || !item.configured;
+    cancel.hidden = !item.configured;
+    save.disabled = busy || !writable() || input.value.length === 0;
+    input.disabled = busy;
   };
-  sync(); row.append(status);
-  if (item.writable) {
-    const input = el('input'); input.type = 'password'; input.autocomplete = 'new-password'; input.maxLength = 4096; input.placeholder = item.id === 'ZOTERO_API_KEY' ? '请输入 Zotero API Key' : '输入新值；原值不会回显';
-    const editor = el('div', undefined, 'credential-editor'); editor.hidden = true;
-    const save = button(zoteroKey ? '保存 API Key' : '保存凭据', async () => { const value = input.value; await api('/api/credentials', { id: item.id, action: 'replace', value }); input.value = ''; item.configured = true; editor.hidden = true; sync(); await onStatusChange(); notice.textContent = `凭据已替换。${item.reload}`; });
-    const cancel = button('取消', () => { input.value = ''; editor.hidden = true; });
-    editor.append(label(item.id === 'ZOTERO_API_KEY' ? '新的 Zotero Web API Key' : '新的凭据', input), save, cancel);
-    configure = button('', () => { editor.hidden = false; input.focus(); });
-    clear = button(zoteroKey ? '清除' : '清除凭据', async () => { if (!confirm(`清除 ${item.id}？依赖该凭据的功能可能暂不可用。`)) return; await api('/api/credentials', { id: item.id, action: 'clear' }); input.value = ''; item.configured = false; editor.hidden = true; sync(); await onStatusChange(); notice.textContent = `凭据已清除。${item.reload}`; });
-    const actions = el('div', undefined, 'actions credential-actions'); actions.append(configure, clear); row.append(actions, editor); sync();
-  } else row.append(el('p', item.reason, 'muted'));
-  section.append(row); return row;
+  const update = async action => {
+    if (busy || !writable() || action === 'replace' && !input.value.length) return;
+    if (action === 'clear' && !confirm(`清除 ${item.id}？依赖该凭据的功能可能暂不可用。`)) return;
+    busy = true; sync(); let persisted = false;
+    try {
+      const result = await api('/api/credentials', { id: item.id, action, ...(action === 'replace' ? { value: input.value } : {}) });
+      if (result.id !== item.id || !result.savedToFile || !result.currentServiceUpdated || result.status !== (action === 'clear' ? 'cleared' : 'replaced')) throw new Error();
+      persisted = true; input.value = '';
+      const fresh = (await api('/api/credentials')).find(entry => entry.id === item.id);
+      if (!fresh) throw new Error();
+      Object.assign(item, fresh);
+      if (fresh.configured !== (action === 'replace') || fresh.storageClass !== (action === 'clear' ? 'unconfigured' : 'local-managed') || !fresh.writable) throw new Error();
+      editing = !item.configured; await onStatusChange();
+      notice.textContent = action === 'clear' ? '凭据已清除；新工作流启动时加载，已运行的进程需重启。' : '凭据已保存到本地，当前凭据服务已更新；新工作流启动时加载，外部环境仍优先，已运行的进程需重启。';
+      if (row.isConnected) focusTarget = item.configured ? configure : input;
+    } catch (error) {
+      throw new Error(persisted ? '写入已返回，但状态刷新未完成；请重新读取后确认，不要重复提交。' : Object.values(errorMessages).includes(error.message) ? error.message : '凭据操作未完成，请检查连接、会话与权限后重试或取消。');
+    } finally { busy = false; sync(); }
+  };
+  const restoreControls = () => { sync(); if (focusTarget && !busy) { const target = focusTarget; focusTarget = null; target.focus(); } };
+  const save = button('保存', () => update('replace')); save.className = 'primary'; save.syncDisabled = restoreControls;
+  const cancel = button('取消', () => { input.value = ''; editing = false; sync(); focusTarget = configure; }); cancel.syncDisabled = restoreControls;
+  const configure = button('修改', () => { input.value = ''; editing = true; sync(); input.focus(); }); configure.setAttribute('aria-label', `修改${names[item.id]}`);
+  const clear = button(item.id === 'ZOTERO_API_KEY' ? '清除' : '清除凭据', () => update('clear')); clear.syncDisabled = restoreControls;
+  input.oninput = sync;
+  editor.append(label(`${names[item.id]}（新值）`, input), save, cancel);
+  const actions = el('div', undefined, 'actions credential-actions'); actions.append(configure, clear); row.append(actions, editor); sync();
+  return row;
+}
+function clearCredentialInputs(scope = document) {
+  scope.querySelectorAll('.credential-editor').forEach(editor => {
+    editor.querySelectorAll('input').forEach(input => { input.value = ''; input.oninput?.(); });
+  });
 }
 const runtimePaths = {
   local: { title: '本地运行', summary: '不使用 Zotero，直接使用 PaperEcho 本地研究目录。', fit: '适合希望以本地目录作为输入与输出的工作方式。', data: '从配置的 JSON / JSONL 文件或目录读取。', result: '写入配置的本地输出目录；反馈文件可选。', needs: '不需要 Zotero Desktop，也不需要 Zotero Web API 凭据。' },
@@ -620,6 +653,7 @@ function emailDeliveryText(delivery) {
   return `最近发送：${emailResultLabels[delivery.status] || '尚未发送'}${delivery.kind === 'test' ? '（测试通知）' : ''}${time}${delivery.error ? ` · ${emailErrorLabels[delivery.error] || '暂时无法发送'}` : ''}`;
 }
 async function settings(group = settingsGroup, view = settingsView) {
+  clearCredentialInputs();
   settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common';
   const requestedChannel = settingsGroup === 'connections' && notificationChannelIds.includes(view) ? view : null;
   settingsView = requestedChannel ? 'notifications' : view;
@@ -722,7 +756,7 @@ async function settings(group = settingsGroup, view = settingsView) {
     if (!mode?.available) { section.append(el('p', '当前配置尚未提供运行路径字段。', 'empty-state')); body.append(section); return; }
     let selectedMode = mode.value || mode.effectiveValue;
     const current = el('p', `当前运行路径：${runtimePaths[mode.value || mode.effectiveValue]?.title || '未配置'}${mode.ownerPresent === false ? '（当前启动路径；统一配置尚未保存）' : ''}`, 'runtime-current');
-    const options = runtimePathOptions(selectedMode, (value) => { selectedMode = value; current.textContent = `正在配置：${runtimePaths[value].title}（尚未保存）`; current.className = 'runtime-current unsaved'; sync(); }); section.append(options, current);
+    const options = runtimePathOptions(selectedMode, (value) => { clearCredentialInputs(section); selectedMode = value; current.textContent = `正在配置：${runtimePaths[value].title}（尚未保存）`; current.className = 'runtime-current unsaved'; sync(); }); section.append(options, current);
     const panels = {}; const records = []; const readinessFor = {}; let save;
     for (const pathName of Object.keys(runtimePathFields)) {
       const panel = el('div', undefined, 'runtime-path-panel'); panel.dataset.path = pathName;
@@ -808,6 +842,7 @@ async function settings(group = settingsGroup, view = settingsView) {
       const background = [...document.body.children].map(node => [node, node.inert]); const overflow = document.body.style.overflow;
       const close = (force = false, clearRoute = true) => {
         if (busy && !force) return;
+        clearCredentialInputs(dialog);
         backdrop.remove(); background.forEach(([node, inert]) => { node.inert = inert; }); document.body.style.overflow = overflow;
         if (activeChannelModal?.dialog === dialog) activeChannelModal = null;
         if (clearRoute && notificationChannelIds.includes(parseRoute(location.hash).settingsView)) window.history?.replaceState(null, '', '#settings/connections/notifications');
@@ -855,6 +890,7 @@ async function settings(group = settingsGroup, view = settingsView) {
         busy = value; dialog.setAttribute('aria-busy', String(value));
         dialog.querySelectorAll('button').forEach(node => { node.disabled = value; });
         dialog.querySelectorAll('input,select,textarea').forEach(node => { node.disabled = value; });
+        if (!value) dialog.querySelectorAll('button').forEach(node => node.syncDisabled?.());
         test.disabled = value || channel.readiness !== 'configured';
       };
       activeChannelModal = { dialog, close, setBusy };
@@ -892,6 +928,7 @@ async function settings(group = settingsGroup, view = settingsView) {
   }
 }
 async function render() {
+  clearCredentialInputs();
   activeChannelModal?.close(true, false);
   activeReview = null; main.setAttribute('aria-busy', 'true'); main.replaceChildren(el('p', '正在读取当前工作空间…', 'loading'));
   document.querySelector('#page-title').textContent = pageNames[page];
@@ -935,4 +972,6 @@ document.querySelectorAll('[data-page]').forEach((node) => node.addEventListener
 document.querySelectorAll('[data-nav-route]').forEach((node) => node.addEventListener('click', () => navigate(node.dataset.navRoute)));
 document.querySelector('#menu-toggle').addEventListener('click', () => { const sidebar = document.querySelector('#sidebar'); const open = sidebar.dataset.open !== 'true'; sidebar.dataset.open = String(open); document.querySelector('#menu-toggle').setAttribute('aria-expanded', String(open)); });
 window.addEventListener('hashchange', route);
+window.addEventListener('pagehide', () => clearCredentialInputs());
+window.addEventListener('pageshow', () => clearCredentialInputs());
 api('/api/session').then((session) => { csrf = session.token; return route(); }).catch(() => { main.replaceChildren(); empty('无法连接本地服务', '请确认 Control Center 正在运行，然后刷新页面。'); main.setAttribute('aria-busy', 'false'); });

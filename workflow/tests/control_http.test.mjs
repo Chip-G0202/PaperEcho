@@ -216,3 +216,24 @@ test('credential HTTP replace/clear and high-risk decisions apply only validated
   assert.equal(low.json.status, 'accepted'); assert.equal(low.json.formal_rules_modified, true);
   assert.equal(low.json.application_status, 'applied');
 });
+
+test('credential HTTP rejects invalid session, origin, CSRF, fields and empty writes without changing saved values', async t => {
+  const app = await setup(t); const id = 'TITLE_TRANSLATION_API_KEY';
+  const saved = await app.post('/api/credentials', { id, action: 'replace', value: 'dummy-http-retained' });
+  assert.equal(saved.status, 200);
+  const file = path.join(app.root, '.env'), before = await fs.readFile(file, 'utf8');
+  const payload = { id, action: 'replace', value: 'dummy-http-blocked' };
+  const responses = [
+    await app.request('/api/credentials', { method: 'POST', headers: { 'content-type': 'application/json' }, data: JSON.stringify(payload) }),
+    await app.post('/api/credentials', payload, { origin: 'https://invalid.example' }),
+    await app.post('/api/credentials', payload, { 'x-csrf-token': '' }),
+    await app.post('/api/credentials', payload, { host: 'invalid.example' }),
+  ];
+  for (const response of responses) assert.equal(response.status, 403);
+  for (const rejected of [{ ...payload, id: 'PATH' }, { ...payload, value: '' }, { ...payload, id: 'SMTP_PASS' }, { action: 'replace', updates: [payload] }]) {
+    responses.push(await app.post('/api/credentials', rejected)); assert.equal(responses.at(-1).status, 400);
+  }
+  responses.push(await app.get('/api/credentials'));
+  assert.equal((await fs.readFile(file, 'utf8')) === before, true, 'rejected requests and GET must not change the credential file');
+  for (const response of responses) for (const value of ['dummy-http-retained', 'dummy-http-blocked', 'fixture-private-key']) assert.equal(response.text.includes(value), false);
+});

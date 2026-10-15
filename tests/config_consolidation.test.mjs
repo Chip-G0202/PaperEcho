@@ -15,6 +15,7 @@ import { startControlCenter } from '../workflow/tools/web/server.mjs';
 import { createRunRecoveryCoordinator } from '../workflow/tools/recovery/run_recovery.mjs';
 import { loadRssSources, loadPubMedPmcSearchConfig, loadSourceSelectionConfig, loadWorkflowRules, updatePubMedPmcKeywordGroups } from '../workflow/tools/lib/literature_config.mjs';
 import { SecretService } from '../workflow/tools/lib/control_credentials_service.mjs';
+import { secureCredentialFile } from '../workflow/tools/lib/credential_file_security.mjs';
 import { RuleSuggestionService } from '../workflow/tools/lib/control_rule_suggestion_service.mjs';
 import { emailTransportConfig } from '../workflow/tools/stage5/email_sender.mjs';
 
@@ -169,6 +170,8 @@ test('local secret/legacy env migration leaves SecretService Replace/Clear and e
   await migrateApplicationConfig({ root: f.root, env: f.env });
   assert.equal(getPreferenceLearningConfig({ env: f.env }).model, 'local-model');
   assert.ok(!(await fs.readFile(f.configPath, 'utf8')).includes('fake-local'));
+  // Give the migrated dummy file an explicit ACL, independent of host groups.
+  await secureCredentialFile(envFile);
   const external = new SecretService({ root: f.root, env: { SMTP_PASS: 'fake-external' } });
   assert.equal((await external.list()).find((item) => item.id === 'SMTP_PASS').writable, false);
   await assert.rejects(external.clear('SMTP_PASS'), /EXTERNALLY_MANAGED/);

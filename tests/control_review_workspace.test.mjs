@@ -60,10 +60,80 @@ function ui() {
   const document = { body, activeElement: null, querySelector: (key) => nodes[key] || body.querySelector(key), querySelectorAll: (key) => body.querySelectorAll(key), createElement: (tag) => Object.assign(new Element(tag), { ownerDocument: document }) };
   Object.values(nodes).forEach(node => { node.ownerDocument = document; }); body.append(main, notice);
   const context = vm.createContext({ document, window: { addEventListener() {} }, fetch: () => new Promise(() => {}), crypto: { randomUUID }, URL, structuredClone, location: { hash: '' }, confirm: () => true });
-  vm.runInContext(script + '\nglobalThis.testing = { createReviewQueue, shortcutAction, gradeCounts, pendingPaperCounts, completionPlan, showCompletionModal, loadWeekly, loadPendingSummary, home, weekly, paperReview, research, suggestions, settings, settingGroups, settingViews, parseRoute, setApi: (value) => { api = value; } };', context);
+  vm.runInContext(script + '\nglobalThis.testing = { appendCredentialEditor, clearCredentialInputs, createReviewQueue, shortcutAction, gradeCounts, pendingPaperCounts, completionPlan, showCompletionModal, loadWeekly, loadPendingSummary, home, weekly, paperReview, research, suggestions, settings, settingGroups, settingViews, parseRoute, setApi: (value) => { api = value; } };', context);
   return { ...context.testing, main, notice, body, document, location: context.location };
 }
 const papers = (count = 100) => Array.from({ length: count }, (_, i) => ({ id: String(i), title: `English ${i} — ${'long title '.repeat(i === 0 ? 80 : 1)}`, translatedTitle: `中文副标题 ${i}`, authors: ['测试作者'], finalGrade: ['A', 'B', 'C'][i % 3], ruleGrade: 'B', semanticGrade: 'A', needsReview: i === count - 1, manualReviewPending: i === count - 1, reviewReason: i === count - 1 ? '既有等级复审依据' : '', source: 'PubMed', journal: 'Journal', year: '2026', doi: i ? '' : '10.1234/test', pmid: String(1000 + i), zotero: 'not_used_local', feedbackAllowed: true, feedback: null }));
+
+function credentialUi({ id = 'SMTP_PASS', configured = true, storageClass = configured ? 'local-managed' : 'unconfigured', writable = true } = {}) {
+  const app = ui(), calls = [], item = { id, configured, storageClass, writable };
+  let fail = false, refreshFail = false;
+  app.setApi(async (url, payload) => {
+    if (!payload) { if (refreshFail) throw new Error('private-refresh-detail'); return [{ ...item }]; }
+    calls.push(payload);
+    if (fail) throw new Error(payload.value);
+    item.configured = payload.action !== 'clear'; item.storageClass = item.configured ? 'local-managed' : 'unconfigured';
+    return { id, configured: item.configured, status: item.configured ? 'replaced' : 'cleared', savedToFile: true, currentServiceUpdated: true };
+  });
+  const row = app.appendCredentialEditor(app.main, { ...item });
+  return { ...app, row, calls, item, input: row.querySelector('input'), save: row.querySelectorAll('button').find(node => node.textContent === '保存'), fail: value => { fail = value; }, refreshFail: value => { refreshFail = value; } };
+}
+for (const configured of [true, false]) test(`credential ${configured ? 'configured' : 'unconfigured'} uses empty password, confirmed save and separate clear`, async () => {
+  const app = credentialUi({ configured }); const editor = app.row.querySelector('.credential-editor');
+  assert.equal(editor.hidden, configured); assert.equal(app.input.value, ''); assert.equal(app.input.getAttribute('value'), null);
+  assert.equal(app.save.disabled, true); await app.save.click(); assert.equal(app.calls.length, 0);
+  if (configured) {
+    await byText(app.row, '修改').click(); assert.equal(app.document.activeElement, app.input);
+    app.input.value = 'discard-dummy'; app.input.oninput(); await byText(editor, '取消').click();
+    assert.equal(app.calls.length, 0); assert.equal(app.input.value, ''); assert.equal(editor.hidden, true);
+    await byText(app.row, '修改').click(); assert.equal(app.input.value, '');
+  }
+  const typed = '  dummy-with-space  '; app.input.value = typed; app.input.oninput(); await app.save.click();
+  assert.equal(app.calls.length, 1); assert.equal(app.calls[0].value === typed, true, 'submit without trimming');
+  assert.equal(app.input.value, ''); assert.equal(editor.hidden, true); assert.equal(app.save.disabled, true);
+  assert.equal(app.document.activeElement, byText(app.row, '修改'));
+  assert.equal(app.notice.dataset.kind, 'success'); assert.match(app.notice.textContent, /已保存到本地.*外部环境仍优先.*进程需重启/);
+  assert.equal(app.main.textContent.includes(typed), false); assert.equal(byText(app.row, '修改').hidden, false);
+  await byText(app.row, '清除凭据').click(); assert.equal(app.calls.at(-1).action, 'clear');
+  assert.equal(app.calls.at(-1).value, undefined); assert.equal(editor.hidden, false); assert.equal(app.input.value, ''); assert.equal(app.save.disabled, true);
+});
+test('credential failures retain only editable input; retry succeeds and refresh failure never claims success', async () => {
+  const app = credentialUi(); await byText(app.row, '修改').click(); app.fail(true);
+  const typed = 'private-dummy-edit'; app.input.value = typed; app.input.oninput(); await app.save.click();
+  assert.equal(app.item.configured, true); assert.equal(app.input.value === typed, true); assert.equal(app.save.disabled, false);
+  assert.equal(app.notice.dataset.kind, 'error'); assert.equal(app.notice.textContent.includes(typed), false); assert.doesNotMatch(app.notice.textContent, /已保存/);
+  app.fail(false); await app.save.click(); assert.equal(app.input.value, ''); assert.equal(app.row.querySelector('.credential-editor').hidden, true);
+  await byText(app.row, '修改').click(); app.input.value = 'refresh-dummy'; app.input.oninput(); app.refreshFail(true); await app.save.click();
+  assert.equal(app.input.value, ''); assert.equal(app.notice.dataset.kind, 'error'); assert.match(app.notice.textContent, /状态刷新未完成/); assert.doesNotMatch(app.notice.textContent, /private-refresh-detail|已保存/);
+});
+test('credential external, unknown, absent provenance and readonly references never offer an input', () => {
+  for (const storageClass of ['external-managed', 'unknown', undefined]) {
+    const app = ui(); app.appendCredentialEditor(app.main, { id: 'SMTP_PASS', configured: true, writable: true, storageClass });
+    assert.equal(app.main.querySelectorAll('input,button').length, 0);
+    assert.match(app.main.textContent, storageClass === 'external-managed' ? /由外部环境管理/ : /来源无法确认/);
+  }
+  const app = credentialUi({ writable: false }); assert.equal(app.input, null);
+  assert.equal(app.appendCredentialEditor(app.main, { id: 'PATH', configured: false, writable: true, storageClass: 'unconfigured' }), null);
+});
+test('every registered credential uses one editor contract and switching Settings clears drafts', async () => {
+  const ids = ['TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY', 'SEMANTIC_SCHOLAR_API_KEY', 'EASYSCHOLAR_SECRET_KEY', 'ZOTERO_API_KEY', 'SMTP_PASS', 'QQ_BOT_APP_SECRET', 'WXPUSHER_APP_TOKEN', 'FEISHU_WEBHOOK_URL', 'FEISHU_SIGNING_SECRET', 'WECOM_WEBHOOK_URL'];
+  for (const id of ids) {
+    const app = credentialUi({ id }); await byText(app.row, '修改').click();
+    assert.equal(app.input.type, 'password'); assert.equal(app.input.value, ''); assert.equal(app.save.disabled, true);
+    app.input.value = 'disposable-draft'; app.input.oninput();
+    app.setApi(async () => []); await app.settings('common', 'databases'); assert.equal(app.input.value, ''); assert.equal(app.save.disabled, true);
+  }
+});
+test('credential modal close and provider switch erase detached inputs', async () => {
+  const { app } = notificationUiFixture(); await app.settings('connections', 'email');
+  const modal = app.body.querySelector('.channel-dialog'); await byText(modal, '修改').click();
+  const input = modal.querySelector('input[type="password"]') || modal.querySelectorAll('input').find(node => node.type === 'password');
+  input.value = 'discard-on-close'; input.oninput(); await byText(modal, '关闭').click(); assert.equal(input.value, '');
+  await app.settings('connections', 'email'); const previous = app.body.querySelector('.channel-dialog'); await byText(previous, '修改').click();
+  const draft = previous.querySelectorAll('input').find(node => node.type === 'password'); draft.value = 'discard-on-switch'; draft.oninput();
+  await app.settings('connections', 'qq'); assert.equal(draft.value, '');
+  assert.equal(app.body.querySelector('.channel-dialog').querySelectorAll('input').find(node => node.type === 'password').value, '');
+});
 
 test('RSS Settings preserve optional venue on repeated edits without copying Feed names', async () => {
   const app = ui(); const calls = [];
@@ -357,7 +427,7 @@ test('unapplied rule responses never count a click as terminal and remain visibl
   assert.match(app.main.textContent, /待处理 1/);
 });
 test('route parser restores L1/L2/L3 state and Settings keeps credentials write-only', async () => {
-  const app = ui(); app.setApi(async (url) => url === '/api/credentials' ? [{ id: 'SMTP_PASS', configured: true, writable: true }] : [{ category: 'General', available: true, id: 'mode', description: '运行模式', type: 'enum', value: 'local', validation: { values: ['local', 'desktop'] } }, { category: 'Sources', available: true, id: 'source', description: '启用来源', type: 'boolean', value: true, validation: {} }]);
+  const app = ui(); app.setApi(async (url) => url === '/api/credentials' ? [{ id: 'SMTP_PASS', configured: true, writable: true, storageClass: 'local-managed' }] : [{ category: 'General', available: true, id: 'mode', description: '运行模式', type: 'enum', value: 'local', validation: { values: ['local', 'desktop'] } }, { category: 'Sources', available: true, id: 'source', description: '启用来源', type: 'boolean', value: true, validation: {} }]);
   assert.deepEqual({ ...app.parseRoute('#feedback/rating/manual') }, { page: 'feedback', feedbackView: 'rating', reviewSection: 'manual', settingsGroup: 'common', settingsView: 'databases' });
   assert.equal(app.parseRoute('#feedback/suggestions').feedbackView, 'rules'); assert.equal(app.parseRoute('#settings/models/preference').settingsView, 'preference');
   assert.equal(app.parseRoute('#settings/runtime/path').settingsGroup, 'runtime');
@@ -375,7 +445,13 @@ test('runtime path presents three exclusive modes and only the selected owner fi
     { category: 'Runtime', available: true, id: 'web.userId', description: 'Zotero User ID', type: 'string', value: '123', validation: {} },
     { category: 'Advanced', available: true, id: 'web.apiBase', description: 'Zotero Web API 地址（测试/开发覆盖）', type: 'url', value: 'https://api.zotero.org', validation: {} },
   ];
-  app.setApi(async (url, value) => { if (url === '/api/credentials' && !value) return [{ id: 'ZOTERO_API_KEY', configured: true, writable: true }]; if (!value) return settings; calls.push([url, value]); return { saved: true }; });
+  const zoteroCredential = { id: 'ZOTERO_API_KEY', configured: true, writable: true, storageClass: 'local-managed' };
+  app.setApi(async (url, value) => {
+    if (url === '/api/credentials' && !value) return [zoteroCredential];
+    if (!value) return settings; calls.push([url, value]);
+    if (url === '/api/credentials') { zoteroCredential.configured = value.action !== 'clear'; zoteroCredential.storageClass = zoteroCredential.configured ? 'local-managed' : 'unconfigured'; return { id: value.id, status: zoteroCredential.configured ? 'replaced' : 'cleared', savedToFile: true, currentServiceUpdated: true }; }
+    return { saved: true };
+  });
   await app.settings('runtime', 'path'); const section = app.main.querySelector('.runtime-settings');
   assert.equal(section.querySelector('.runtime-path-options').querySelectorAll('input').length, 3);
   assert.match(section.textContent, /本地运行.*不使用 Zotero.*Zotero Desktop.*不需要 Zotero Web API Key.*Zotero Web.*需要具有个人文库写权限的 API Key/);
@@ -402,9 +478,9 @@ test('runtime path presents three exclusive modes and only the selected owner fi
   assert.match(section.textContent, /当前运行路径：Zotero Desktop.*无需额外必填配置/);
   calls.length = 0; choices.forEach((input) => { input.checked = input.value === 'web'; }); choices.find((input) => input.value === 'web').listeners.change();
   await byText(section, '保存 Zotero Web 配置').click(); assert.equal(JSON.stringify(calls[0][1].updates), JSON.stringify([{ id: 'runtime.mode', value: 'web' }, { id: 'web.userId', value: '7654321' }])); assert.match(app.notice.textContent, /Zotero Web 配置已保存/);
-  const secret = 'fixture-zotero-secret'; await byText(panels.web, '替换 API Key').click(); const secretInput = panels.web.querySelectorAll('input').find((input) => input.type === 'password'); secretInput.value = secret; await byText(panels.web, '保存 API Key').click();
+  const secret = 'fixture-zotero-secret'; await byText(panels.web, '修改').click(); const secretInput = panels.web.querySelectorAll('input').find((input) => input.type === 'password'); secretInput.value = secret; secretInput.oninput(); await byText(panels.web, '保存').click();
   assert.equal(calls.at(-1)[0], '/api/credentials'); assert.equal(app.main.textContent.includes(secret), false); assert.match(panels.web.textContent, /Zotero Web API Key：已配置/);
-  await byText(panels.web, '清除').click(); assert.equal(calls.at(-1)[1].action, 'clear'); assert.match(panels.web.textContent, /Zotero Web API Key：未配置/); assert.ok(byText(panels.web, '配置 API Key'));
+  await byText(panels.web, '清除').click(); assert.equal(calls.at(-1)[1].action, 'clear'); assert.match(panels.web.textContent, /Zotero Web API Key：未配置/); assert.equal(panels.web.querySelector('.credential-editor').hidden, false);
   assert.doesNotMatch(app.main.textContent, /示例|演示/);
 });
 test('completion plans route to remaining queues and end only when all work is done', () => {
@@ -517,7 +593,7 @@ test('Settings separates databases and RSS, colocates review toggles and preserv
     { category: 'RSS', available: true, id: 'rss.sources', description: 'RSS 来源列表', type: 'rss', value: [{ name: 'Journal', url: 'https://example.test/feed.xml', enabled: true }], validation: {} },
     { category: 'Advanced', available: true, id: 'translation.timeout', description: '请求超时（毫秒）', type: 'integer', value: 30000, validation: { min: 1000, max: 600000 }, advanced: true },
   ];
-  app.setApi(async (url, value) => { if (url === '/api/credentials') return [{ id: 'TITLE_TRANSLATION_API_KEY', configured: false, writable: true }, { id: 'PREFERENCE_LEARNING_API_KEY', configured: true, writable: true }]; if (!value) return settings; calls.push(value); return { saved: true }; });
+  app.setApi(async (url, value) => { if (url === '/api/credentials') return [{ id: 'TITLE_TRANSLATION_API_KEY', configured: false, writable: true, storageClass: 'unconfigured' }, { id: 'PREFERENCE_LEARNING_API_KEY', configured: true, writable: true, storageClass: 'local-managed' }]; if (!value) return settings; calls.push(value); return { saved: true }; });
   await app.settings(); assert.doesNotMatch(app.main.textContent, /研究领域|required 检索词|pubmed 检索式/);
   assert.ok(byText(app.main, '文献数据库')); assert.ok(byText(app.main, 'RSS 订阅')); assert.ok(byText(app.main, '检索周期'));
   const sourceSection = app.main.querySelectorAll('.settings-section').find((node) => /文献数据库/.test(node.textContent));
@@ -567,7 +643,7 @@ test('Email provider modal preserves configuration while globally unselected', a
     { category: 'Notifications', available: true, id: 'smtp.user', description: 'SMTP 用户名', type: 'string', value: 'old@example.test', validation: {} },
     { category: 'Notifications', available: true, id: 'notification.failure', description: '运行失败时通知', type: 'boolean', value: true, validation: {} },
   ];
-  const credential = { id: 'SMTP_PASS', configured: true, writable: true };
+  const credential = { id: 'SMTP_PASS', configured: true, writable: true, storageClass: 'local-managed' };
   const channel = { id: 'email', enabled: false, readiness: 'configured', missing: [], credential, lastDelivery: { status: 'none' } };
   app.setApi(async (url) => url === '/api/credentials' ? [credential] : url === '/api/notifications' ? { channels: [channel] } : settings);
   await app.settings('connections', 'email'); const email = app.body.querySelector('.channel-dialog');
@@ -580,7 +656,7 @@ test('Email provider modal preserves configuration while globally unselected', a
   assert.doesNotMatch(app.main.querySelector('.channel-card').textContent, /SMTP 主机/);
 });
 test('notification UI saves event preferences separately and protects test in-flight state', async () => {
-  const app = ui(); const calls = []; const credential = { id: 'SMTP_PASS', configured: true, writable: true };
+  const app = ui(); const calls = []; const credential = { id: 'SMTP_PASS', configured: true, writable: true, storageClass: 'local-managed' };
   const channel = { id: 'email', enabled: true, readiness: 'configured', missing: [], credential, lastDelivery: { status: 'none' } };
   const settings = [
     { category: 'Notifications', available: true, id: 'email.enabled', description: '启用邮箱通知', type: 'boolean', value: true, validation: {} },
@@ -675,7 +751,7 @@ test('Research Feedback confirms durable saving and waits for workflow without e
 
 for (const [emailEnabled, qqEnabled] of [[false, false], [true, false], [false, true], [true, true]]) test(`notification cards independently render Email=${emailEnabled}, QQ=${qqEnabled}`, async () => {
   const app = ui();
-  const channel = (id, enabled) => ({ id, displayName: id === 'email' ? '邮箱' : 'QQ', enabled, readiness: 'configured', missing: [], credential: { id: id === 'email' ? 'SMTP_PASS' : 'QQ_BOT_APP_SECRET', configured: true, writable: true }, lastDelivery: { status: id === 'email' ? 'success' : 'failed', error: id === 'email' ? null : 'rate_limited' } });
+  const channel = (id, enabled) => ({ id, displayName: id === 'email' ? '邮箱' : 'QQ', enabled, readiness: 'configured', missing: [], credential: { id: id === 'email' ? 'SMTP_PASS' : 'QQ_BOT_APP_SECRET', configured: true, writable: true, storageClass: 'local-managed' }, lastDelivery: { status: id === 'email' ? 'success' : 'failed', error: id === 'email' ? null : 'rate_limited' } });
   const channels = [channel('email', emailEnabled), channel('qq', qqEnabled)];
   const settings = channels.map(item => ({ category: 'Notifications', available: true, id: `${item.id}.enabled`, description: `启用${item.displayName}通知`, type: 'boolean', value: item.enabled, validation: {} }));
   app.setApi(async url => url === '/api/settings' ? settings : url === '/api/credentials' ? [] : { channels });
@@ -691,7 +767,7 @@ for (const [emailEnabled, qqEnabled] of [[false, false], [true, false], [false, 
 
 test('QQ disabled configuration opens in the global modal; Test and credentials preserve toggle', async () => {
   const app = ui(); const calls = [];
-  const credential = { id: 'QQ_BOT_APP_SECRET', configured: true, writable: true };
+  const credential = { id: 'QQ_BOT_APP_SECRET', configured: true, writable: true, storageClass: 'local-managed' };
   const channel = { id: 'qq', displayName: 'QQ', enabled: false, readiness: 'configured', missing: [], credential, lastDelivery: { status: 'none' } };
   const setting = (id, type, value, validation = {}) => ({ id, type, value, validation, category: 'Notifications', description: id, available: true });
   const settings = [setting('qq.enabled', 'boolean', false), setting('qq.appId', 'string', 'fixture-app'), setting('qq.targetType', 'enum', 'user', { values: ['user', 'group'] }), setting('qq.targetId', 'string', 'fixture-openid')];
@@ -700,7 +776,7 @@ test('QQ disabled configuration opens in the global modal; Test and credentials 
     if (url === '/api/credentials' && !input) return [credential];
     if (url === '/api/notifications') return { channels: [channel] };
     calls.push([url, input]);
-    if (url === '/api/credentials') { credential.configured = input.action !== 'clear'; return { configured: credential.configured }; }
+    if (url === '/api/credentials') { credential.configured = input.action !== 'clear'; credential.storageClass = credential.configured ? 'local-managed' : 'unconfigured'; return { id: input.id, status: credential.configured ? 'replaced' : 'cleared', savedToFile: true, currentServiceUpdated: true }; }
     if (url === '/api/notifications/test') { channel.lastDelivery = { status: 'success', kind: 'test' }; return { status: 'success' }; }
     throw new Error('unexpected mutation');
   });
@@ -713,11 +789,11 @@ test('QQ disabled configuration opens in the global modal; Test and credentials 
   await byText(card, '发送测试通知').click();
   assert.equal(calls[0][1].channel, 'qq');
   assert.match(card.textContent, /平台 API 已接受消息/);
-  await byText(card, '替换凭据').click();
+  await byText(card, '修改').click();
   const input = card.querySelectorAll('input').find(input => input.type === 'password');
   assert.equal(input.value, '');
-  input.value = 'typed-fixture-secret';
-  await byText(card, '保存凭据').click();
+  input.value = 'typed-fixture-secret'; input.oninput();
+  await byText(card, '保存').click();
   assert.equal(input.value, '');
   await byText(card, '清除凭据').click();
   assert.equal(credential.configured, false);
@@ -734,7 +810,7 @@ test('zero results, missing identifier, completed queue and neutral selection st
 function notificationUiFixture({ fail = false, external = false } = {}) {
   const app = ui(); const calls = [];
   const ids = ['email', 'qq', 'wechat', 'feishu', 'wecom'];
-  const channels = ids.map(id => ({ id, enabled: false, readiness: 'configured', missing: [], credential: { id: id === 'email' ? 'SMTP_PASS' : `${id.toUpperCase()}_SECRET`, configured: true, writable: !external, reason: external ? '由外部环境管理，只读' : '' }, lastDelivery: { status: 'none' } }));
+  const channels = ids.map(id => ({ id, enabled: false, readiness: 'configured', missing: [], credential: { id: { email: 'SMTP_PASS', qq: 'QQ_BOT_APP_SECRET', wechat: 'WXPUSHER_APP_TOKEN', feishu: 'FEISHU_WEBHOOK_URL', wecom: 'WECOM_WEBHOOK_URL' }[id], configured: true, writable: !external, storageClass: external ? 'external-managed' : 'local-managed', reason: external ? '由外部环境管理，只读' : '' }, lastDelivery: { status: 'none' } }));
   const entries = ids.map(id => ({ category: 'Notifications', id: `${id}.enabled`, description: `启用 ${id}`, available: true, type: 'boolean', value: false, validation: {} }));
   entries.push({ category: 'Notifications', id: 'smtp.host', description: 'SMTP 主机', available: true, type: 'string', value: 'old.example.test', validation: {} });
   for (const event of ['radar', 'weekly']) entries.push({ category: 'Notifications', id: `notification.${event}`, description: `${event} 通知`, available: true, type: 'boolean', value: event === 'radar', validation: {} });
