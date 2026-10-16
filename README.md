@@ -2,7 +2,7 @@
 
 一个面向多学科研究的文献工作流：持续发现、筛选和整理新文献，并按需交付到 Zotero 或本地报告。
 
-[快速开始](#快速开始) | [v2.4 更新](#更新内容) | [目录结构](#目录结构) | [English](#english-version)
+[快速开始](#快速开始) | [v2.5 更新](#更新内容) | [目录结构](#目录结构) | [English](#english-version)
 
 ## 这是什么
 
@@ -18,19 +18,21 @@ PaperEcho 不替代研究者作出判断。它负责整理不断传来的文献�
 
 ## 更新内容
 
-**PaperEcho v2.4** 新增本地 Control Center，让文献发现、人工审阅和常用设置在同一个工作台衔接。Windows 双击 `PaperEcho.exe`，macOS 双击 `PaperEcho.app`；启动后会在默认浏览器打开当前工作区。源码使用仍需 Node.js 18+ 和项目依赖。
+**PaperEcho v2.5** 将多渠道通知、配置管理和人工审阅统一到本地 Control Center，让发现文献、判断相关性和接收研究动态衔接得更顺畅。Windows 双击 `PaperEcho.exe`，macOS 双击 `PaperEcho.app`；启动后会在默认浏览器打开当前工作区。源码使用仍需 Node.js 18+ 和项目依赖。
 
-![PaperEcho v2.4 Control Center 概览页面，使用模拟状态的界面示意](docs/control-center-v2.4.png)
+![PaperEcho v2.5 Control Center 概览页面，使用模拟状态的界面示意](docs/control-center-v2.5.png)
 
 _工作台界面示意，图中状态为模拟数据；正式页面只读取当前工作区。_
 
-- **从概览走向具体任务。** 概览显示今日任务、最近周报和待办；文献页只浏览实际运行结果中的 A/B/C 文献，反馈页集中处理常规评级、人工复核、研究方向反馈与规则建议。
-- **反馈真正进入后续工作流。** 文献评级保存为正式反馈，供下次运行读取，但点击反馈不会立即修改 Zotero。规则建议只有在正式规则或检索配置安全写入并核验后才显示为已接受。
-- **有分歧的评级先交给人。** 完整周报中规则与语义评级不一致、或缺少语义评级的候选先进入人工复核，不会未经确认就写回 Zotero。
-- **常用设置更集中。** 工作台按组保存设置，提供 Desktop、Web、Local 互斥运行路径；凭据只显示配置状态，不回显原值。原有 XLSX、`screening_standards.docx` 和直接配置编辑仍可使用。
-- **Radar 与周报按计划分工。** 外部调度器调用 Desktop 或 Web 路径的 `--scheduled-daily` 入口后，由 PaperEcho 根据计划时隙选择当日运行 Daily Radar 还是周报；本版本不自动注册系统定时任务，Local 路径不支持该入口。
+- **通知按研究节奏分配。** Daily Radar 和周报可以分别选择邮箱、QQ、微信（WxPusher）、飞书和企业微信群机器人。工作台集中管理渠道配置、凭据状态、发送测试和最近结果；关闭渠道保留原配置，便于以后重新启用。
+- **概况来自本轮文献。** 通知展示本轮数量、等级分布、研究概况和提醒，不逐篇罗列。概况仅依据本轮 A/B/C 文献的原始标题与等级生成，不声称读过摘要或全文；通知恢复沿用既有结果，不重跑文献处理。
+- **人工复核有明确边界。** 一致或相邻的 A/B/C 评级可自动采用，D→C 可自动救回；D→A/B、A/B/C→D、A↔C 等需要人工判断的结果由用户直接确认 A/B/C/D。常规反馈与人工复核分开处理，人工决定立即保存，但点击评级不会即时修改 Zotero。
+- **完成后仍能回看和改评。** 常规反馈与人工复核的已处理文献保留在当前审阅集合中，刷新不会清空，新的有效工作流替换当前集合后再更新。全部复核完成时保留文献卡片，概览待办正确归零；主要审阅入口已上移，进入概览即可开始操作。
+- **配置和文献展示更一致。** 迁移后的非敏感应用配置统一保存在 `config/paperecho.config.json`，密钥仍独立管理，不必同步维护多份旧配置。中文标题与期刊来源在文献页、反馈、人工复核和 XLSX 间保持一致，RSS 订阅名称不再冒充期刊名。
 
-详细使用与边界见 [Control Center 说明](docs/control-center.md)。PaperEcho 仍不提供 PDF 下载、全文阅读或内容总结。
+Desktop、Web、Local 三条路径和 XLSX / DOCX 兼容入口继续保留。外部调度器调用 Desktop 或 Web 的 `--scheduled-daily` 后，由 PaperEcho 按计划时隙选择 Radar 或周报；本版本不自动注册系统定时任务，Local 不支持该入口。规则建议仍须通过正式写入与核验才能显示为已接受。
+
+详细使用与边界见 [Control Center 说明](docs/control-center.md) 和 [配置指南](config/README.md)。PaperEcho 不提供 PDF 下载、全文阅读或全文内容总结。
 
 ## 核心特色
 
@@ -47,7 +49,7 @@ _工作台界面示意，图中状态为模拟数据；正式页面只读取当�
 | 反馈持续学习 | 将文章反馈和长期筛选标准用于后续筛选，减少重复调整。 |
 | 文献状态监测 | 持续关注已入库文献的撤稿、勘误等公开状态变化，并以保守方式提醒和整理。 |
 | 任务恢复 | 长流程中断或超时后保留已确认进度，恢复时核对实际状态，减少重复写入和误操作。 |
-| 报告与邮件 | 生成周报和到期月报；既可发送完成通知，也可在 Stage1–4 失败时按配置告警。 |
+| 报告与多渠道通知 | 生成周报和到期月报；按需通过邮箱、QQ、微信、飞书或企业微信群机器人发送 Radar / 周报概况，失败告警按独立配置启用。 |
 | 自动维护 | 定期清理到期运行产物，同时保护长期配置、反馈和正式报告。 |
 
 ## Skills
@@ -127,8 +129,10 @@ _工作台界面示意，图中状态为模拟数据；正式页面只读取当�
 
 ### 2. 下载并安装依赖
 
+以下命令固定安装已发布的 v2.5：
+
 ```bash
-git clone https://github.com/Chip-G0202/PaperEcho.git
+git clone --branch v2.5 https://github.com/Chip-G0202/PaperEcho.git
 cd PaperEcho
 npm install
 ```
@@ -138,9 +142,10 @@ npm install
 ```powershell
 Copy-Item config/paperecho.config.example.json config/paperecho.config.json
 Copy-Item .env.example .env
+node workflow/tools/maintenance/migrate_application_config.mjs --root .
 ```
 
-在 `config/paperecho.config.json` 中选择 Desktop、Web 或 Local，并按研究领域选择合适的文献源或本地输入。API key、SMTP 密码等 secret 只写入本机 `.env`。完整字段见 [`docs/configuration.md`](docs/configuration.md)。
+复制的示例是兼容模板，迁移命令将其升级为当前配置格式。随后在 Control Center → Settings 或 `config/paperecho.config.json` 中选择 Desktop、Web 或 Local，并配置文献源、模型和通知渠道。密钥通过 Credentials、本机 `.env` 或外部环境维护，不写入主配置。研究方向与检索词的文件职责见 [配置指南](config/README.md)；长期筛选标准仍由 `screening_standards.md` 管理。
 
 ### 4. 检查并运行
 
@@ -188,7 +193,7 @@ PaperEcho 本身采用 MIT License，你可以自由下载、修改和自部署�
 
 - Node.js、PowerShell、Zotero 与路径依赖检查
 - Desktop、Web 或 Local 路径选择与统一配置
-- `.env`、标题翻译、偏好学习和 SMTP 配置
+- `.env`、标题翻译、偏好学习和通知渠道配置
 - Codex 定时任务、运行前检查与首次运行排查
 
 ### 研究方向配置包
@@ -218,7 +223,7 @@ MIT License. See [LICENSE](LICENSE).
 
 A multidisciplinary literature workflow for continuously discovering, screening, and organizing research, with delivery to Zotero or local reports.
 
-[Quick Start](#quick-start) | [Update](#update) | [Support](#support-the-project) | [License](#license-1)
+[Quick Start](#quick-start) | [v2.5 Update](#update) | [Support](#support-the-project) | [License](#license-1)
 
 ## What is this?
 
@@ -234,21 +239,23 @@ PaperEcho does not make research judgments for you. It handles the recurring org
 
 ## Update
 
-**PaperEcho v2.4** brings literature discovery, human review, and everyday settings together in a local Control Center. Open `PaperEcho.exe` on Windows or `PaperEcho.app` on macOS to launch the current workspace in your default browser. Source installations still require Node.js 18+ and project dependencies.
+**PaperEcho v2.5** brings notification channels, configuration, and human review together in the local Control Center, connecting literature discovery with research decisions and updates. Open `PaperEcho.exe` on Windows or `PaperEcho.app` on macOS to launch the current workspace in your default browser. Source installations still require Node.js 18+ and project dependencies.
 
-- **A focused workspace.** Overview shows today's task and recent results; Literature displays actual A/B/C papers; Feedback brings article ratings, manual review, research feedback, and rule suggestions together.
-- **Feedback that carries forward.** Article ratings are saved for later workflow runs, not applied directly to Zotero on click. Rule suggestions show as accepted only after the formal rule or search configuration is safely written and verified.
-- **Human review before writeback.** Candidates with conflicting rule and semantic grades, or a missing semantic grade, are held for review instead of being written to Zotero without confirmation.
-- **Simpler settings.** Related options save as groups, Desktop/Web/Local runtime paths are mutually exclusive, and stored credentials are never displayed in raw form. Existing XLSX, `screening_standards.docx`, and direct configuration remain available.
-- **One scheduled entry.** An external scheduler can call `--scheduled-daily` for Desktop or Web; PaperEcho selects Daily Radar or the weekly report according to the planned slot. This version does not register an OS scheduler, and Local does not support this entry.
+- **Choose channels for each event.** Daily Radar and Weekly can independently use email, QQ, WeChat through WxPusher, Feishu, and WeCom group bots. Configure channels, inspect credential status, test sending, and view recent results in one place. Disabling a channel preserves its configuration.
+- **An overview grounded in the current run.** Notifications contain counts, grade distribution, a research overview, and alerts rather than individual paper lists. The overview uses only original titles and grades from the current A/B/C literature, without claiming to read abstracts or full texts. Delivery recovery reuses saved results instead of rerunning literature processing.
+- **Clear boundaries for human review.** Matching or adjacent A/B/C grades can be adopted automatically, as can D→C rescue. Conflicts such as D→A/B, A/B/C→D, and A↔C require a direct A/B/C/D decision. Regular feedback and manual review remain separate; decisions save immediately, while clicking a rating does not modify Zotero.
+- **Completed reviews remain available.** Processed Feedback and Manual Review cards stay in the current review set across reloads, until a valid workflow replaces that set. Users can revisit and revise decisions after completion, while Overview correctly shows zero pending tasks. Primary review actions are now near the top of Overview.
+- **Consistent configuration and metadata.** Migrated non-secret settings use `config/paperecho.config.json`, with credentials managed separately. Translated titles and publication venues stay consistent across Literature, Feedback, Manual Review, and XLSX; RSS feed labels are kept separate from journal names.
 
-See the [Control Center guide](docs/control-center.md). PaperEcho does not download PDFs, read full texts, or summarize their contents.
+Desktop, Web, Local, and the existing XLSX / DOCX compatibility paths remain available. An external scheduler can call `--scheduled-daily` for Desktop or Web; PaperEcho selects Radar or Weekly according to the planned slot. This version does not register an OS scheduler, and Local does not support this entry. Rule suggestions still require a verified write to the formal configuration before being marked accepted.
+
+See the [Control Center guide](docs/control-center.md) and [configuration guide](config/README.md). PaperEcho does not download PDFs, read full texts, or summarize full-text content.
 
 ## Quick Start
 
 1. Install Node.js 18+, npm, and PowerShell 7+. Desktop also requires Zotero Desktop; Web requires a Zotero API key; Local requires no Zotero installation.
-2. Clone the repository and run `npm install`.
-3. Copy `config/paperecho.config.example.json` to `config/paperecho.config.json` and `.env.example` to `.env`. Choose one path and select suitable literature sources or local input for your field.
+2. Clone the published version with `git clone --branch v2.5 https://github.com/Chip-G0202/PaperEcho.git`, enter the repository, and run `npm install`.
+3. Copy `config/paperecho.config.example.json` to `config/paperecho.config.json` and `.env.example` to `.env`, then run `node workflow/tools/maintenance/migrate_application_config.mjs --root .` to upgrade the compatibility template. Use Settings or the main configuration file to choose a runtime path, literature sources, models, and notification channels. Keep credentials in Credentials, the local `.env`, or an external environment; keep long-term screening standards in `screening_standards.md`.
 4. Use `$paperecho-zotero-desktop`, `$paperecho-zotero-web`, or `$paperecho-local` in Codex. Run the selected launcher with `--check`, then change it to `--run` after the check passes.
 
 To check for an official stable update, use `$paperecho-update` or run `node skills/paperecho-update/scripts/update.mjs --check --json`. Use `--apply` only after an explicit update request and a `safeToApply=true` result.
