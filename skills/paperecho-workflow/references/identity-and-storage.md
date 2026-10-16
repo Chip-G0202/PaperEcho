@@ -2,6 +2,8 @@
 
 ## Deployment roots
 
+Packaged code is resolved from the pinned Resource Root inside Application Root; config, Secret and all business state remain under the selected User Data Root. Module provenance tests use realpath containment, including trailing-separator and external-root/link negative cases. See the Windows unpacked runtime section in [configuration](../../../docs/configuration.md); ASAR covers Shell only and does not replace physical code write protection.
+
 `runtime_config.mjs::resolveRuntimePaths/prepareRuntimePaths` is the sole layout owner. Portable/Installed resolve canonical config, `.env`, all mutable state and child temporary paths under explicit user/cache roots; Dev keeps the v2.5 layout. No implicit migration or legacy fallback is allowed in new layouts. See [configuration](../../../docs/configuration.md) for bootstrap parameters, root precedence, legacy conflicts and rollback boundaries. Packaging and platform acceptance are separate from the path contract.
 
 ## Canonical identity

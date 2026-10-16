@@ -78,6 +78,8 @@ export function resolveRuntimePaths({ applicationRoot = defaultProjectRoot(), en
   applicationRoot = env.PAPERECHO_APPLICATION_ROOT || applicationRoot;
   if (!absolute(applicationRoot) && layout !== 'dev') pathFailure('RUNTIME_APPLICATION_ROOT_ABSOLUTE_REQUIRED');
   applicationRoot = paths.resolve(applicationRoot);
+  const resourceRoot = env.PAPERECHO_RESOURCE_ROOT || applicationRoot;
+  if (!absolute(resourceRoot) || !within(applicationRoot, resourceRoot, paths)) pathFailure('RUNTIME_RESOURCE_BOUNDARY');
   let userDataRoot = applicationRoot; let cacheRoot = paths.join(applicationRoot, '.cache');
   if (layout === 'dev' && (env.PAPERECHO_DATA_ROOT || env.PAPERECHO_CACHE_ROOT)) pathFailure('RUNTIME_LAYOUT_REQUIRED');
   if (layout === 'portable') {
@@ -110,7 +112,7 @@ export function resolveRuntimePaths({ applicationRoot = defaultProjectRoot(), en
     if (within(applicationRoot, userDataRoot, paths) || within(userDataRoot, applicationRoot, paths) || within(applicationRoot, cacheRoot, paths) || within(cacheRoot, applicationRoot, paths)) pathFailure('RUNTIME_INSTALLED_BOUNDARY');
   }
   if (layout !== 'dev' && (paths.dirname(userDataRoot) === userDataRoot || paths.relative(userDataRoot, homeDir) === '' || within(cacheRoot, userDataRoot, paths) || /(^|[\\/])[^\\/]*\.asar([\\/]|$)/i.test(userDataRoot + '/' + cacheRoot))) pathFailure('RUNTIME_DATA_BOUNDARY');
-  return { layout, applicationRoot, userDataRoot, cacheRoot, explicitDataRoot: Boolean(env.PAPERECHO_DATA_ROOT), tempRoot: paths.join(cacheRoot, 'tmp'), configPath: paths.join(userDataRoot, 'config', 'paperecho.config.json'), secretPath: paths.join(userDataRoot, '.env') };
+  return { layout, applicationRoot, resourceRoot: paths.normalize(resourceRoot), userDataRoot, cacheRoot, explicitDataRoot: Boolean(env.PAPERECHO_DATA_ROOT), tempRoot: paths.join(cacheRoot, 'tmp'), configPath: paths.join(userDataRoot, 'config', 'paperecho.config.json'), secretPath: paths.join(userDataRoot, '.env') };
 }
 function assertNoLinkedAncestors(value, fsApi) {
   for (let current = path.resolve(value); ; current = path.dirname(current)) {
@@ -129,6 +131,7 @@ export function assertRuntimeDataPath(paths, value, { cache = false, fsApi = fs 
 export function prepareRuntimePaths(paths, { fsApi = fs } = {}) {
   if (paths.layout === 'dev') return paths;
   assertNoLinkedAncestors(paths.applicationRoot, fsApi);
+  assertNoLinkedAncestors(paths.resourceRoot, fsApi);
   const legacy = ['.env', 'config/paperecho.config.json', 'review_results/runtime_state.json', 'review_results/文献评价/screening_standards.md', 'review_results/文献评价/runs', 'review_results/pipeline'];
   if (!paths.explicitDataRoot && legacy.some(name => fsApi.existsSync(path.join(paths.applicationRoot, name)))) pathFailure('RUNTIME_LEGACY_DATA_FOUND');
   for (const directory of [paths.userDataRoot, path.dirname(paths.configPath), paths.tempRoot]) {
@@ -150,7 +153,7 @@ export function buildRuntimeConfig({ cwd = defaultProjectRoot(), env = process.e
     now = overrideDate ? new Date(overrideDate) : new Date();
   }
   const paths = resolveRuntimePaths({ applicationRoot: cwd, env });
-  const repoRoot = paths.layout === 'dev' ? defaultProjectRoot() : paths.applicationRoot;
+  const repoRoot = paths.layout === 'dev' ? defaultProjectRoot() : paths.resourceRoot;
   const fixtureRoot = argValue(argv, "fixture-root");
   const outputRootRaw = argValue(argv, "output-root") || env.review_results_OUTPUT_ROOT || "";
   const projectRoot = normalizePath(paths.layout === 'dev' ? env.ZOTERO_PROJECT_ROOT || cwd : path.resolve(paths.userDataRoot, env.ZOTERO_PROJECT_ROOT || '.'));

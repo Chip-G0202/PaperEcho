@@ -5,6 +5,8 @@ description: use when running or changing the PaperEcho Standalone Local path, i
 
 # PaperEcho - Local
 
+The packaged `PaperEcho-headless.cmd --check --mode local` entry reuses Shared Runner and the same Local core. See [configuration](../../docs/configuration.md) for data-root setup, embedded runtime/fuse requirements and Windows-only packaging acceptance.
+
 Deployment paths reuse the shared `runtime_config.mjs` Portable/Installed/Dev contract; Local output/state stay under the selected data root in new layouts. See [configuration](../../docs/configuration.md). Do not infer layout from cwd or migrate data in this adapter.
 
 Run the complete local-first literature workflow without representing Local as a Zotero backend. Reuse shared domain services and keep filesystem persistence in the Local adapter.

@@ -5,6 +5,8 @@ description: use when running or changing the PaperEcho Zotero Web API path, inc
 
 # PaperEcho - Zotero Web
 
+The packaged `PaperEcho-headless.cmd --check --mode web` entry reuses Shared Runner and the same Stage0 core. See [configuration](../../docs/configuration.md) for data-root setup, embedded runtime/fuse requirements and Windows-only packaging acceptance; packaging tests use no real provider credentials.
+
 Deployment paths reuse the shared `runtime_config.mjs` Portable/Installed/Dev contract, independently of Web backend selection. See [configuration](../../docs/configuration.md). Do not add adapter root discovery or implicitly migrate data.
 
 No-desktop Zotero Web path for PaperEcho. Keep work narrow: prefer Stage2-only benchmark and targeted tests, and run the full workflow only for final end-to-end acceptance.

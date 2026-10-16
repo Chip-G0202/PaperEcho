@@ -5,6 +5,15 @@ import { pathToFileURL } from 'node:url';
 import { sandboxWorkspace, acquireServer, allowedDocument, preferences, failurePage } from './shell.mjs';
 
 export async function prepareShell({ workspace } = {}) {
+  if (app.isPackaged) {
+    const { preparePackagedRuntime } = await import(pathToFileURL(path.join(process.resourcesPath, 'core/desktop/electron-poc/runtime.mjs')).href);
+    const paths = preparePackagedRuntime();
+    for (const [key, directory] of [['userData', 'electron-profile'], ['sessionData', 'electron-session'], ['crashDumps', 'crashes']]) {
+      const value = path.join(paths.cacheRoot, directory); await fs.mkdir(value, { recursive: true }); app.setPath(key, value);
+    }
+    app.setAppLogsPath(path.join(paths.cacheRoot, 'logs'));
+    return paths.userDataRoot;
+  }
   const root = await sandboxWorkspace(workspace);
   await Promise.all(['electron-profile', 'electron-session', 'crashes', 'logs'].map(name => fs.mkdir(path.join(root, name), { recursive: true })));
   app.setPath('userData', path.join(root, 'electron-profile'));
@@ -37,7 +46,7 @@ export async function startShell({ root, show = true } = {}) {
     if (!origin || !allowedDocument(event.url || url, origin)) event.preventDefault();
   });
   try {
-    lease = await acquireServer(root);
+    lease = await acquireServer(root, app.isPackaged ? { env: process.env } : {});
     origin = new URL(lease.url).origin;
     partition.webRequest.onBeforeRequest((details, callback) => {
       // No remote network, file:, web sockets or alternate loopback listeners.
@@ -50,8 +59,15 @@ export async function startShell({ root, show = true } = {}) {
   }
   return { window, lease, root };
 }
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+if (import.meta.url.startsWith(pathToFileURL(app.getAppPath()).href + '/') || process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   const root = await prepareShell();
+  if (app.isPackaged && process.argv.includes('--smoke')) {
+    const { smoke } = await import(pathToFileURL(path.join(process.resourcesPath, 'core/tests/helpers/electron_smoke.mjs')).href);
+    // The diagnostic runs only against an explicitly provisioned dummy workspace.
+    if (await fs.readFile(path.join(root, '.packaged-smoke-fixture'), 'utf8') !== 'dummy-only') throw new Error('SMOKE_FIXTURE_REQUIRED');
+    void smoke({ root, outputRoot: path.join(root, 'smoke'), prepare: false });
+  } else {
   // Resolve the ESM entry before waiting for ready; only path setup is top-level awaited.
   startShell({ root }).catch(() => { process.stderr.write('PAPERECHO_POC_START_FAILED\n'); app.exit(1); });
+  }
 }

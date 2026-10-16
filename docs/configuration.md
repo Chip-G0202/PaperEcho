@@ -8,6 +8,7 @@
 |---|---|
 | `PAPERECHO_LAYOUT` | `dev`（默认）、`portable`、`installed`；不根据 cwd、只读目录或凭据猜测 layout |
 | `PAPERECHO_APPLICATION_ROOT` | 可选绝对程序根；默认由模块位置确定，代码、静态资源与未来 bundled runtime 位于这里 |
+| `PAPERECHO_RESOURCE_ROOT` | 只读代码资源根，默认等于 Application Root，必须为其内部绝对路径；packaged bootstrap 固定为 `<application>/resources/core`，不能由 `.env` 改写 |
 | `PAPERECHO_DATA_ROOT` | Portable 默认 `<application>/data`，覆盖值相对程序根且必须为其子目录；Installed 覆盖值必须为绝对、独立数据根；Dev 不接受此新参数，保留旧配置契约 |
 | `PAPERECHO_WORKSPACE_ID` | Installed 未显式给 data root 时必填；1–64 位字母数字/下划线/短横线，以字母数字起始；不从安装路径派生，更新程序目录不会换 workspace |
 | `PAPERECHO_CACHE_ROOT` | Portable 默认 `<application>/cache`；Installed 显式 data root 时默认 `<data>/.cache`，可选独立绝对 cache root；cache 不能包含 data 或程序目录 |
@@ -20,7 +21,7 @@ Portable 用相对配置随整个程序目录移动；指向旧绝对位置的�
 
 兼容边界：默认 Dev 继续读取 v2.5 程序根 `config/paperecho.config.json` 与 `.env`，已有 `common.projectRoot`、Local output 等旧契约保留；内部默认程序位置由模块定位，不随启动 cwd 改变。新模式只检查程序根的已知旧数据标记（`.env`、canonical config、runtime state、研究规则、runs、pipeline），不扫描历史目录。发现旧标记且未显式选定 `PAPERECHO_DATA_ROOT` 时返回 `RUNTIME_LEGACY_DATA_FOUND`，不自动选择或复制；显式选定 data root 后旧根仍原样保留，不作为 fallback。多个工作区须分别指定 id/root，配置与凭据不能跨根拼接。
 
-本轮没有迁移、卸载或自动回滚动作。回滚代码不得清理新数据根；旧 v2.5 不认识新 layout，回用旧版本前须保留两套目录并人工核对旧版本路径/凭据入口，不能假定它会自动发现新根。安装更新不得将 data/cache 当程序产物替换，实际 packaging/installer/headless runtime 仍需后续验收。
+本轮没有迁移、卸载或自动回滚动作。回滚代码不得清理新数据根；旧 v2.5 不认识新 layout，回用旧版本前须保留两套目录并人工核对旧版本路径/凭据入口，不能假定它会自动发现新根。安装更新不得将 data/cache 当程序产物替换；Windows unpacked runtime 验证见下节，Installer 与 macOS 仍需后续验收。
 
 验证：`node --test workflow/tests/runtime_paths.test.mjs`（隔离 Portable/Installed HTTP、移动、并发目录、Secret 与状态 owner），加 `runner_config`、`control_credentials`、`control_runtime_roots`、`control_http`、`operation_ledger`、recovery、scheduled-daily 定向回归，再运行 `npm run check` 和 `npm test`。测试 TEMP/TMP 及产物限定 `tests/runs/`，无真实外部操作；只读程序目录用拒写文件系统注入验证，不修改真实安装目录 ACL。
 
@@ -29,6 +30,26 @@ v2.5 的 schema v3 收敛非敏感配置，v4 增加 Radar/Weekly 通知偏好�
 **日常首选 Control Center → Settings。当前 schemaVersion 为 6，非敏感应用配置的唯一 canonical 文件是 `config/paperecho.config.json`；密钥通过 Credentials、本机 `.env` 或外部环境维护，不进入 JSON。** 长期研究规则正文 `screening_standards.md` 由 Research Feedback / Rule Suggestions 或正式编辑入口维护；它不是第二份应用配置。pending/feedback/规则建议及决策历史、runtime/schedule state、ledger、receipts、reports、history、logs 都是运行数据，不应手工编辑来配置应用。
 
 迁移后的安装无需同步旧领域 JSON；尚未迁移的 v1/v2 安装仍走这些文件的 compatibility 读取和保存。canonical section 缺失时不会回读旧文件。完整 A–F 文件分类见 [配置职责](../config/README.md)。示例与 prompt Markdown 是模板/高级入口，普通使用无需额外维护模型参数 JSON。
+
+## Windows unpacked runtime
+
+已安装根目录及 `desktop/electron-poc` 的锁定依赖后，在 Dev 仓库运行：
+
+```powershell
+npm run package:win --prefix desktop/electron-poc
+node --test tests/helpers/packaging.test.mjs
+npm run smoke:packaged --prefix desktop/electron-poc
+```
+
+唯一打包工具为 Electron Packager。构建按代码/模板 allowlist 和 npm production dependency tree 组装一次 `resources/core`；Electron Shell 放入 `app.asar`。物理 workflow、静态资源和依赖只保留一份，供 Electron 与独立 Node 子进程共同读取。产物及报告在 `tests/runs/phase2b/`，不进入 Git。打包使用锁定 Electron npm 包的官方 `checksums.json` 验证 ZIP；`tests/runs/electron-cache/` 中由官方安装器或 `@electron/get` 填充的匹配缓存可离线复用，无需再次获取远程校验表。缺少资产时仍走官方下载和校验，不关闭 TLS/checksum。
+
+GUI 运行产物中的 `PaperEcho.exe`；独立无窗口入口为 `PaperEcho-headless.cmd --check --mode local`（或显式选择 `desktop` / `web`）。Headless 复用 Shared Runner、preflight 和原 workflow entry，退出码沿用 Runner，无系统 Node/npm 依赖。预先配置 `PAPERECHO_LAYOUT=installed` 与显式 `PAPERECHO_DATA_ROOT` 或 `PAPERECHO_WORKSPACE_ID`；配置和 Local input 由用户在数据根准备，不自动迁移或生成真实配置。Portable 需显式设置 `PAPERECHO_LAYOUT=portable`。
+
+Packaged bootstrap 固定 Application Root 为程序目录、Resource Root 为其 `resources/core`，不受 cwd 或外部程序根 override 影响。配置、Secret 和可变状态继续使用数据根，Electron profile/session/crash/log 使用 cache。业务脚本通过统一 owner 从 Resource Root 定位；模块边界测试使用 `realpath` 加 `path.relative`，兼容末尾分隔符并拒绝链接或外部根，不能用字符串前缀扩大允许范围。
+
+实际二进制 fuses：RunAsNode、CookieEncryption、EmbeddedAsarIntegrityValidation、OnlyLoadAppFromAsar、WasmTrapHandlers 开启；NodeOptionsEnvironmentVariable、NodeCliInspectArguments、BrowserProcessSpecificV8Snapshot、FileProtocolExtraPrivileges 关闭。RunAsNode 是独立入口和现有 Node 子进程链所必需，保留了执行任意 Node 代码的能力。ASAR integrity 覆盖 Shell，不覆盖物理 `resources/core`；这些资源必须作为程序代码保护写权限，正式签名/发行另行验收。不能将关闭 RunAsNode 的产物用于此 Headless 方案。
+
+Windows 验证使用中文/空格目录、空 PATH、仓库外 cwd、仅 dummy/mock 数据；同时验证三尺寸 GUI、真实 Headless Local 子进程、scheduled 入口 mock、模块来源、异常退出、无遗留进程、实际 fuses 与 EXE 内嵌 ASAR header hash。smoke 对临时 Application 副本实际拒写并在 finally 恢复 ACL；不会改真实安装目录或 Production ACL。复用既有产物时，先逐文件核对业务源码，仅更新测试副本内的测试文件；正式运行时或构建配置变化必须重建。macOS、Installer、系统调度注册、签名与升级迁移均未在此 Gate 验证。
 
 ## 用户实际需要处理的文件
 

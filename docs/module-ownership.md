@@ -13,6 +13,8 @@
 
 Deployment paths：`workflow/tools/lib/runtime_config.mjs` 独占 `resolveRuntimePaths/prepareRuntimePaths`。config resolver、`.env` bootstrap、SecretService、Control Center 与 Runner 复用它；业务状态仍由原 owner 管理，不另建 root resolver。Portable/Installed/Dev、旧布局与安全失败规则见 [配置指南](configuration.md)。
 
+Packaged runtime：`desktop/electron-poc/package-win.mjs` 负责构建 allowlist、官方 ZIP 校验、ASAR 和 fuses；`runtime.mjs` 仅固定程序/资源位置并调用统一路径 owner。Shell 复用现有 Control Center；`headless.mjs` 调 Shared Runner，无独立业务后端或 SecretStore。测试 `packaged_probe.mjs` 用真实路径包含判断校验包内模块，不接受 Dev/Production 或链接越界来源。
+
 Control Center application boundary：
 
 - `workflow/tools/lib/control_application_services.mjs`：组合 services；研究反馈提交只调用 `research_evaluation_service.mjs` 持久保存，不即时调用 LLM。

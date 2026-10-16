@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 
 export const repo = fileURLToPath(new URL('../../', import.meta.url));
 export const sandboxBase = path.join(repo, 'tests', 'runs', 'electron-poc');
@@ -22,13 +23,18 @@ export async function sandboxWorkspace(root = path.join(sandboxBase, 'workspace'
   catch (e) { if (e.code !== 'EEXIST') throw e; }
   return root;
 }
-export async function acquireServer(root, { port = 8765 } = {}) {
+export async function acquireServer(root, { port = 8765, env } = {}) {
   // Never bootstrap the development .env or inherit provider credentials in this sandbox-only PoC.
-  process.env.PAPERECHO_SKIP_DOTENV = '1';
-  const { resolveControlCenterStartup, controlCenterInstance, startControlCenter } = await import('../../workflow/tools/web/server.mjs');
-  const { controlCenterPorts, discoverControlCenter } = await import('../../workflow/tools/web/launcher.mjs');
-  const startup = await resolveControlCenterStartup({ root, env: { PAPERECHO_SKIP_DOTENV: '1' }, argv: ['--mode', 'local', '--output-root', path.join(root, 'local')] });
-  for (const value of [startup.context.projectRoot, startup.context.reviewRoot, startup.context.researchRoot, startup.context.configPath, startup.context.localRepository?.root]) {
+  if (!env) process.env.PAPERECHO_SKIP_DOTENV = '1';
+  const moduleRoot = env ? env.PAPERECHO_RESOURCE_ROOT : repo;
+  const { resolveControlCenterStartup, controlCenterInstance, startControlCenter } = await import(pathToFileURL(path.join(moduleRoot, 'workflow/tools/web/server.mjs')).href);
+  const { controlCenterPorts, discoverControlCenter } = await import(pathToFileURL(path.join(moduleRoot, 'workflow/tools/web/launcher.mjs')).href);
+  if (env) {
+    const { copyEnvironment } = await import(pathToFileURL(path.join(moduleRoot, 'workflow/tools/lib/credential_registry.mjs')).href);
+    env = copyEnvironment(env, { ELECTRON_RUN_AS_NODE: '1' });
+  }
+  const startup = await resolveControlCenterStartup(env ? { root: env.PAPERECHO_APPLICATION_ROOT, env } : { root, env: { PAPERECHO_SKIP_DOTENV: '1' }, argv: ['--mode', 'local', '--output-root', path.join(root, 'local')] });
+  for (const value of !env ? [startup.context.projectRoot, startup.context.reviewRoot, startup.context.researchRoot, startup.context.configPath, startup.context.localRepository?.root] : []) {
     if (value && (path.relative(root, value).startsWith('..') || path.isAbsolute(path.relative(root, value)))) throw new Error('SANDBOX_REQUIRED');
   }
   const instance = controlCenterInstance(root, startup.context);

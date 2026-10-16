@@ -310,6 +310,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   const effectiveEnv = copyEnvironment(env);
   if (paths.layout !== 'dev') {
     effectiveEnv.PAPERECHO_APPLICATION_ROOT = paths.applicationRoot;
+    effectiveEnv.PAPERECHO_RESOURCE_ROOT = paths.resourceRoot;
     effectiveEnv.PAPERECHO_DATA_ROOT = paths.userDataRoot;
     effectiveEnv.ZOTERO_PROJECT_ROOT = path.resolve(paths.userDataRoot, env.ZOTERO_PROJECT_ROOT || '.');
     if (env.review_results_OUTPUT_ROOT) effectiveEnv.review_results_OUTPUT_ROOT = path.resolve(paths.userDataRoot, env.review_results_OUTPUT_ROOT);

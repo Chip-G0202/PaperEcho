@@ -4,9 +4,11 @@ import fs from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { prepareShell, startShell } from '../../desktop/electron-poc/main.mjs';
 import { sandboxBase, allowedDocument, failurePage } from '../../desktop/electron-poc/shell.mjs';
+export async function smoke({ root, outputRoot = sandboxBase, prepare = true } = {}) {
 const began = performance.now();
 let shell;
 const report = { platform: process.platform, electron: process.versions.electron, node: process.versions.node, pathEmpty: !process.env.PATH, checks: [], consoleErrors: [], runtimeErrors: [], rendererGone: [] };
@@ -20,8 +22,8 @@ app.on('web-contents-created', (_event, wc) => {
   wc.on('render-process-gone', (_event, details) => report.rendererGone.push({ reason: details.reason, exitCode: details.exitCode }));
 });
 const write = async (file, value) => { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(value)); };
-const root = await prepareShell({ workspace: path.join(sandboxBase, 'smoke') });
-async function smoke() {
+if (prepare) root = await prepareShell({ workspace: path.join(sandboxBase, 'smoke') });
+await fs.mkdir(outputRoot, { recursive: true });
 try {
   shell = await startShell({ root });
   assert.ok(shell?.lease); const { window, lease } = shell; const wc = window.webContents;
@@ -72,7 +74,7 @@ try {
     const capture = await wc.debugger.sendCommand('Page.captureScreenshot', { format: 'png', fromSurface: false });
     const png = Buffer.from(capture.data, 'base64');
     assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
-    await fs.writeFile(path.join(sandboxBase, `smoke-${width}.png`), png);
+    await fs.writeFile(path.join(outputRoot, `smoke-${width}.png`), png);
   }
   report.checks.push('21 UI route/viewport checks');
   const memory = [];
@@ -87,13 +89,13 @@ try {
   wc.debugger.detach();
   app.once('will-quit', () => {
     report.ownedServerClosed = !lease.server.listening;
-    writeFileSync(path.join(sandboxBase, 'smoke-report.json'), JSON.stringify(report, null, 2));
+    writeFileSync(path.join(outputRoot, 'smoke-report.json'), JSON.stringify(report, null, 2));
   });
   window.close();
 } catch (error) {
   await shell?.lease?.close();
-  writeFileSync(path.join(sandboxBase, 'smoke-failure.json'), JSON.stringify({ code: error.code || error.message, stack: error.stack?.split('\n').slice(0, 3) }));
+  writeFileSync(path.join(outputRoot, 'smoke-failure.json'), JSON.stringify({ code: error.code || error.message, stack: error.stack?.split('\n').slice(0, 3) }));
   app.exit(1);
 }
 }
-void smoke();
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) void smoke();

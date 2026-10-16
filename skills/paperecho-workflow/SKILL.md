@@ -37,6 +37,8 @@ This skill owns the shared execution contract, not a second pipeline invocation.
 
 ## Unified Configuration
 
+Windows packaged runtime uses the same root owner with a pinned read-only Resource Root. Headless delegates to Shared Runner using the embedded runtime; see [configuration](../../docs/configuration.md) for verified build/test commands, required fuses and platform limits.
+
 Deployment layout is resolved only by `runtime_config.mjs`; reuse its Portable/Installed/Dev roots before config or Secret loading. Do not add adapter root resolvers, infer layout from cwd, or migrate real data implicitly. See [configuration](../../docs/configuration.md) for bootstrap inputs and compatibility boundaries.
 
 - Use the single schema v1 resolver in `workflow/tools/runner/config_loader.mjs`. The user template is `config/paperecho.config.example.json`; the real `config/paperecho.config.json` stays local and gitignored.

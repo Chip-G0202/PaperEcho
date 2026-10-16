@@ -643,6 +643,8 @@ Desktop/Web run groups live at `review_results/文献评价/runs/<runId>/run_gro
 
 ### Configuration Contract
 
+- Windows packaged bootstrap pins Application/Resource roots and reuses the sole runtime path owner; physical workflow/dependencies live once in `resources/core`. The independent Headless entry requires the verified RunAsNode fuse and delegates to Shared Runner. Packaged tests must reject external realpaths, including Dev/Production fixtures, without relying on raw string prefixes. Build commands, fuse tradeoffs and platform gates are in `docs/configuration.md`.
+
 - Deployment layout roots are owned only by `runtime_config.mjs::resolveRuntimePaths/prepareRuntimePaths`. `PAPERECHO_LAYOUT=dev|portable|installed` is separate from backend mode; canonical config and Secret bootstrap share the selected data root in new layouts. Never infer roots from cwd, auto-copy legacy data or fall back into a read-only program tree. Preserve Dev compatibility and all Secret ACL/atomic/lock checks. Root priority, legacy conflict handling and Portable/Installed tests are documented in `docs/configuration.md`; packaged runtime and macOS acceptance remain separate gates.
 
 - Unified Runner configuration accepts schema v1/v2/v3 JSON. The machine-local `config/paperecho.config.json` is the v3 canonical non-secret owner and remains gitignored; the committed template remains v2. `--config` overrides `PAPERECHO_CONFIG`, then the optional default local file is loaded when present. Migration and field ownership are documented in [Config map](config/README.md).

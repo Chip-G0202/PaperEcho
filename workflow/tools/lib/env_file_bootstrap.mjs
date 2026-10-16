@@ -29,7 +29,7 @@ export function loadDotEnv({ env = process.env, envPath = resolveDotEnvPath({ en
   }
 
   for (const [key, value] of Object.entries(parsed || {})) {
-    if (['PAPERECHO_LAYOUT', 'PAPERECHO_APPLICATION_ROOT', 'PAPERECHO_DATA_ROOT', 'PAPERECHO_CACHE_ROOT', 'PAPERECHO_WORKSPACE_ID'].includes(key)) continue;
+    if (['PAPERECHO_LAYOUT', 'PAPERECHO_APPLICATION_ROOT', 'PAPERECHO_RESOURCE_ROOT', 'PAPERECHO_DATA_ROOT', 'PAPERECHO_CACHE_ROOT', 'PAPERECHO_WORKSPACE_ID'].includes(key)) continue;
     if (!(key in env)) {
       env[key] = value;
       markLocalCredential(env, key, path.resolve(envPath));

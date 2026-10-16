@@ -5,6 +5,8 @@ description: use when running or changing the PaperEcho Zotero Desktop path, inc
 
 # PaperEcho - Zotero Desktop
 
+The packaged `PaperEcho-headless.cmd --check --mode desktop` entry reuses Shared Runner and the same Stage0 core. See [configuration](../../docs/configuration.md) for data-root setup, embedded runtime/fuse requirements and Windows-only packaging acceptance; GUI smoke does not authorize real Zotero operations.
+
 Deployment paths reuse the shared `runtime_config.mjs` Portable/Installed/Dev contract, independently of Desktop backend selection. See [configuration](../../docs/configuration.md). Do not add adapter root discovery or implicitly migrate data.
 
 Use this skill for the repository's desktop-only Zotero literature review path. Keep work narrow: prefer Stage2-only benchmark and targeted tests, and run a full workflow only for final end-to-end acceptance.

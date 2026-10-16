@@ -18,6 +18,14 @@ import { controlCenterInstance, resolveControlCenterStartup, startControlCenter 
 import { requestLocal } from '../tools/web/launcher.mjs';
 import { applicationConfigPath } from '../tools/lib/application_config.mjs';
 import { OperationLedgerStore } from '../tools/recovery/operation_ledger.mjs';
+
+test('packaged resources stay inside the application boundary and are pinned separately from data', () => {
+  const env = { PAPERECHO_LAYOUT: 'installed', PAPERECHO_DATA_ROOT: 'C:\\dummy-data', PAPERECHO_RESOURCE_ROOT: 'C:\\dummy-app\\resources\\core' };
+  const roots = resolveRuntimePaths({ applicationRoot: 'C:\\dummy-app', env, platform: 'win32' });
+  assert.equal(roots.applicationRoot, 'C:\\dummy-app');
+  assert.equal(roots.resourceRoot, env.PAPERECHO_RESOURCE_ROOT);
+  assert.throws(() => resolveRuntimePaths({ applicationRoot: 'C:\\dummy-app', env: { ...env, PAPERECHO_RESOURCE_ROOT: 'C:\\outside' }, platform: 'win32' }), /RUNTIME_RESOURCE_BOUNDARY/);
+});
 import { canonicalQueryHash } from '../tools/stage1/source_state.mjs';
 import { scheduleDayDecisionPath } from '../tools/lib/schedule_support.mjs';
 import { receiptPathFor } from '../tools/stage5/email_receipt.mjs';
