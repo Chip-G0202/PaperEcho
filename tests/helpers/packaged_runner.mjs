@@ -37,7 +37,7 @@ async function run(command, args, overrides = {}, shell = false) {
     let output = ''; const timer = setTimeout(() => { child.kill(); reject(new Error('PACKAGED_TIMEOUT')); }, 60000);
     child.stdout.on('data', b => output += b); child.stderr.on('data', b => output += b);
     child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('close', code => { clearTimeout(timer); resolve({ code, ms: Math.round(performance.now() - began), output: output.slice(-2000), pid: child.pid }); });
+    child.once('close', code => { clearTimeout(timer); resolve({ code, ms: Math.round(performance.now() - began), output: output.slice(-65536), pid: child.pid }); });
   });
 }
 async function inventory(root) {
@@ -74,7 +74,7 @@ await assert.rejects(fs.writeFile(path.join(application, 'forbidden-write'), 'du
 const gui = await run(exe, ['--smoke']);
 assert.equal(gui.code, 0, 'packaged GUI: ' + gui.output);
 const report = JSON.parse(await fs.readFile(path.join(data, 'smoke/smoke-report.json')));
-assert.equal(report.views.length, 21); assert.equal(report.ownedServerClosed, true); assert.equal(report.pathEmpty, true);
+assert.equal(report.views.length, 24); assert.equal(report.ownedServerClosed, true); assert.equal(report.pathEmpty, true);
 for (const p of report.processes) assert.throws(() => process.kill(p.pid, 0), 'orphan process');
 const cmd = path.join(application, 'PaperEcho-headless.cmd');
 const check = await run('"' + cmd + '"', ['--check', '--mode', 'local'], {}, true);
@@ -82,6 +82,22 @@ assert.equal(check.code, 0, 'headless wrapper: ' + check.output);
 const preflight = check.output.split(/\r?\n/).filter(x => x.startsWith('{')).map(x => JSON.parse(x)).find(x => x.type === 'preflight');
 assert.equal(preflight?.canRun, true); assert.deepEqual(preflight.requiredMissing, []);
 assert.equal(preflight.mode, 'local'); assert.ok(preflight.readiness.some(x => x.name === 'production_entry' && x.status === 'ready'));
+async function dataSnapshot(directory) {
+  const entries = {};
+  async function visit(dir) { for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const file = path.join(dir, entry.name); const stat = await fs.stat(file);
+    entries[path.relative(directory, file)] = [stat.mode, stat.mtimeMs, entry.isDirectory() ? null : createHash('sha256').update(await fs.readFile(file)).digest('hex')];
+    if (entry.isDirectory()) await visit(file);
+  } }
+  await visit(directory); return entries;
+}
+const doctorBefore = await dataSnapshot(data);
+const doctor = await run('"' + cmd + '"', ['--doctor'], {}, true);
+const doctorReport = JSON.parse(doctor.output);
+assert.equal(doctor.code, doctorReport.status === 'FAIL' ? 2 : doctorReport.status === 'UNKNOWN' ? 3 : 0);
+assert.equal(doctorReport.canRun, true); assert.ok(doctorReport.checks.some(x => x.checkId === 'runtime.node' && x.summary.includes('Electron')));
+assert.deepEqual(await dataSnapshot(data), doctorBefore, 'packaged Doctor must not write user state');
+assert.throws(() => process.kill(doctor.pid, 0), 'Doctor orphan process');
 const core = path.join(application, 'resources/core');
 const probe = await run(exe, [path.join(core, 'tests/helpers/packaged_probe.mjs')], { ELECTRON_RUN_AS_NODE: '1' });
 assert.equal(probe.code, 0, 'headless probe: ' + probe.output);

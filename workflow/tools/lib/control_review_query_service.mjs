@@ -12,6 +12,10 @@ import { readPendingPaperReview, matchPendingPaperRecord } from './pending_paper
 import { isActiveRuleSuggestion } from './unified_pending_rule_suggestions.mjs';
 import { getReviewDisplayMetadata } from './review_display_metadata.mjs';
 import { normalizeTitleCacheKey } from './title_translation_support.mjs';
+import { readBoundedJson, boundedDirectory } from './atomic_json.mjs';
+import { validateOperationLedger, inspectWorkflowLease } from '../recovery/operation_ledger.mjs';
+import { inspectRecoveryLedger } from '../recovery/run_recovery.mjs';
+import { validateNotificationReceipt } from '../stage5/email_receipt.mjs';
 
 const inside = (root, candidate) => { const rel = path.relative(root, candidate); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
 const paperId = (runId, item, index, keys = []) => createHash('sha256').update(item._reviewScopeRunId ? `${runId}:scope:${item._reviewScopeRunId}:${keys[0] || ''}` : `${runId}:${index}:${keys[0] || ''}`).digest('hex');
@@ -68,6 +72,39 @@ export class ReviewQueryService {
       if (manifest?.schemaVersion === 1 && manifest.runId === dir.name && Number.isFinite(Date.parse(manifest.startedAt))) runs.push(manifest);
     }
     return runs.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  }
+  async health() {
+    const lease = await readBoundedJson(this.runRoot, path.join(this.runRoot, '.workflow.lease.json'));
+    const claim = inspectWorkflowLease(lease);
+    const runs = [];
+    for (const entry of await boundedDirectory(this.runRoot)) {
+      if (!entry.isDirectory()) continue;
+      const manifest = await readBoundedJson(this.runRoot, path.join(this.runRoot, entry.name, 'run_group.json'));
+      if (!manifest || manifest.schemaVersion !== 1 || manifest.runId !== entry.name || !Number.isFinite(Date.parse(manifest.startedAt))) throw new Error('RUN_MANIFEST_UNCONFIRMED');
+      runs.push(manifest);
+    }
+    const latest = runs.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0];
+    if (!latest) return { claim, lastRun: 'none', ledger: 'absent', receipts: [] };
+    const directory = path.join(this.runRoot, latest.runId);
+    const ledger = await readBoundedJson(this.runRoot, path.join(directory, 'operation_ledger.json'));
+    const lastRun = ['completed', 'running', 'failed', 'incomplete', 'interrupted', 'timed_out'].includes(latest.status) ? latest.status : 'unknown';
+    if (!ledger) return { claim, lastRun, ledger: 'absent', receipts: [] };
+    validateOperationLedger(ledger, { expectedRunId: latest.runId });
+    const notifications = ledger.operations.filter(op => op.type === 'notification');
+    if (notifications.length > 8) throw new Error('INSPECTION_LIMIT');
+    const receipts = [];
+    for (const operation of notifications) {
+      const file = operation.target?.receiptPath || operation.target?.path;
+      if (!file || !path.isAbsolute(file)) throw new Error('RECEIPT_PATH_UNCONFIRMED');
+      const receipt = await readBoundedJson(directory, file);
+      if (!receipt) { receipts.push('missing'); continue; }
+      validateNotificationReceipt(receipt);
+      if (receipt.runId !== latest.runId) throw new Error('RECEIPT_RUN_MISMATCH');
+      receipts.push(receipt.status);
+    }
+    const runner = await readBoundedJson(directory, path.join(directory, 'runner_report.json'));
+    return { claim, lastRun, ledger: 'readable', ...inspectRecoveryLedger(ledger), receipts,
+      runner: runner ? (['timed_out', 'interrupted', 'completed', 'failed'].includes(runner.status) ? runner.status : 'unknown') : 'absent' };
   }
   pipeline(run) {
     const base = this.localRepository?.root || this.researchRoot;

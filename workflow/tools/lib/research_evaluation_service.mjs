@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
+import { writeAtomicJson, withAtomicJsonLock, readBoundedJson, boundedDirectory } from './atomic_json.mjs';
 import { processResearchEvaluation } from '../stage1/manual_standard_evaluation.mjs';
 import { getPreferenceLearningConfig } from './preference_learning_support.mjs';
 import { consolidateResearchSuggestions, writeUnifiedPendingRuleSuggestions, suggestionContentIssue } from './unified_pending_rule_suggestions.mjs';
@@ -67,6 +67,25 @@ export class ResearchEvaluationService {
       if (!['processed', 'consumed'].includes(event.status)) events.push(event);
     }
     return events;
+  }
+  async health() {
+    const counts = { pending: 0, prepared: 0, unknown: 0, recoverable: 0, processed: 0 };
+    for (const entry of await boundedDirectory(this.directory)) {
+      if (!entry.name.endsWith('.json') || !eventId(entry.name.slice(0, -5))) continue;
+      const event = await readBoundedJson(this.directory, this.eventPath(entry.name.slice(0, -5)), { maxBytes: 131072 });
+      if (!event || event.requestId !== entry.name.slice(0, -5)) throw new Error('RESEARCH_EVENT_INVALID');
+      if (['processed', 'consumed'].includes(event.status)) { counts.processed++; continue; }
+      if (event.batchRunId) {
+        const batch = await readBoundedJson(this.reviewRoot, this.batchPath(event.batchRunId));
+        if (!batch || !['preparing', 'prepared', 'failed', 'published'].includes(batch.status)) { counts.unknown++; continue; }
+        if (batch.status === 'preparing') { counts.unknown++; continue; }
+        if (batch.status === 'published' || batch.status === 'failed') { counts.recoverable++; continue; }
+      }
+      if (event.status === 'pending') counts.pending++;
+      else if (event.status === 'prepared') counts.prepared++;
+      else counts.unknown++;
+    }
+    return counts;
   }
   async prepare({ store }) {
     const runId = this.claim(store); const file = this.batchPath(runId);

@@ -1,7 +1,7 @@
 import { preparePackagedRuntime } from './runtime.mjs';
 
 try {
-  preparePackagedRuntime();
+  preparePackagedRuntime({ readOnly: process.argv.includes('--doctor') });
   const { main } = await import('../../workflow/tools/runner/main.mjs');
   process.exitCode = await main(process.argv.slice(2));
 } catch {

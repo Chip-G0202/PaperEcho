@@ -4,6 +4,42 @@ import { randomUUID } from "node:crypto";
 
 const TRANSIENT_RENAME_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
 
+// Bounded read-only inspection; never follow a linked directory or special file.
+export async function readBoundedJson(root, file, { maxBytes = 1048576 } = {}) {
+  const relative = path.relative(path.resolve(root), path.resolve(file));
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('INSPECTION_PATH_UNSAFE');
+  try {
+    for (let dir = path.resolve(file); ; dir = path.dirname(dir)) {
+      const stat = await fs.lstat(dir);
+      if (stat.isSymbolicLink()) throw new Error('INSPECTION_PATH_UNSAFE');
+      if (dir === path.dirname(dir)) break;
+    }
+    const handle = await fs.open(file, 'r');
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.nlink !== 1 || stat.size > maxBytes) throw new Error('INSPECTION_FILE_UNSAFE');
+      const buffer = Buffer.alloc(maxBytes + 1);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      if (bytesRead > maxBytes) throw new Error('INSPECTION_LIMIT');
+      return JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
+    } finally { await handle.close(); }
+  } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+export async function boundedDirectory(directory, limit = 100) {
+  try {
+    for (let dir = path.resolve(directory); ; dir = path.dirname(dir)) {
+      if ((await fs.lstat(dir)).isSymbolicLink()) throw new Error('INSPECTION_PATH_UNSAFE');
+      if (dir === path.dirname(dir)) break;
+    }
+    const entries = [];
+    for await (const entry of await fs.opendir(directory)) {
+      if (entries.length === limit) throw new Error('INSPECTION_LIMIT');
+      entries.push(entry);
+    }
+    return entries;
+  } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+}
+
 export async function renameWithTransientRetry(source, target, {
   renameImpl = (from, to) => fs.rename(from, to),
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),

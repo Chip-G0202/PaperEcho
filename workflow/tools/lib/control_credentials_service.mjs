@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { parseEnvFile } from './env_file_parser.mjs';
 import { writeAtomicText, withAtomicJsonLock, renameWithTransientRetry } from './atomic_json.mjs';
 import { CONTROL_SECRET_NAMES, credentialOrigin, markLocalCredential, redactSecrets, secretValues } from './credential_registry.mjs';
-import { secureCredentialFile } from './credential_file_security.mjs';
+import { secureCredentialFile, credentialSecurityRuntimeAvailable } from './credential_file_security.mjs';
 import { resolveRuntimePaths, assertRuntimeDataPath } from './runtime_config.mjs';
 export { CONTROL_SECRET_NAMES } from './credential_registry.mjs';
 
@@ -59,6 +59,14 @@ export class SecretService {
       return { id, configured: Boolean(this.#value(id, state)), storageClass: origin.kind, writable: Boolean(state) && origin.writable, testAvailable: false,
         reason: reason || origin.reason || '', reload: '已保存到本地；当前凭据服务读取新值。新 workflow 启动时加载；已运行的进程需重启，外部环境仍优先。' };
     });
+  }
+  async health() {
+    const state = await this.#read();
+    // No local file means no ACL to inspect; do not start PowerShell just for presence metadata.
+    const aclRuntime = state.exists ? await credentialSecurityRuntimeAvailable() : null;
+    if (state.exists && !aclRuntime) throw Object.assign(new Error('CREDENTIAL_ACL_RUNTIME_UNAVAILABLE'), { code: 'CREDENTIAL_ACL_RUNTIME_UNAVAILABLE' });
+    if (state.exists) await secureCredentialFile(this.#file, { checkOnly: true });
+    return { filePresent: Boolean(state.exists), aclRuntime, credentials: (await this.list()).map(({ id, configured, storageClass, writable }) => ({ id, configured, storageClass, writable })) };
   }
   #origin(id, state) {
     const origin = credentialOrigin(this.#env, id);

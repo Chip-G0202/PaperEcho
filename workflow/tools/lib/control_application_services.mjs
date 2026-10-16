@@ -10,6 +10,7 @@ import { buildRuntimeConfig } from './runtime_config.mjs';
 import { ControlScheduleStatusService } from './control_schedule_status_service.mjs';
 import { NotificationChannelService } from './control_notification_service.mjs';
 import { SetupService } from './control_setup_service.mjs';
+import { DoctorService } from './control_doctor_service.mjs';
 
 export function createControlServices({ root, reviewRoot, env = process.env, llmClient = null, notificationTransport, qqTransport, channelTransports, context = buildRuntimeConfig({ cwd: root, env, argv: [] }) } = {}) {
   reviewRoot ||= context.reviewRoot;
@@ -28,5 +29,6 @@ export function createControlServices({ root, reviewRoot, env = process.env, llm
   const schedule = new ControlScheduleStatusService({ context: { ...context, reviewRoot }, config });
   const notifications = new NotificationChannelService({ config, secrets, review, context, env, transport: notificationTransport, qqTransport, channelTransports });
   const setup = new SetupService({ config, context, env });
-  return { feedback, config, rules, secrets, review, schedule, notifications, research, setup };
+  const doctor = new DoctorService({ config, secrets, research, review, context, env });
+  return { feedback, config, rules, secrets, review, schedule, notifications, research, setup, doctor };
 }

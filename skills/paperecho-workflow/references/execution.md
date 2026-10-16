@@ -24,6 +24,8 @@ The launcher fixes its mode, uses an argv array with `process.execPath`, and nev
 
 ## Arguments and Profiles
 
+Read-only diagnostics use `node workflow/tools/runner/main.mjs --doctor [--config <json>]` or packaged `PaperEcho-headless.cmd --doctor`. This exclusive branch shares System Health's Doctor service, never invokes a production launcher/entry and does not change `--check`. PASS/WARN exit 0, FAIL exit 2, UNKNOWN exit 3. Runtime bootstrap/config resolution must use the existing owner's read-only option. See [Doctor contract](../../../docs/configuration.md#doctor--system-health).
+
 The shared arguments are `--check` or `--run` (exactly one), optional `--config <json>`, `--profile standard|complete` (default `standard`), optional `--email <recipient>`, `--force-resend`, and `--require-llm`. Local additionally requires `--input <file-or-directory>` and `--output-root <path>` from CLI or unified config, with optional `--feedback <jsonl>`. Arguments containing spaces remain separate argv entries; do not construct shell command strings.
 
 `standard` permits the production code's existing safe degradation: Stage5 skips without a recipient, missing SMTP does not block when mail was not requested, allowed LLM fallback is reported, a monthly report may be `NOT_DUE`, and Local Stage2/Stage3 are `NOT_APPLICABLE`. `complete` only strengthens features explicitly requested by the user: requested mail must be sent, and `--require-llm` must have real configuration plus observable non-fallback evidence. It never makes Zotero stages applicable to Local or forces a monthly report before it is due.

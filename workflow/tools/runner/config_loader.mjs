@@ -289,7 +289,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   }
 
   if (requestedPath) assertRuntimeDataPath(paths, requestedPath);
-  prepareRuntimePaths(paths);
+  prepareRuntimePaths(paths, { readOnly: dependencies.readOnly === true });
   const loaded = await loadConfigFile({ requestedPath, source: configSource, fsApi, cwd });
   const config = normalizeNotificationPreferences(loaded.config);
   const configSelection = selectConfigMode(config);

@@ -128,7 +128,7 @@ export function assertRuntimeDataPath(paths, value, { cache = false, fsApi = fs 
   assertNoLinkedAncestors(value, fsApi);
   return value;
 }
-export function prepareRuntimePaths(paths, { fsApi = fs } = {}) {
+export function prepareRuntimePaths(paths, { fsApi = fs, readOnly = false } = {}) {
   if (paths.layout === 'dev') return paths;
   assertNoLinkedAncestors(paths.applicationRoot, fsApi);
   assertNoLinkedAncestors(paths.resourceRoot, fsApi);
@@ -136,6 +136,7 @@ export function prepareRuntimePaths(paths, { fsApi = fs } = {}) {
   if (!paths.explicitDataRoot && legacy.some(name => fsApi.existsSync(path.join(paths.applicationRoot, name)))) pathFailure('RUNTIME_LEGACY_DATA_FOUND');
   for (const directory of [paths.userDataRoot, path.dirname(paths.configPath), paths.tempRoot]) {
     assertRuntimeDataPath(paths, directory, { cache: true, fsApi });
+    if (readOnly) continue;
     try {
       fsApi.mkdirSync(directory, { recursive: true, mode: 0o700 });
       assertRuntimeDataPath(paths, directory, { cache: true, fsApi });
@@ -314,7 +315,7 @@ export function applySampleLimit(items = [], limit = null, appliedAt = "pre_tria
 }
 
 // Optional interfaces share Runner configuration precedence and the workflow path owners.
-export async function resolveApplicationRuntimeContext({ cwd = defaultProjectRoot(), env = process.env, argv = [] } = {}) {
+export async function resolveApplicationRuntimeContext({ cwd = defaultProjectRoot(), env = process.env, argv = [], readOnly = false } = {}) {
   const { parseRunnerArgs } = await import('../runner/args.mjs');
   const { resolveRunnerConfiguration } = await import('../runner/config_loader.mjs');
   const { existsSync } = await import('node:fs');
@@ -325,11 +326,11 @@ export async function resolveApplicationRuntimeContext({ cwd = defaultProjectRoo
   // The optional UI remains usable before a Runner config has been initialized.
   if (!cli.mode && !cli.configPath && !env.PAPERECHO_CONFIG && !existsSync(defaultConfigPath)) cli.mode = 'desktop';
   let resolved;
-  try { resolved = await resolveRunnerConfiguration(cli, { cwd, env, defaultConfigPath }); }
+  try { resolved = await resolveRunnerConfiguration(cli, { cwd, env, defaultConfigPath, readOnly }); }
   catch (error) {
     // UI-only bootstrap for a valid but unfinished configuration; Runner still fails closed.
     if (error.code !== 'CONFIG_MODE_REQUIRED' || cli.mode) throw error;
-    resolved = await resolveRunnerConfiguration({ ...cli, mode: 'desktop' }, { cwd, env, defaultConfigPath });
+    resolved = await resolveRunnerConfiguration({ ...cli, mode: 'desktop' }, { cwd, env, defaultConfigPath, readOnly });
   }
   let runtimeEnv = resolved.env;
   let localRepository = null;

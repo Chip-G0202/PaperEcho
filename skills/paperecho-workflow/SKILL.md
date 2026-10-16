@@ -37,6 +37,8 @@ This skill owns the shared execution contract, not a second pipeline invocation.
 
 ## Unified Configuration
 
+Doctor uses the shared read-only `--doctor` service, not a production invocation or `--check` replacement. It never prepares data directories, repairs permissions, releases claims, replays operations or calls external services. UNKNOWN evidence must remain visible; see [configuration](../../docs/configuration.md#doctor--system-health).
+
 First-run setup is GUI-only and derives readiness from existing config/preflight. It must reuse ConfigService and write-only SecretService, preserve partial/legacy configuration, and never gate Headless on a UI completion flag or invoke real providers. See [configuration](../../docs/configuration.md).
 
 Windows packaged runtime uses the same root owner with a pinned read-only Resource Root. Headless delegates to Shared Runner using the embedded runtime; see [configuration](../../docs/configuration.md) for verified build/test commands, required fuses and platform limits.

@@ -56,6 +56,13 @@ public static class CredentialAccountType {
   [Console]::Out.Write('secure')
 } catch { [Console]::Error.Write('CREDENTIAL_ACL_UNSAFE'); exit 1 }
 `;
+export async function credentialSecurityRuntimeAvailable() {
+  if (process.platform !== 'win32') return true;
+  try {
+    const { stdout } = await promisify(execFile)(process.env.PWSH_PATH || 'pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '[Console]::Out.Write($PSVersionTable.PSVersion.Major)'], { windowsHide: true, timeout: 3000, maxBuffer: 128 });
+    return /^\d+$/.test(stdout) && Number(stdout) >= 7;
+  } catch { return false; }
+}
 export async function secureCredentialFile(file, { source = '', checkOnly = false } = {}) {
   if (process.platform !== 'win32') {
     if (!checkOnly) await fs.chmod(file, 0o600);

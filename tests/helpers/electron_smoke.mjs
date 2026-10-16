@@ -1,5 +1,5 @@
 // Actual Electron entry: no providers, no workflow execution, dummy sandbox only.
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, nativeImage } from 'electron';
 import fs from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -70,9 +70,17 @@ try {
     assert.ok(Math.abs(size[0] - width) <= 1 && Math.abs(size[1] - height) <= 1, 'Windows DIP rounding must remain within one pixel');
     await wc.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
     assert.deepEqual(await evaluate('[innerWidth, innerHeight]'), [width, height]);
-    for (const route of ['home', 'feedback/rating/normal', 'feedback/rating/manual', 'feedback/research', 'feedback/rules', 'settings/general/databases', 'settings/connections/credentials']) {
+    for (const route of ['home', 'feedback/rating/normal', 'feedback/rating/manual', 'feedback/research', 'feedback/rules', 'settings/general/databases', 'settings/connections/credentials', 'system']) {
       await evaluate(`location.hash = ${JSON.stringify(route)}`); await delay(120);
       await until("document.querySelector('#content')?.getAttribute('aria-busy') === 'false'");
+      if (route === 'system') {
+        assert.equal(await evaluate("document.querySelectorAll('[data-check-id]').length"), 0, 'Doctor must wait for explicit request');
+        await evaluate("[...document.querySelectorAll('button')].find(x=>x.textContent.includes('检查 / 刷新')).click()");
+        await until("document.querySelector('.doctor-results')?.getAttribute('aria-busy') === 'false' && document.querySelectorAll('[data-check-id]').length > 0");
+        assert.ok(await evaluate("['PASS','WARN','FAIL','UNKNOWN'].includes(document.querySelector('.doctor-results').dataset.doctorStatus)"));
+        assert.equal(await evaluate("document.querySelector('.doctor-results').textContent.includes('dummy-external')"), false);
+        report.checks.push(`Doctor explicit read-only diagnostics ${width}`);
+      }
       const state = await evaluate("({ title: document.querySelector('#page-title').textContent, error: document.querySelector('#notice').dataset.kind === 'error' ? document.querySelector('#notice').textContent : '', overflow: document.documentElement.scrollWidth > innerWidth + 1, text: document.querySelector('#content').textContent.length, passwords: [...document.querySelectorAll('input[type=password]')].map(x=>x.value) })");
       assert.equal(state.error, '', route); assert.ok(state.text > 10, route); assert.equal(state.overflow, false, `${route} width ${width}`);
       assert.ok(state.passwords.every(x => x === '')); if (route.endsWith('credentials')) assert.ok(state.passwords.length > 0);
@@ -80,12 +88,16 @@ try {
     }
     // capturePage's surface copy rejects with UnknownVizError on this Windows host.
     // Capture the same live window through Electron's native debugger view path.
+    window.show(); window.focus(); window.moveTop(); await wc.debugger.sendCommand('Page.bringToFront'); await delay(250);
     const capture = await wc.debugger.sendCommand('Page.captureScreenshot', { format: 'png', fromSurface: false });
     const png = Buffer.from(capture.data, 'base64');
     assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    const bitmap = nativeImage.createFromBuffer(png).toBitmap(); let changed = 0;
+    for (let i = 4; i < bitmap.length; i += 4) if (bitmap[i] !== bitmap[0] || bitmap[i + 1] !== bitmap[1] || bitmap[i + 2] !== bitmap[2]) changed++;
+    assert.ok(changed > bitmap.length / 400, 'live screenshot must contain visible content');
     await fs.writeFile(path.join(outputRoot, `smoke-${width}.png`), png);
   }
-  report.checks.push('21 UI route/viewport checks');
+  report.checks.push('24 UI route/viewport checks');
   const memory = [];
   for (let i = 0; i < 3; i++) { await delay(2000); memory.push(app.getAppMetrics().reduce((sum, p) => sum + p.memory.workingSetSize, 0) / 1024); }
   report.idleWorkingSetMiB = memory.map(x => Math.round(x));

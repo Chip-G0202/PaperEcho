@@ -19,6 +19,17 @@ export function literatureIdentity(item = {}) {
   return getLiteratureIdentityKeys(item)[0] || `title:${normalizeTitleForExistingDedupe(item.title || "")}`;
 }
 
+export function inspectRecoveryLedger(ledger) {
+  const required = ledger.profile === 'radar' ? ['stage1'] : ledger.mode === 'local'
+    ? ['stage1', 'state_persist', 'stage4_exports'] : ['stage1', 'stage2_writeback', 'stage3_translation', 'stage4_exports'];
+  return {
+    businessComplete: required.every(name => ledger.stages?.[name]?.status === 'verified'),
+    recoveryPending: ['failed', 'incomplete', 'interrupted', 'timed_out'].includes(ledger.status),
+    unresolvedOperations: ledger.operations.filter(op => op.status !== 'verified').length,
+    conflicts: ledger.operations.filter(op => op.status === 'conflict').length,
+  };
+}
+
 export async function createRunRecoveryCoordinator({ runRoot, runId, mode, profile, launcherId, configHash, inputHash, artifactPath }, dependencies = {}) {
   const store = await OperationLedgerStore.create({
     runRoot,

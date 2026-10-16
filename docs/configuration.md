@@ -65,6 +65,22 @@ Secret 最终 ACL 校验失败后的原子回滚复用 `atomic_json.mjs` 的有�
 
 验证入口：`node --test workflow/tests/control_setup.test.mjs`，加 ConfigService/SecretService/runtime/preflight/HTTP/UI 回归；`npm run smoke:packaged --prefix desktop/electron-poc` 在隔离假 AppData、空 PATH、只读程序目录验证三尺寸首次向导、保存失败恢复、Secret、重复进入及独立 Headless。原 Electron smoke 同时保留导航/renderer/ownership/fuses 检查；截图需真实绘制并拒绝空白图。最终运行 `npm run check`、`npm test` 和 diff check。Windows Installer Phase 3A 仍因缺少可信隔离安装环境而 Blocked；本向导不改变该 Gate。
 
+## Doctor / System Health
+
+Control Center 的“系统”页提供显式的“检查 / 刷新健康状态”，不会后台轮询。GUI 与 CLI 共用 `control_doctor_service.mjs`；诊断只读，不创建目录、配置、Secret、恢复记录或日志，不修改 ACL，不消费反馈，不连接外部服务或执行 workflow。
+
+源码入口：`node workflow/tools/runner/main.mjs --doctor`，可附加 `--config <json>`。打包版：`PaperEcho-headless.cmd --doctor`，使用与 GUI 相同的数据根和内置 Node，不要求系统 Node/npm。`--doctor` 与执行参数互斥，不改变 `--check`，也不经过生产入口；数据根和运行布局仍由统一 Runtime Root 选择。
+
+结果包含稳定 `checkId`、`status`、`severity`、`summary`、`actionableHint`。PASS 为已确认的本地条件，WARN 为可选缺失或待处理事项，FAIL 为已证实的关键阻塞，UNKNOWN 为证据不足或检查无法安全完成。退出码：PASS/WARN 为 0，FAIL 为 2，UNKNOWN 为 3；`canRun=null` 表示关键条件无法确认，不能视为 Ready。外部连通性和 macOS 发行状态不由本地检查宣布通过。
+
+凭据只返回 presence/provenance；外部托管仍只读，本地文件复用 SecretService 的路径、hardlink 和 ACL 检查。缺少可执行 PowerShell 7 时不能确认 Windows ACL。目录访问使用只读系统权限检查，不创建写入探针，因此不替代实际写入验收。所有异常使用固定提示，不返回环境值、URL、研究正文或 owner 原始对象。
+
+工作流按 manifest 的登记时间查最近记录，不按 mtime；复用 lease/ledger/recovery/receipt owner，不清锁或重放。进程存活的 lease 正常，远程/不明 lease 为 UNKNOWN。业务成功与通知失败分开。反馈 pending/prepared 是正常等待，模型结果未知保持 UNKNOWN 并提示人工核对，published 后未消费或失败批次可提示待恢复。
+
+检查单项默认上限 2.5 秒，凭据检查 20 秒；最多检查 100 个顶层运行条目、100 个反馈条目和当前运行 8 个通知回执，单 JSON 默认 1 MiB，反馈事件 128 KiB。超过限制返回 UNKNOWN，不递归扫描历史、论文或日志。超时只终止诊断等待，不取消或更改业务状态。
+
+验证：`node --test workflow/tests/control_doctor.test.mjs`，加 preflight、runtime、Secret、安全、ledger/recovery、研究反馈和 HTTP/UI 回归；打包 GUI/Headless 使用 `npm run smoke:packaged --prefix desktop/electron-poc`，检查显式刷新、三尺寸、空 PATH 和 Doctor 前后数据快照不变。Windows Installer Phase 3A 仍为 Blocked；Phase 5/6 未实施。
+
 ## 用户实际需要处理的文件
 
 ### 可选初始化参考

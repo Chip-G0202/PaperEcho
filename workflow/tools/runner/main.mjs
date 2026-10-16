@@ -86,6 +86,10 @@ function notificationSummary(result) {
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
+  if (argv.includes('--doctor')) {
+    const { doctorMain } = await import('./doctor.mjs');
+    return doctorMain(argv, dependencies);
+  }
   let outputEnv = dependencies.env || process.env;
   const stdout = { write: value => (dependencies.stdout || process.stdout).write(redactText(value, outputEnv)) };
   const stderr = { write: value => (dependencies.stderr || process.stderr).write(redactText(value, outputEnv)) };

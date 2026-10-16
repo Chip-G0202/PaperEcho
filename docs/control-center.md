@@ -180,6 +180,8 @@ SecretService 与 Runner 复用 `credential_registry.mjs` 的 allowlist 和脱�
 
 ## 安全与验证
 
+System 页提供轻量 System Health：点击检查后调用受现有会话保护的 `/api/doctor`，显示“正常 / 建议处理 / 立即阻塞 / 无法确认”、关键条件及人工处理提示，不后台轮询或提供一键修复。与 Headless `--doctor` 共用同一 application service；只读、限量、固定提示及状态分类见 [Doctor 契约](configuration.md#doctor--system-health)。
+
 默认只绑定 `127.0.0.1`，程序调用只允许 `127.0.0.1`/`::1`；Host allowlist、防跨站 Origin 检查、HttpOnly SameSite session cookie 和 CSRF header 共同保护 mutation。请求体限制 64 KiB，静态资源固定 allowlist，CORS 默认不开放。UI 使用 textContent，安全外链限制 http/https，并设置 CSP、防嵌入和 no-referrer。
 
 ```sh

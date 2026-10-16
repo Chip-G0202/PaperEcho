@@ -643,6 +643,8 @@ Desktop/Web run groups live at `review_results/文献评价/runs/<runId>/run_gro
 
 ### Configuration Contract
 
+- Doctor is a read-only summary owned by `control_doctor_service.mjs`, shared by authenticated System Health and Runner `--doctor`. Reuse existing owners; never prepare directories/write probes, repair ACLs, release leases, replay operations or resubmit feedback. Missing evidence/inspection limits are UNKNOWN, not PASS; keep notification failure separate from business success and expose no owner content or private exception text. Commands, limits and exit codes: `docs/configuration.md`; regression: `workflow/tests/control_doctor.test.mjs`.
+
 - GUI first-run status derives from saved ConfigService state and existing local preflight; no completion flag or secondary store. All edits use Settings/SecretService owners. Packaged GUI/Headless share the stable default workspace when no explicit data root/id is supplied; unfinished configuration never blocks Headless with a window. Preserve prior config on failure and never probe real providers in setup. See `docs/configuration.md` and `workflow/tests/control_setup.test.mjs`.
 
 - Windows packaged bootstrap pins Application/Resource roots and reuses the sole runtime path owner; physical workflow/dependencies live once in `resources/core`. The independent Headless entry requires the verified RunAsNode fuse and delegates to Shared Runner. Packaged tests must reject external realpaths, including Dev/Production fixtures, without relying on raw string prefixes. Build commands, fuse tradeoffs and platform gates are in `docs/configuration.md`.

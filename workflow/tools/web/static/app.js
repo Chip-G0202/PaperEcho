@@ -254,10 +254,28 @@ async function home() {
 }
 function empty(title, text) { const box = el('section', undefined, 'empty-state'); box.append(el('h3', title), el('p', text)); main.append(box); }
 async function system() {
-  const status = await api('/api/status'); main.append(pageIntro('系统与数据状态', '这里展示已有运行证据，不主动连接外部服务或显示敏感路径。'));
-  const list = el('dl', undefined, 'status-list');
-  for (const [name, value] of [['版本', 'PaperEcho v2.5'], ['本地服务', '已响应 · 仅本机访问'], ['运行数据', '使用启动时解析的当前工作区；路径不在网页展示'], ['检索来源', status.sources.join('、') || '未配置'], ['Zotero', status.zotero === 'unknown' ? '暂无可靠记录' : '已有历史写入记录；非实时连接检测'], ['下次运行', status.nextScheduledRun || '暂无可靠调度信息'], ['兼容入口', 'XLSX / DOCX 仍受支持；不进行双向反馈同步']]) list.append(el('dt', name), el('dd', value));
-  main.append(list);
+  main.append(pageIntro('系统健康 · System Health', '只读本地检查；不会连接外部服务、修改权限、恢复工作流或显示凭据。'));
+  const facts = el('dl', undefined, 'status-list');
+  for (const [name, value] of [['版本', 'PaperEcho v2.5'], ['本地服务', '已响应 · 仅本机访问']]) facts.append(el('dt', name), el('dd', value));
+  main.append(facts);
+  const results = el('section', undefined, 'settings-section doctor-results'); results.setAttribute('aria-live', 'polite');
+  const refresh = button('检查 / 刷新健康状态', async () => {
+    results.setAttribute('aria-busy', 'true');
+    try {
+      const report = await api('/api/doctor'); results.replaceChildren();
+      const labels = { PASS: '正常', WARN: '建议处理', FAIL: '立即阻塞', UNKNOWN: '无法确认' };
+      results.dataset.doctorStatus = report.status;
+      results.append(el('h3', `总体状态：${labels[report.status] || labels.UNKNOWN}`), el('p', report.canRun === true ? '本地必需运行条件满足；外部服务未实测。' : report.canRun === false ? '存在阻止正式工作流运行的问题。' : '关键条件尚无法确认，请先检查下列提示。'));
+      for (const check of report.checks) {
+        const item = el('article', undefined, 'doctor-check'); item.dataset.checkId = check.checkId;
+        item.append(el('h4', `${labels[check.status] || labels.UNKNOWN} · ${check.summary}`));
+        if (check.actionableHint) item.append(el('p', check.actionableHint, 'meta'));
+        results.append(item);
+      }
+    } finally { results.setAttribute('aria-busy', 'false'); }
+  });
+  main.append(refresh, results);
+  results.append(el('p', '点击检查按钮获取当前状态；页面不会后台轮询。'));
 }
 async function feedback() {
   const intro = { rating: ['文献评级', '核对系统评级；常规文献使用相对纠正，人工复核直接选择正确等级。'], research: ['研究方向反馈', '告诉 PaperEcho 最近推荐结果哪里与你的研究需求不一致。'], rules: ['规则建议', '核对由研究反馈生成的建议；安全校验始终生效。'] }[feedbackView];

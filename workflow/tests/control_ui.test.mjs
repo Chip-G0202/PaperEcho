@@ -7,6 +7,12 @@ const html = await fs.readFile(new URL('../tools/web/static/index.html', import.
 const css = await fs.readFile(new URL('../tools/web/static/styles.css', import.meta.url), 'utf8');
 const app = await fs.readFile(new URL('../tools/web/static/app.js', import.meta.url), 'utf8');
 const logo = await fs.readFile(new URL('../tools/web/static/paperecho-mark.svg', import.meta.url), 'utf8');
+test('System Health uses explicit refresh, fixed state labels and accessible read-only results', () => {
+  const system = app.slice(app.indexOf('async function system()'), app.indexOf('async function feedback()'));
+  assert.match(system, /api\('\/api\/doctor'\)/); assert.match(system, /aria-live/);
+  for (const state of ['PASS', 'WARN', 'FAIL', 'UNKNOWN']) assert.ok(system.includes(state));
+  assert.doesNotMatch(system, /setInterval|setTimeout|localStorage|sessionStorage|innerHTML/);
+});
 test('UI shell keeps five real routes, skip target, live status and collapsible navigation', () => {
   const routes = [...html.matchAll(/data-page="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(routes, ['home', 'weekly', 'feedback', 'settings', 'system']);

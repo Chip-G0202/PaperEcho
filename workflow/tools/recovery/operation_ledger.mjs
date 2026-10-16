@@ -252,6 +252,17 @@ function ownerAlive(lease, { hostname, processAlive }) {
   catch (error) { return error?.code === "EPERM"; }
 }
 
+// Inspection never takes over a lease. Remote/unverifiable owners remain unknown.
+export function inspectWorkflowLease(lease, { now = new Date(), hostname = os.hostname(), processAlive } = {}) {
+  if (!lease) return 'absent';
+  if (lease.schemaVersion !== RUN_LEASE_SCHEMA_VERSION || !Number.isInteger(lease.pid) || lease.pid < 1
+    || !Number.isFinite(Date.parse(lease.expiresAt)) || !lease.ownerId) return 'unknown';
+  try { validateRecoveryRunId(lease.runId); } catch { return 'unknown'; }
+  if (lease.hostname !== hostname) return 'unknown';
+  if (ownerAlive(lease, { hostname, processAlive })) return 'running';
+  return Date.parse(lease.expiresAt) <= new Date(now).getTime() ? 'stale' : 'unknown';
+}
+
 async function writeNewLease(leasePath, lease, fsApi) {
   const handle = await fsApi.open(leasePath, "wx");
   try {
