@@ -105,7 +105,7 @@ const headless = JSON.parse(await fs.readFile(path.join(data, 'headless-probe.js
 const bad = await run('"' + cmd + '"', ['--unknown-option'], {}, true); assert.notEqual(bad.code, 0);
 const nodeOptions = await run(exe, ['-e', "process.stdout.write('fuse-options-ignored')"], { ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--require=does-not-exist' });
 assert.equal(nodeOptions.code, 0); assert.equal(nodeOptions.output.trim(), 'fuse-options-ignored');
-const wizardReports = [];
+const wizardReports = []; const loggingRoots = [data];
 for (const [width, height] of [[1920,1080],[1366,768],[390,844]]) {
   const implicit = width === 1920;
   const localAppData = path.join(fixture, 'Windows Local AppData');
@@ -124,6 +124,22 @@ for (const [width, height] of [[1920,1080],[1366,768],[390,844]]) {
   const wizardCheck = await run('"' + cmd + '"', ['--check', '--mode', 'local'], { ...rootOverrides, PAPERECHO_SKIP_DOTENV: '' }, true);
   assert.equal(wizardCheck.code, 0, 'configured wizard headless check');
   wizardReports.push({ width, height, ...wizardReport.wizard, headlessCode: wizardCheck.code });
+  loggingRoots.push(wizardData);
+}
+for (const root of loggingRoots) {
+  const logs = path.join(root, 'logs');
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(logs, 'runtime.owner.json'), 'utf8')), { schemaVersion: 1, owner: 'paperecho-runtime-log', maxBytes: 1048576, archives: 1 });
+  const names = await fs.readdir(logs);
+  assert.ok(names.every(name => ['runtime.owner.json', 'runtime.jsonl', 'runtime.previous.jsonl'].includes(name)), 'leftover log staging/lock');
+  const records = [];
+  for (const name of names.filter(name => name.endsWith('.jsonl'))) {
+    const bytes = await fs.readFile(path.join(logs, name)); assert.ok(bytes.length <= 1048576);
+    const text = bytes.toString('utf8'); assert.ok(text.endsWith('\n'));
+    assert.doesNotMatch(text, /dummy-|Packaged dummy|\bat .*\.mjs:/);
+    records.push(...text.trim().split('\n').map(JSON.parse));
+  }
+  for (const code of ['GUI_STARTED', 'GUI_READY', 'GUI_EXIT', 'HEADLESS_STARTED', 'RUNNER_STARTED', 'RUNNER_PREFLIGHT_READY']) assert.ok(records.some(record => record.code === code), 'packaged log event missing: ' + code);
+  assert.equal(new Set(records.map(record => record.eventId)).size, records.length);
 }
 assert.deepEqual(await inventory(application), before, 'application directory was modified');
 for (const run of [gui, check, probe, bad, nodeOptions]) assert.throws(() => process.kill(run.pid, 0));

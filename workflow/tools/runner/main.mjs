@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 
 import "../lib/env_file_bootstrap.mjs";
 import { parseRunnerArgs } from "./args.mjs";
-import { resolveRunnerConfiguration } from "./config_loader.mjs";
+import { resolveRunnerConfiguration, RunnerConfigurationError } from "./config_loader.mjs";
 import { selectScheduledDailyRun } from "./scheduled_daily.mjs";
 import { EXIT_CODES } from "./constants.mjs";
 import { buildExecutionPlan, runPreflight } from "./preflight.mjs";
@@ -19,6 +19,7 @@ import { processHealthNotifications } from "../notification/health_notifier.mjs"
 import { emailDeliveryPolicy } from '../notification/policy.mjs';
 import { redactSecrets, secretValues } from '../lib/credential_registry.mjs';
 import { resolveRuntimePaths } from '../lib/runtime_config.mjs';
+import { RuntimeLog } from '../lib/runtime_logging.mjs';
 
 export function redactText(text, env = process.env) {
   return redactSecrets(text, secretValues(env));
@@ -34,31 +35,37 @@ export function runProduction(plan, dependencies = {}) {
   return new Promise((resolve, reject) => {
     const child = spawnImpl(process.execPath, [plan.entry, ...plan.args], { cwd: plan.cwd, env: plan.childEnv, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["inherit", "pipe", "pipe", "ipc"] });
     let rawStdout = "";
-    let rawStderr = "";
+    let stderrSeen = false;
+    const omitted = new Set();
     const pending = { stdout: '', stderr: '' };
     const output = { stdout, stderr };
     const flush = (name, chunk = '', final = false) => {
       pending[name] += chunk;
       const end = final ? pending[name].length : pending[name].lastIndexOf('\n') + 1;
-      if (end) { output[name].write(redactText(pending[name].slice(0, end), plan.childEnv)); pending[name] = pending[name].slice(end); }
+      if (end) {
+        const safe = redactText(pending[name].slice(0, end), plan.childEnv);
+        if (/^(?:\s*\[REDACTED\]\s*)+$/.test(safe)) output[name].write(safe);
+        else if (!omitted.has(name)) { omitted.add(name); output[name].write(`[runner] child ${name} content omitted; consult registered run evidence\n`); }
+        pending[name] = pending[name].slice(end);
+      }
       // ponytail: bounded line buffering; oversized log lines are suppressed.
       if (pending[name].length > 1048576) { pending[name] = ''; output[name].write('[oversized log line suppressed]\n'); }
     };
     const watchdog = watchProductionChild(child, { timeoutMs, graceMs: dependencies.graceMs, processApi: dependencies.processApi || process,
       force: dependencies.forceChildTree,
       onStop: (status) => stderr.write(`[runner] ${status}: terminating owned production child\n`),
-      onUnreaped: (status) => { flush('stdout', '', true); flush('stderr', '', true); watchdog.cleanup(); child.unref?.(); child.stdout?.destroy?.(); child.stderr?.destroy?.(); if (child.connected) child.disconnect?.(); resolve({ code: 1, status, childExitConfirmed: false, stdout: rawStdout, stderr: redactText(rawStderr, plan.childEnv) }); },
+      onUnreaped: (status) => { flush('stdout', '', true); flush('stderr', '', true); watchdog.cleanup(); child.unref?.(); child.stdout?.destroy?.(); child.stderr?.destroy?.(); if (child.connected) child.disconnect?.(); resolve({ code: 1, status, childExitConfirmed: false, stdout: rawStdout, stderr: stderrSeen ? 'CHILD_STDERR_OMITTED' : '' }); },
     });
     child.stdout?.on("data", (chunk) => {
       rawStdout += chunk;
       flush('stdout', chunk);
     });
     child.stderr?.on("data", (chunk) => {
-      rawStderr += chunk;
+      stderrSeen = true;
       flush('stderr', chunk);
     });
     child.once("error", (error) => { watchdog.cleanup(); reject(error); });
-    child.once("close", (code, signal) => { flush('stdout', '', true); flush('stderr', '', true); const status = watchdog.status || (signal ? "interrupted" : Number(code) === 0 ? "completed" : "failed"); watchdog.cleanup(); resolve({ code: status === "completed" ? 0 : Number(code || 1), status, signal, childExitConfirmed: true, stdout: rawStdout, stderr: redactText(rawStderr, plan.childEnv) }); });
+    child.once("close", (code, signal) => { flush('stdout', '', true); flush('stderr', '', true); const status = watchdog.status || (signal ? "interrupted" : Number(code) === 0 ? "completed" : "failed"); watchdog.cleanup(); resolve({ code: status === "completed" ? 0 : Number(code || 1), status, signal, childExitConfirmed: true, stdout: rawStdout, stderr: stderrSeen ? 'CHILD_STDERR_OMITTED' : '' }); });
   });
 }
 
@@ -90,6 +97,17 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     const { doctorMain } = await import('./doctor.mjs');
     return doctorMain(argv, dependencies);
   }
+  const logOwner = dependencies.runtimeLog || new RuntimeLog({ env: dependencies.env || process.env, applicationRoot: dependencies.cwd,
+    warning: code => { try { (dependencies.stderr || process.stderr).write(`[logging] ${code}\n`); } catch {} } });
+  const runtimeLog = { write: async (...args) => { try { return await logOwner.write(...args); } catch { try { (dependencies.stderr || process.stderr).write('[logging] RUNTIME_LOG_UNAVAILABLE\n'); } catch {} return { ok: false }; } } };
+  const context = { ...dependencies, runtimeLog };
+  let code = EXIT_CODES.pipeline;
+  await runtimeLog.write('RUNNER_STARTED');
+  try { code = await executeMain(argv, context); return code; }
+  finally { await runtimeLog.write(code === 0 ? 'RUNNER_FINISHED' : 'RUNNER_FAILED', { exitCode: code, runId: context.logRunId }); }
+}
+
+async function executeMain(argv, dependencies) {
   let outputEnv = dependencies.env || process.env;
   const stdout = { write: value => (dependencies.stdout || process.stdout).write(redactText(value, outputEnv)) };
   const stderr = { write: value => (dependencies.stderr || process.stderr).write(redactText(value, outputEnv)) };
@@ -99,14 +117,15 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     cliOptions = parseRunnerArgs(argv, { cwd: paths.layout === 'dev' ? dependencies.cwd || process.cwd() : paths.userDataRoot, allowUnresolvedMode: true });
   }
   catch (error) {
-    stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "invalid_input", error: String(error?.message || error) })}\n`);
+    stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "invalid_input", code: 'RUNNER_ARGUMENT_INVALID', error: '检查启动参数。' })}\n`);
     return EXIT_CODES.input;
   }
   let resolved;
   try {
     resolved = await (dependencies.resolveRunnerConfigurationImpl || resolveRunnerConfiguration)(cliOptions, dependencies);
   } catch (error) {
-    stderr.write(`${redactText(JSON.stringify({ schemaVersion: 1, status: "invalid_configuration", code: String(error?.code || "CONFIG_INVALID"), error: String(error?.message || error), details: error?.details || {} }), dependencies.env || process.env)}\n`);
+    const code = error instanceof RunnerConfigurationError && /^CONFIG_[A-Z0-9_]+$/.test(error.code) ? error.code : 'CONFIG_INVALID';
+    stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "invalid_configuration", code, error: '检查配置格式、路径和运行模式。' })}\n`);
     return EXIT_CODES.configuration;
   }
   if (cliOptions.scheduledDaily) {
@@ -118,7 +137,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
         fsApi: dependencies.fsApi,
       });
     } catch (error) {
-      stderr.write(`${JSON.stringify({ type: "schedule", status: "blocked", reason: String(error?.message || error) })}\n`);
+      stderr.write(`${JSON.stringify({ type: "schedule", status: "blocked", reason: 'SCHEDULE_STATUS_UNAVAILABLE' })}\n`);
       return EXIT_CODES.configuration;
     }
     stdout.write(`${JSON.stringify({ type: "schedule", status: selection.status, plannedSlot: selection.decision.plannedSlot, selectedFlow: selection.decision.selectedFlow, weeklyMode: selection.decision.weeklyMode, reason: selection.reason || selection.decision.reason, ...(selection.runId ? { runId: selection.runId } : {}) })}\n`);
@@ -132,18 +151,22 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   outputEnv = resolved.env;
   const runtimeDependencies = { ...dependencies, env: resolved.env };
   const preflight = await (dependencies.runPreflightImpl || runPreflight)(options, runtimeDependencies);
+  await dependencies.runtimeLog.write(preflight.canRun ? 'RUNNER_PREFLIGHT_READY' : 'RUNNER_PREFLIGHT_BLOCKED', { runId: options.resume });
   stdout.write(`${formatPreflightSummary(preflight)}\n${JSON.stringify({ type: "preflight", ...preflight })}\n`);
   if (!preflight.canRun) return blockedExitCode(preflight);
   if (options.action === "check") return EXIT_CODES.success;
 
   const plan = (dependencies.buildExecutionPlanImpl || buildExecutionPlan)(options, runtimeDependencies);
+  dependencies.logRunId = plan.runId;
+  await dependencies.runtimeLog.write('RUNNER_ADMITTED', { runId: plan.runId });
   let processResult;
   try { processResult = await (dependencies.runProductionImpl || runProduction)(plan, dependencies); }
   catch (error) {
-    stderr.write(`${JSON.stringify({ type: "runner_error", status: "failed", error: redactText(error?.message || error, dependencies.env || process.env) })}\n`);
+    stderr.write(`${JSON.stringify({ type: "runner_error", status: "failed", code: 'RUNNER_EXECUTION_FAILED', error: '检查本次运行登记状态。' })}\n`);
     return EXIT_CODES.pipeline;
   }
   const productionReport = extractLastJsonObject(processResult.stdout);
+  if (processResult.stderr) await dependencies.runtimeLog.write('CHILD_STDERR', { runId: plan.runId });
   if (options.scheduledDaily && processResult.code === 0 && productionReport?.status === "skipped"
     && productionReport?.skipReport?.reason === "duplicate_schedule_trigger") {
     stdout.write(`${JSON.stringify({ type: "result", status: "already_claimed", plannedSlot: options.scheduledDecision.plannedSlot, runId: productionReport?.schedule_decision?.businessRunId || null })}\n`);
@@ -194,7 +217,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
   main().then((code) => { process.exitCode = code; }).catch((error) => {
-    process.stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "runner_crash", error: redactText(error?.message || error) })}\n`);
+    process.stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "runner_crash", code: 'RUNNER_CRASH', error: '检查运行环境和本次运行登记状态。' })}\n`);
     process.exitCode = EXIT_CODES.pipeline;
   });
 }

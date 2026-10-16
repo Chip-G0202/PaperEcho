@@ -45,7 +45,7 @@ npm run smoke:packaged --prefix desktop/electron-poc
 
 GUI 运行产物中的 `PaperEcho.exe`；独立无窗口入口为 `PaperEcho-headless.cmd --check --mode local`（或显式选择 `desktop` / `web`）。Headless 复用 Shared Runner、preflight 和原 workflow entry，退出码沿用 Runner，无系统 Node/npm 依赖。Packaged 缺省为 Installed，未指定数据根/id 时使用 `default` workspace；GUI 首次配置通过下述向导完成。显式数据根/id 仍优先，Portable 需显式设置 `PAPERECHO_LAYOUT=portable`。不迁移数据或自动生成文献输入。
 
-Packaged bootstrap 固定 Application Root 为程序目录、Resource Root 为其 `resources/core`，不受 cwd 或外部程序根 override 影响。配置、Secret 和可变状态继续使用数据根，Electron profile/session/crash/log 使用 cache。业务脚本通过统一 owner 从 Resource Root 定位；模块边界测试使用 `realpath` 加 `path.relative`，兼容末尾分隔符并拒绝链接或外部根，不能用字符串前缀扩大允许范围。
+Packaged bootstrap 固定 Application Root 为程序目录、Resource Root 为其 `resources/core`，不受 cwd 或外部程序根 override 影响。配置、Secret 和可变状态继续使用数据根；Electron profile/session/crash/native debug 使用 cache，正式运行日志使用下述 User Data Logs Root。业务脚本通过统一 owner 从 Resource Root 定位；模块边界测试使用 `realpath` 加 `path.relative`，兼容末尾分隔符并拒绝链接或外部根，不能用字符串前缀扩大允许范围。
 
 实际二进制 fuses：RunAsNode、CookieEncryption、EmbeddedAsarIntegrityValidation、OnlyLoadAppFromAsar、WasmTrapHandlers 开启；NodeOptionsEnvironmentVariable、NodeCliInspectArguments、BrowserProcessSpecificV8Snapshot、FileProtocolExtraPrivileges 关闭。RunAsNode 是独立入口和现有 Node 子进程链所必需，保留了执行任意 Node 代码的能力。ASAR integrity 覆盖 Shell，不覆盖物理 `resources/core`；这些资源必须作为程序代码保护写权限，正式签名/发行另行验收。不能将关闭 RunAsNode 的产物用于此 Headless 方案。
 
@@ -80,6 +80,18 @@ Control Center 的“系统”页提供显式的“检查 / 刷新健康状态�
 检查单项默认上限 2.5 秒，凭据检查 20 秒；最多检查 100 个顶层运行条目、100 个反馈条目和当前运行 8 个通知回执，单 JSON 默认 1 MiB，反馈事件 128 KiB。超过限制返回 UNKNOWN，不递归扫描历史、论文或日志。超时只终止诊断等待，不取消或更改业务状态。
 
 验证：`node --test workflow/tests/control_doctor.test.mjs`，加 preflight、runtime、Secret、安全、ledger/recovery、研究反馈和 HTTP/UI 回归；打包 GUI/Headless 使用 `npm run smoke:packaged --prefix desktop/electron-poc`，检查显式刷新、三尺寸、空 PATH 和 Doctor 前后数据快照不变。Windows Installer Phase 3A 仍为 Blocked；Phase 5/6 未实施。
+
+## RuntimeLog 与日志轮转
+
+`workflow/tools/lib/runtime_logging.mjs` 是 Runner、GUI、Headless 的共享运行日志 owner，复用 Runtime Root、`atomic_json.mjs` 和 Secret registry，不替代业务审计。Dev/Portable/Installed 均写入 `<User Data Root>/logs`，不由 cwd 选择，不向 Installed 程序目录或 `app.asar` 写入。
+
+正式保留 `runtime.jsonl` 与一份 `runtime.previous.jsonl`，各最多 1 MiB；容量到达后淘汰旧归档，不承诺永久保留。`runtime.owner.json` 声明 ownership；跨进程写锁与唯一 staging 文件仅用于当前原子操作。可变日志文件检查、读取和替换都在同一写锁内，避免 Windows 文件检查句柄与另一写入者重命名重叠。每次写入最多读取当前有界文件，不扫描历史；轮转只处理明确拥有的固定文件，不删除 ledger、receipt、feedback、研究结果或同名未知文件。
+
+事件使用固定 code、severity、subsystem 和安全摘要；可选 run/request 关联标识只保留摘要，未知字段、正文、异常栈、原始 stdout/stderr、URL 和环境值不进入日志。复用最长 Secret 优先的完整脱敏及 Authorization/Cookie/敏感 URL 保护；凭据格式与 ACL owner 不变。普通日志失败返回明确错误并有界告警，不改变业务操作成功状态；必须持久化的 ledger/receipt/recovery 仍遵守各自原有失败语义，不能用日志成功代替。
+
+链接、hardlink、未知 ownership 与越界路径安全拒绝；不扩大目录权限。锁等待有上限，只允许回收本机已确认死亡且未被替换的陈旧锁，不接管远程或存活进程。Doctor 只读检查目录权限元数据、大小、ownership 和锁状态；不创建探针、不清理、不轮转。最近日志错误只报告当前进程确知的证据，不推断其他进程历史；权限元数据检查不等于实际写入已成功。
+
+验证：`node --test workflow/tests/runtime_logging.test.mjs workflow/tests/control_doctor.test.mjs`，覆盖跨进程成功事件完整性、容量轮转、故障释放/恢复、正文脱敏、业务文件保护和只读诊断；再运行相关 Runner/Secret/runtime/workspace 回归、`npm run check`、`npm test`。`npm run smoke:packaged --prefix desktop/electron-poc` 检查真实三尺寸 GUI、Headless、四个隔离日志根、只读程序目录、无残留锁及 Doctor 前后快照。Packaged smoke 必须复用已初始化的 ASAR shell 入口，避免测试加载另一份模块实例。macOS 未实测；Phase 3A 仍为 Blocked。
 
 ## 用户实际需要处理的文件
 

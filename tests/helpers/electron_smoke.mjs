@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { prepareShell, startShell } from '../../desktop/electron-poc/main.mjs';
 import { sandboxBase, allowedDocument, failurePage } from '../../desktop/electron-poc/shell.mjs';
-export async function smoke({ root, outputRoot = sandboxBase, prepare = true } = {}) {
+export async function smoke({ root, outputRoot = sandboxBase, prepare = true, startShellImpl = startShell } = {}) {
 const began = performance.now();
 let shell;
 const report = { platform: process.platform, electron: process.versions.electron, node: process.versions.node, pathEmpty: !process.env.PATH, checks: [], consoleErrors: [], runtimeErrors: [], rendererGone: [] };
@@ -26,7 +26,7 @@ const write = async (file, value) => { await fs.mkdir(path.dirname(file), { recu
 if (prepare) root = await prepareShell({ workspace: path.join(sandboxBase, 'smoke') });
 await fs.mkdir(outputRoot, { recursive: true });
 try {
-  shell = await startShell({ root });
+  shell = await startShellImpl({ root });
   assert.ok(shell?.lease); const { window, lease } = shell; const wc = window.webContents;
   wc.debugger.attach('1.3');
   wc.debugger.on('message', (_event, method, params) => { if (method === 'Runtime.exceptionThrown') report.runtimeErrors.push(params.exceptionDetails.text); });

@@ -112,7 +112,7 @@ export function resolveRuntimePaths({ applicationRoot = defaultProjectRoot(), en
     if (within(applicationRoot, userDataRoot, paths) || within(userDataRoot, applicationRoot, paths) || within(applicationRoot, cacheRoot, paths) || within(cacheRoot, applicationRoot, paths)) pathFailure('RUNTIME_INSTALLED_BOUNDARY');
   }
   if (layout !== 'dev' && (paths.dirname(userDataRoot) === userDataRoot || paths.relative(userDataRoot, homeDir) === '' || within(cacheRoot, userDataRoot, paths) || /(^|[\\/])[^\\/]*\.asar([\\/]|$)/i.test(userDataRoot + '/' + cacheRoot))) pathFailure('RUNTIME_DATA_BOUNDARY');
-  return { layout, applicationRoot, resourceRoot: paths.normalize(resourceRoot), userDataRoot, cacheRoot, explicitDataRoot: Boolean(env.PAPERECHO_DATA_ROOT), tempRoot: paths.join(cacheRoot, 'tmp'), configPath: paths.join(userDataRoot, 'config', 'paperecho.config.json'), secretPath: paths.join(userDataRoot, '.env') };
+  return { layout, applicationRoot, resourceRoot: paths.normalize(resourceRoot), userDataRoot, cacheRoot, logsRoot: paths.join(userDataRoot, 'logs'), explicitDataRoot: Boolean(env.PAPERECHO_DATA_ROOT), tempRoot: paths.join(cacheRoot, 'tmp'), configPath: paths.join(userDataRoot, 'config', 'paperecho.config.json'), secretPath: paths.join(userDataRoot, '.env') };
 }
 function assertNoLinkedAncestors(value, fsApi) {
   for (let current = path.resolve(value); ; current = path.dirname(current)) {

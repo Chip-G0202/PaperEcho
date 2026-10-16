@@ -35,6 +35,8 @@ export function redactSecrets(value, secrets = []) {
     if (secret.length >= 12) for (const part of [secret.slice(0, 8), secret.slice(-8)]) text = text.split(part).join('[REDACTED]');
   }
   return text.replace(/(\b(?:Authorization|Proxy-Authorization)\s*[:=]\s*)(?:Basic|Bearer)?\s*[^\r\n"}]+/gi, '$1[REDACTED]')
+    .replace(/("(?:Authorization|Proxy-Authorization|Cookie|Set-Cookie)"\s*:\s*)"(?:\\.|[^"\\])*"/gi, '$1"[REDACTED]"')
+    .replace(/(\b(?:Cookie|Set-Cookie)\s*[:=]\s*)[^\r\n"}]+/gi, '$1[REDACTED]')
     .replace(/(\bbearer\s+)[^\s,;"}]+/gi, '$1[REDACTED]')
     .replace(/([?&](?:[^=&\s"<>]*(?:key|token|secret|password|signature|credential|authorization)[^=&\s"<>]*)=)[^&\s"<>]*/gi, '$1[REDACTED]')
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@');

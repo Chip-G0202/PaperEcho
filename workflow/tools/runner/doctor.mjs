@@ -1,6 +1,7 @@
 import { parseRunnerArgs } from './args.mjs';
 import { resolveRuntimePaths, buildRuntimeConfig, resolveApplicationRuntimeContext } from '../lib/runtime_config.mjs';
 import { createControlServices } from '../lib/control_application_services.mjs';
+import { redactSecrets, secretValues } from '../lib/credential_registry.mjs';
 
 // --doctor is exclusive; --check and normal Runner execution keep their existing semantics.
 export async function doctorMain(argv, { env = process.env, cwd, stdout = process.stdout } = {}) {
@@ -19,7 +20,7 @@ export async function doctorMain(argv, { env = process.env, cwd, stdout = proces
     const services = createControlServices({ root, env, context });
     report = await services.doctor.status();
   } catch { report = fail('Doctor 无法安全启动：检查参数、目录边界或配置'); }
-  stdout.write(`${JSON.stringify(report)}\n`);
+  stdout.write(`${redactSecrets(JSON.stringify(report), secretValues(env))}\n`);
   // Warning-only results are usable; unknown evidence is a distinct non-success outcome.
   return report.status === 'FAIL' ? 2 : report.status === 'UNKNOWN' ? 3 : 0;
 }

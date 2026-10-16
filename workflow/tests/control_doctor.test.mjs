@@ -13,6 +13,7 @@ import { inspectWorkflowLease, createOperationLedger } from '../tools/recovery/o
 import { startControlCenter } from '../tools/web/server.mjs';
 import { readBoundedJson } from '../tools/lib/atomic_json.mjs';
 import { createNotificationReceipt } from '../tools/stage5/email_receipt.mjs';
+import { RuntimeLog } from '../tools/lib/runtime_logging.mjs';
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 async function write(file, value) { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(value)); }
 async function snapshot(root) {
@@ -39,6 +40,7 @@ async function fixture(t, layout = 'installed') {
   const env = { PAPERECHO_LAYOUT: layout, PAPERECHO_APPLICATION_ROOT: app, ...(layout === 'dev' ? {} : { PAPERECHO_DATA_ROOT: data }), PAPERECHO_SKIP_DOTENV: '1', PATH: '' };
   const context = await resolveApplicationRuntimeContext({ cwd: app, env }); await fs.mkdir(context.cacheRoot, { recursive: true });
   const services = createControlServices({ root: app, context, env });
+  assert.equal((await new RuntimeLog({ applicationRoot: app, env }).write('RUNNER_STARTED')).ok, true);
   return { root, app, data, env, context, services };
 }
 const check = (report, id) => report.checks.find(x => x.checkId === id);

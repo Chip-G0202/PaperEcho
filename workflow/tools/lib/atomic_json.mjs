@@ -69,9 +69,11 @@ export async function writeAtomicText(filePath, value, {
   renameAttempts = 4,
   renameBackoffMs = 10,
   validateTemporary = async () => {},
+  temporaryPath = '',
 } = {}) {
   await fsApi.mkdir(path.dirname(filePath), { recursive: true });
-  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  if (temporaryPath && (path.dirname(temporaryPath) !== path.dirname(filePath) || temporaryPath === filePath)) throw new Error('ATOMIC_TEMPORARY_PATH_INVALID');
+  const temporary = temporaryPath || `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   let handle;
   try {
     handle = await fsApi.open(temporary, "wx");
@@ -98,6 +100,8 @@ export async function withAtomicJsonLock(filePath, operation, {
   timeoutMs = 5000,
   staleMs = 30000,
   clock = () => new Date(),
+  metadata = {},
+  canBreakStaleLock = async () => true,
 } = {}) {
   const lockPath = `${filePath}.lock`;
   const deadline = clock().getTime() + timeoutMs;
@@ -107,7 +111,7 @@ export async function withAtomicJsonLock(filePath, operation, {
     try {
       handle = await fsApi.open(lockPath, "wx");
       try {
-        await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: clock().toISOString() }));
+        await handle.writeFile(JSON.stringify({ ...metadata, pid: process.pid, createdAt: clock().toISOString() }));
         return await operation();
       } finally {
         await handle.close();
@@ -117,7 +121,7 @@ export async function withAtomicJsonLock(filePath, operation, {
       if (handle) await handle.close().catch(() => {});
       if (error?.code !== "EEXIST") throw error;
       const stat = await fsApi.stat(lockPath).catch(() => null);
-      if (stat && clock().getTime() - stat.mtimeMs > staleMs) {
+      if (stat && clock().getTime() - stat.mtimeMs > staleMs && await canBreakStaleLock(lockPath, stat)) {
         await fsApi.unlink(lockPath).catch(() => {});
         continue;
       }

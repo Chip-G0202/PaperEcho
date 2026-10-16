@@ -7,7 +7,8 @@ import test from "node:test";
 import { notifyRunFailure } from "../tools/notification/failure_notifier.mjs";
 import { OperationLedgerStore } from "../tools/recovery/operation_ledger.mjs";
 import { canonicalQueryHash, writeAtomicJson } from "../tools/stage1/source_state.mjs";
-import { main as runnerMain } from "../tools/runner/main.mjs";
+import { main as executeRunner } from "../tools/runner/main.mjs";
+const runnerMain = (argv, dependencies = {}) => executeRunner(argv, { runtimeLog: { write: async () => ({ ok: true }) }, ...dependencies });
 
 function sink() { let value = ""; return { write(chunk) { value += String(chunk); }, text() { return value; } }; }
 

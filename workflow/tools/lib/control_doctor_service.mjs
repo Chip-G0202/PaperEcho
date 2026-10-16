@@ -7,6 +7,7 @@ import { runPreflight } from '../runner/preflight.mjs';
 import { resolveRuntimePaths, prepareRuntimePaths, resolveApplicationRuntimeContext } from './runtime_config.mjs';
 import { readBoundedJson } from './atomic_json.mjs';
 import { ControlScheduleStatusService } from './control_schedule_status_service.mjs';
+import { RuntimeLog } from './runtime_logging.mjs';
 
 const labels = { PASS: '正常', WARN: '建议处理', FAIL: '立即阻塞', UNKNOWN: '无法确认' };
 const overall = checks => ['FAIL', 'UNKNOWN', 'WARN', 'PASS'].find(status => checks.some(check => check.status === status)) || 'UNKNOWN';
@@ -124,6 +125,12 @@ export class DoctorService {
         add(`research.${key}`, state[key] && key === 'unknown' ? 'UNKNOWN' : state[key] && key === 'recoverable' ? 'WARN' : 'PASS', `${summary}：${state[key]} 项`,
           key === 'unknown' ? '人工核对原运行记录与模型调用结果；不要自动重发请求。' : 'Doctor 不消费反馈或生成建议。');
       }
+    });
+    await inspect('logging', async () => {
+      const state = await new RuntimeLog({ applicationRoot: this.context.applicationRoot, env: this.env }).health();
+      add('logging', state.status, state.status === 'PASS' ? '日志目录可访问，当前日志与归档符合大小边界' : '日志存储条件需要检查',
+        `${state.code}；仅检查元数据，不创建、轮转或清理日志。`);
+      if (state.lastError) add('logging.lastError', state.recovered ? 'PASS' : 'WARN', state.recovered ? '最近一次可确定的日志错误后已恢复写入' : '最近一次可确定的日志写入失败', `${state.lastError}；其他进程未留下证据的历史错误无法推断。`);
     });
     const status = overall(checks);
     return { schemaVersion: 1, status, summary: labels[status], canRun: checks.some(x => x.blocking && x.status === 'FAIL') ? false : checks.some(x => x.blocking && x.status === 'UNKNOWN') ? null : true, checks };

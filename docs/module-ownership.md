@@ -15,6 +15,8 @@ Deployment paths：`workflow/tools/lib/runtime_config.mjs` 独占 `resolveRuntim
 
 Packaged runtime：`desktop/electron-poc/package-win.mjs` 负责构建 allowlist、官方 ZIP 校验、ASAR 和 fuses；`runtime.mjs` 仅固定程序/资源位置并调用统一路径 owner。Shell 复用现有 Control Center；`headless.mjs` 调 Shared Runner，无独立业务后端或 SecretStore。测试 `packaged_probe.mjs` 用真实路径包含判断校验包内模块，不接受 Dev/Production 或链接越界来源。
 
+Runtime logging：`workflow/tools/lib/runtime_logging.mjs` 独占固定运行事件、日志 ownership、跨进程写入与 1 MiB × 2 轮转；复用 `runtime_config.mjs` 的 `logsRoot`、`atomic_json.mjs` 和 `credential_registry.mjs`。Runner/GUI/Headless 只提交安全事件，Doctor 只读检查健康状态；业务 ledger、receipt、feedback、研究结果仍由原 owner 管理，不受日志轮转影响。契约与测试命令见 [配置指南](configuration.md#runtimelog-与日志轮转)。
+
 Control Center application boundary：
 
 - `workflow/tools/lib/control_application_services.mjs`：组合 services；研究反馈提交只调用 `research_evaluation_service.mjs` 持久保存，不即时调用 LLM。

@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { sandboxWorkspace, acquireServer, allowedDocument, preferences, failurePage } from './shell.mjs';
+let runtimeLog;
 
 export async function prepareShell({ workspace } = {}) {
   if (app.isPackaged) {
@@ -12,14 +13,20 @@ export async function prepareShell({ workspace } = {}) {
       const value = path.join(paths.cacheRoot, directory); await fs.mkdir(value, { recursive: true }); app.setPath(key, value);
     }
     app.setAppLogsPath(path.join(paths.cacheRoot, 'logs'));
+    const { RuntimeLog } = await import(pathToFileURL(path.join(process.resourcesPath, 'core/workflow/tools/lib/runtime_logging.mjs')).href);
+    runtimeLog = new RuntimeLog({ env: process.env, warning: code => process.stderr.write(`[logging] ${code}\n`) });
+    await runtimeLog.write('GUI_STARTED', { subsystem: 'gui' });
     return paths.userDataRoot;
   }
   const root = await sandboxWorkspace(workspace);
-  await Promise.all(['electron-profile', 'electron-session', 'crashes', 'logs'].map(name => fs.mkdir(path.join(root, name), { recursive: true })));
+  await Promise.all(['electron-profile', 'electron-session', 'crashes', '.cache/native-debug'].map(name => fs.mkdir(path.join(root, name), { recursive: true })));
   app.setPath('userData', path.join(root, 'electron-profile'));
   app.setPath('sessionData', path.join(root, 'electron-session'));
   app.setPath('crashDumps', path.join(root, 'crashes'));
-  app.setAppLogsPath(path.join(root, 'logs'));
+  app.setAppLogsPath(path.join(root, '.cache/native-debug'));
+  const { RuntimeLog } = await import('../../workflow/tools/lib/runtime_logging.mjs');
+  runtimeLog = new RuntimeLog({ applicationRoot: root, env: { PAPERECHO_APPLICATION_ROOT: root }, warning: code => process.stderr.write(`[logging] ${code}\n`) });
+  await runtimeLog.write('GUI_STARTED', { subsystem: 'gui' });
   return root;
 }
 export async function startShell({ root, show = true } = {}) {
@@ -30,7 +37,7 @@ export async function startShell({ root, show = true } = {}) {
   app.on('before-quit', event => {
     if (quitting) return;
     event.preventDefault(); quitting = true;
-    Promise.resolve(lease?.close()).finally(() => app.quit());
+    Promise.resolve(lease?.close()).finally(async () => { await runtimeLog?.write('GUI_EXIT', { subsystem: 'gui' }); app.quit(); });
   });
   app.on('window-all-closed', () => app.quit());
   await app.whenReady();
@@ -40,6 +47,8 @@ export async function startShell({ root, show = true } = {}) {
   partition.on('will-download', event => event.preventDefault());
   window = new BrowserWindow({ width: 1366, height: 768, minWidth: 390, minHeight: 600, show, autoHideMenuBar: true, webPreferences: { ...preferences, session: partition } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('render-process-gone', () => { void runtimeLog?.write('GUI_RENDERER_GONE', { subsystem: 'gui' }); });
+  app.on('child-process-gone', () => { void runtimeLog?.write('GUI_CHILD_GONE', { subsystem: 'gui' }); });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   let origin;
   for (const name of ['will-navigate', 'will-frame-navigate', 'will-redirect']) window.webContents.on(name, (event, url) => {
@@ -53,7 +62,9 @@ export async function startShell({ root, show = true } = {}) {
       callback({ cancel: details.url !== failurePage && new URL(details.url).origin !== origin });
     });
     await window.loadURL(lease.url);
+    await runtimeLog?.write('GUI_READY', { subsystem: 'gui' });
   } catch {
+    await runtimeLog?.write('GUI_LOAD_FAILED', { subsystem: 'gui' });
     await lease?.close(); lease = null;
     await window.loadURL(failurePage);
   }
@@ -65,7 +76,7 @@ if (import.meta.url.startsWith(pathToFileURL(app.getAppPath()).href + '/') || pr
     const { smoke } = await import(pathToFileURL(path.join(process.resourcesPath, 'core/tests/helpers/electron_smoke.mjs')).href);
     // The diagnostic runs only against an explicitly provisioned dummy workspace.
     if (await fs.readFile(path.join(root, '.packaged-smoke-fixture'), 'utf8') !== 'dummy-only') throw new Error('SMOKE_FIXTURE_REQUIRED');
-    void smoke({ root, outputRoot: path.join(root, 'smoke'), prepare: false });
+    void smoke({ root, outputRoot: path.join(root, 'smoke'), prepare: false, startShellImpl: startShell });
   } else {
   // Resolve the ESM entry before waiting for ready; only path setup is top-level awaited.
   startShell({ root }).catch(() => { process.stderr.write('PAPERECHO_POC_START_FAILED\n'); app.exit(1); });

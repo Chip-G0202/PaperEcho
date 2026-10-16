@@ -8,7 +8,9 @@ import test from "node:test";
 import { parseRunnerArgs } from "../tools/runner/args.mjs";
 import { EXIT_CODES } from "../tools/runner/constants.mjs";
 import { buildLauncherInvocation, runFixedModeLauncher } from "../tools/runner/launcher.mjs";
-import { main as runnerMain, redactText, runProduction } from "../tools/runner/main.mjs";
+import { main as executeRunner, redactText, runProduction } from "../tools/runner/main.mjs";
+// These tests inject the execution boundaries; filesystem logging has its own isolated suite.
+const runnerMain = (argv, dependencies = {}) => executeRunner(argv, { runtimeLog: { write: async () => ({ ok: true }) }, ...dependencies });
 import { buildExecutionPlan, runPreflight } from "../tools/runner/preflight.mjs";
 import { validateProductionResult } from "../tools/runner/result_validation.mjs";
 import * as desktopLauncher from "../../skills/paperecho-zotero-desktop/scripts/run.mjs";
