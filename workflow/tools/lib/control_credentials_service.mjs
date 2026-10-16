@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseEnvFile } from './env_file_parser.mjs';
-import { writeAtomicText, withAtomicJsonLock } from './atomic_json.mjs';
+import { writeAtomicText, withAtomicJsonLock, renameWithTransientRetry } from './atomic_json.mjs';
 import { CONTROL_SECRET_NAMES, credentialOrigin, markLocalCredential, redactSecrets, secretValues } from './credential_registry.mjs';
 import { secureCredentialFile } from './credential_file_security.mjs';
 import { resolveRuntimePaths, assertRuntimeDataPath } from './runtime_config.mjs';
@@ -156,7 +156,7 @@ export class SecretService {
       await permission(this.#file, { checkOnly: true });
     } catch (error) {
       if (replaced) {
-        try { if (before.exists) await fs.rename(rollback, this.#file); else await fs.unlink(this.#file); }
+        try { if (before.exists) await renameWithTransientRetry(rollback, this.#file, { renameImpl: this.#atomicOptions?.renameImpl || fs.rename }); else await fs.unlink(this.#file); }
         catch { recoveryRequired = true; throw new Error('CREDENTIAL_RECOVERY_REQUIRED'); }
       }
       throw error;

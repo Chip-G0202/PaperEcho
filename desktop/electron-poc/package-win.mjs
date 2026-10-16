@@ -17,7 +17,7 @@ export function sourceAllowed(file) {
     || /^workflow\/tools\/web\/static\/(index\.html|app\.js|styles\.css|paperecho-mark\.svg)$/.test(file)
     || /^skills\/paperecho-(local|zotero-desktop|zotero-web)\/scripts\/run\.mjs$/.test(file)
     || /^config\/[^/]+\.(json|md)$/.test(file) && file !== 'config/README.md' && file !== 'config/paperecho.config.json'
-    || ['desktop/electron-poc/runtime.mjs', 'desktop/electron-poc/headless.mjs', 'desktop/electron-poc/main.mjs', 'desktop/electron-poc/shell.mjs', 'tests/helpers/electron_smoke.mjs', 'tests/helpers/packaged_probe.mjs'].includes(file);
+    || ['desktop/electron-poc/runtime.mjs', 'desktop/electron-poc/headless.mjs', 'desktop/electron-poc/main.mjs', 'desktop/electron-poc/shell.mjs', 'tests/helpers/electron_smoke.mjs', 'tests/helpers/first_run_smoke.mjs', 'tests/helpers/packaged_probe.mjs'].includes(file);
 }
 export async function build() {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('WINDOWS_X64_BUILD_REQUIRED');
@@ -26,7 +26,7 @@ export async function build() {
   const shell = path.join(stage, 'shell'); const core = path.join(stage, 'core');
   await fs.mkdir(shell); await fs.mkdir(core);
   const tracked = execFileSync('git', ['ls-files', '-z', 'workflow/tools', 'skills', 'config'], { cwd: repo }).toString().split('\0').filter(Boolean);
-  const sources = [...new Set([...tracked, 'desktop/electron-poc/runtime.mjs', 'desktop/electron-poc/headless.mjs', 'desktop/electron-poc/main.mjs', 'desktop/electron-poc/shell.mjs', 'tests/helpers/electron_smoke.mjs', 'tests/helpers/packaged_probe.mjs'])].filter(sourceAllowed);
+  const sources = [...new Set([...tracked, 'workflow/tools/lib/control_setup_service.mjs', 'desktop/electron-poc/runtime.mjs', 'desktop/electron-poc/headless.mjs', 'desktop/electron-poc/main.mjs', 'desktop/electron-poc/shell.mjs', 'tests/helpers/electron_smoke.mjs', 'tests/helpers/first_run_smoke.mjs', 'tests/helpers/packaged_probe.mjs'])].filter(sourceAllowed);
   for (const file of sources) { const target = path.join(core, file); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.copyFile(path.join(repo, file), target); }
   const metadata = JSON.parse(await fs.readFile(path.join(repo, 'package.json'), 'utf8'));
   await fs.writeFile(path.join(core, 'package.json'), JSON.stringify({ name: 'paperecho-core', private: true, type: 'module', dependencies: metadata.dependencies }));

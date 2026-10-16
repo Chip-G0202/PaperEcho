@@ -27,6 +27,7 @@ await fs.writeFile(path.join(data, 'input.json'), JSON.stringify([{ title: 'Pack
 await fs.writeFile(path.join(data, 'config/paperecho.config.json'), JSON.stringify({ schemaVersion: 2, mode: 'local', common: { projectRoot: data, llm: { enabled: false, mode: 'disabled' }, email: { enabled: false }, radar: { enabled: true } }, local: { input: '../input.json', outputRoot: '../local' } }));
 const exe = path.join(application, 'PaperEcho.exe');
 const env = { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, COMSPEC: process.env.COMSPEC, LOCALAPPDATA: process.env.LOCALAPPDATA, USERPROFILE: process.env.USERPROFILE,
+  ...(process.env.PWSH_PATH ? { PWSH_PATH: process.env.PWSH_PATH } : {}),
   PATH: '', PAPERECHO_LAYOUT: 'installed', PAPERECHO_DATA_ROOT: data, PAPERECHO_SKIP_DOTENV: '1', TEMP: path.join(data, '.cache/tmp'), TMP: path.join(data, '.cache/tmp') };
 await fs.mkdir(env.TEMP, { recursive: true });
 async function run(command, args, overrides = {}, shell = false) {
@@ -88,10 +89,30 @@ const headless = JSON.parse(await fs.readFile(path.join(data, 'headless-probe.js
 const bad = await run('"' + cmd + '"', ['--unknown-option'], {}, true); assert.notEqual(bad.code, 0);
 const nodeOptions = await run(exe, ['-e', "process.stdout.write('fuse-options-ignored')"], { ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--require=does-not-exist' });
 assert.equal(nodeOptions.code, 0); assert.equal(nodeOptions.output.trim(), 'fuse-options-ignored');
+const wizardReports = [];
+for (const [width, height] of [[1920,1080],[1366,768],[390,844]]) {
+  const implicit = width === 1920;
+  const localAppData = path.join(fixture, 'Windows Local AppData');
+  const wizardData = implicit ? path.join(localAppData, 'PaperEcho/workspaces/default') : path.join(fixture, `首次配置-${width}`);
+  const rootOverrides = implicit ? { PAPERECHO_DATA_ROOT: '', PAPERECHO_WORKSPACE_ID: '', LOCALAPPDATA: localAppData } : { PAPERECHO_DATA_ROOT: wizardData };
+  await fs.mkdir(wizardData, { recursive: true });
+  await fs.writeFile(path.join(wizardData, '.packaged-smoke-fixture'), 'dummy-only');
+  await fs.writeFile(path.join(wizardData, '.first-run-smoke.json'), JSON.stringify({ width, height }));
+  await fs.writeFile(path.join(wizardData, 'input.json'), '[]');
+  const wizardRun = await run(exe, ['--smoke'], { ...rootOverrides, TITLE_TRANSLATION_API_KEY: 'dummy-external-wizard' });
+  assert.equal(wizardRun.code, 0, `wizard ${width}: ${wizardRun.output}`);
+  const wizardReport = JSON.parse(await fs.readFile(path.join(wizardData, 'smoke/smoke-report.json')));
+  assert.equal(wizardReport.views.length, 5); assert.equal(wizardReport.ownedServerClosed, true);
+  assert.ok(Object.values(wizardReport.wizard).every(Boolean));
+  for (const p of wizardReport.processes) assert.throws(() => process.kill(p.pid, 0), 'wizard orphan process');
+  const wizardCheck = await run('"' + cmd + '"', ['--check', '--mode', 'local'], { ...rootOverrides, PAPERECHO_SKIP_DOTENV: '' }, true);
+  assert.equal(wizardCheck.code, 0, 'configured wizard headless check');
+  wizardReports.push({ width, height, ...wizardReport.wizard, headlessCode: wizardCheck.code });
+}
 assert.deepEqual(await inventory(application), before, 'application directory was modified');
 for (const run of [gui, check, probe, bad, nodeOptions]) assert.throws(() => process.kill(run.pid, 0));
 const sizes = await Promise.all(Object.keys(before).map(f => fs.stat(path.join(application, f))));
-await fs.writeFile(path.join(fixture, 'report.json'), JSON.stringify({ application, data, sizeBytes: sizes.reduce((n, s) => n + s.size, 0), fileCount: sizes.length, fuses: wire, gui: { startupMs: report.startupMs, idleWorkingSetMiB: report.idleWorkingSetMiB, views: report.views.length }, headless, check: { code: check.code, durationMs: check.ms }, exceptionCode: bad.code, pathEmpty: true, cwdOutsideRepo: true, noOrphans: true, applicationUnchanged: true, readOnlyApplication: true, asarIntegrityMatch: true }, null, 2));
+await fs.writeFile(path.join(fixture, 'report.json'), JSON.stringify({ application, data, sizeBytes: sizes.reduce((n, s) => n + s.size, 0), fileCount: sizes.length, fuses: wire, gui: { startupMs: report.startupMs, idleWorkingSetMiB: report.idleWorkingSetMiB, views: report.views.length }, wizardReports, headless, check: { code: check.code, durationMs: check.ms }, exceptionCode: bad.code, pathEmpty: true, cwdOutsideRepo: true, noOrphans: true, applicationUnchanged: true, readOnlyApplication: true, asarIntegrityMatch: true }, null, 2));
 await fs.writeFile(path.join(base, 'latest-smoke.json'), JSON.stringify({ report: path.join(fixture, 'report.json') }));
 console.log('PACKAGED_GUI_HEADLESS_PASSED ' + path.join(fixture, 'report.json'));
 } finally {

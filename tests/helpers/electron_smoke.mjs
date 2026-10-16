@@ -14,8 +14,9 @@ let shell;
 const report = { platform: process.platform, electron: process.versions.electron, node: process.versions.node, pathEmpty: !process.env.PATH, checks: [], consoleErrors: [], runtimeErrors: [], rendererGone: [] };
 let securityProbe = false;
 app.on('web-contents-created', (_event, wc) => {
-  wc.on('console-message', (_event, level, message) => {
+  wc.on('console-message', (_event, level, message, _line, source) => {
     if (level !== 3) return;
+    if (report.expectedConfigFailure && /status of 400/.test(message) && /^http:\/\/127\.0\.0\.1:\d+\/api\/settings$/.test(source || '')) { report.expectedConfigFailureMessages = (report.expectedConfigFailureMessages || 0) + 1; return; }
     if (securityProbe && /file:\/\/\/dummy|https:\/\/example\.invalid/.test(message) && /Content Security Policy|Refused to connect/.test(message)) return;
     report.consoleErrors.push(message.slice(0, 240));
   });
@@ -31,6 +32,14 @@ try {
   wc.debugger.on('message', (_event, method, params) => { if (method === 'Runtime.exceptionThrown') report.runtimeErrors.push(params.exceptionDetails.text); });
   await wc.debugger.sendCommand('Runtime.enable');
   report.startupMs = Math.round(performance.now() - began);
+  if (await fs.access(path.join(root, '.first-run-smoke.json')).then(() => true, () => false)) {
+    const { wizardSmoke } = await import('./first_run_smoke.mjs');
+    await wizardSmoke({ window, root, outputRoot, report });
+    report.processes = app.getAppMetrics().map(p => ({ pid: p.pid, type: p.type }));
+    wc.debugger.detach();
+    app.once('will-quit', () => { report.ownedServerClosed = !lease.server.listening; writeFileSync(path.join(outputRoot, 'smoke-report.json'), JSON.stringify(report)); });
+    window.close(); return;
+  }
   const context = lease.context;
   await write(context.localRepository.papersPath, { schema_version: 1, papers: [{ title: 'PoC dummy paper', doi: '10.1234/dummy-poc', grade: 'B', rule_grade: 'B', semantic_grade: 'B' }] });
   await write(path.join(context.runRoot, 'dummy', 'run_group.json'), { schemaVersion: 1, runId: 'dummy', pipelineMode: 'local', status: 'completed', startedAt: '2026-10-15T05:00:00Z', artifacts: [{ kind: 'weekly_export' }, { kind: 'pipeline', rootKey: 'local', path: 'review_results/pipeline/dummy' }] });

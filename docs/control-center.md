@@ -1,5 +1,7 @@
 # PaperEcho Control Center — v2.4 使用与兼容说明
 
+v2.6 的首次配置入口为欢迎 → 数据位置确认 → 基础配置 → 可选凭据 → 本地检查摘要；自动判断和恢复来自 ConfigService 与原 preflight，不依赖完成标记。已配置用户直接进入 Control Center，所有保存复用 Settings/SecretService，Headless 不等待向导。运行与验证契约见 [首次运行配置向导](configuration.md#首次运行配置向导)。Windows Installer Phase 3A 仍为 Blocked。
+
 ## Electron 技术 PoC（独立实验入口）
 
 `desktop/electron-poc/` 固定 Electron 版本，只加载现有 Control Center 静态资源与 HTTP/application services。服务复用原 workspace 指纹、候选端口及 foreign listener 检查；同 workspace 复用，退出仅关闭本窗口持有的服务对象。renderer 保持 Node 关闭、context isolation/sandbox/webSecurity 开启，无 preload 或 IPC；外部导航、新窗口和非本实例请求均拒绝。
@@ -147,7 +149,7 @@ Radar 在正式无写回业务结果验证完成后发布；Weekly 在正式 Sta
 | 下一次调度／实时状态 | 无可靠证据显示未知；Zotero 为历史写入状态，非实时连接检测 | 不影响查看、反馈或配置；不把未知状态冒充正常 | D. Deferred enhancement |
 | Weekly 间隔编辑 | 只读，正式 scheduler 仍由原 owner 管理 | 已配置用户可继续按原调度运行；网页调度管理不是日常反馈前提 | D. Deferred enhancement |
 | 模型能力共享 owner | 等级复审、overview 复用 preference learning 模型配置 | 常用模型可修改，不需要为每个能力制造独立配置 | B. Accepted safety boundary |
-| 缺失配置文件的初始化 | 显示未初始化，首次按原配置指南准备文件 | 初次安装配置入口未统一；已有 v2.3 项目的日常设置不因此缺失。不会自动选择或切换运行模式 | D. Deferred enhancement |
+| 缺失配置文件的初始化 | v2.6 首次向导通过 ConfigService 保存，旧配置只读检查时不覆盖 | 用户明确选择运行模式，凭据由 SecretService 单独管理；Headless 沿用原 preflight | Resolved（v2.6，原 D） |
 | Config Registry 和检索式 owner | 固定字段白名单；keyword groups 存在时通过词组控件生成 PubMed query | 模型、sources、搜索、RSS、review、Radar、Weekly、Integrity、Zotero、邮件均有常用控件；拒绝任意 JSON/path 编辑不阻断正常设置 | B. Accepted safety boundary |
 | 高风险／删除／搜索建议 | 有明确 owner 且通过精确校验时，接受后立即写入正式文件；否则保持 pending 并返回错误 | 安全门槛仍有效，不能把未应用意向显示为已接受 | B. Accepted safety boundary |
 | Credentials Test／原值读取 | 五类本地凭据可 Replace/Clear；Test 未开放，原值永不返回 | UI 明示 Configured 不等于连接成功；缺少安全 test owner 不影响凭据维护 | B. Accepted safety boundary |

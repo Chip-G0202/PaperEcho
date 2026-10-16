@@ -8,6 +8,7 @@ import { readApplicationConfig, applicationConfigPath, DOMAIN_SECTIONS, isValidR
 import { sanitizeSourceUrl } from '../stage1/source_state.mjs';
 import { migrateApplicationConfig, upgradeNotificationConfig, upgradeNotificationChannelsConfig, upgradeOutboundChannelsConfig } from './application_config_migration.mjs';
 import { isValidSmtpHost } from '../stage5/email_sender.mjs';
+import { resolveRuntimePaths } from './runtime_config.mjs';
 
 const INITIAL_OWNER_VALUES = Object.freeze({
   'title_translation.config.json': { enabled: true },
@@ -154,7 +155,11 @@ export class ConfigService {
     try { return { value: await this.readOwner(file), present: true }; }
     catch (error) {
       if (error.code !== 'ENOENT') throw error;
-      if (file === 'paperecho.config.json') return { value: JSON.parse(await fs.readFile(path.join(this.root, 'config', 'paperecho.config.example.json'), 'utf8')), present: false };
+      if (file === 'paperecho.config.json') {
+        const paths = resolveRuntimePaths({ applicationRoot: this.root, env: this.env });
+        const templates = paths.layout === 'dev' ? this.root : paths.resourceRoot;
+        return { value: JSON.parse(await fs.readFile(path.join(templates, 'config', 'paperecho.config.example.json'), 'utf8')), present: false };
+      }
       if (Object.hasOwn(INITIAL_OWNER_VALUES, file)) return { value: structuredClone(INITIAL_OWNER_VALUES[file]), present: false };
       throw error;
     }

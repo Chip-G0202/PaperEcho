@@ -1,0 +1,79 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
+import { nativeImage } from 'electron';
+
+export async function wizardSmoke({ window, root, outputRoot, report }) {
+  const { width, height } = JSON.parse(await fs.readFile(path.join(root, '.first-run-smoke.json'), 'utf8'));
+  const wc = window.webContents; const evaluate = code => wc.executeJavaScript(code);
+  const until = async code => { for (let n = 0; n < 100; n++) { if (await evaluate(code)) return; await delay(80); } throw new Error('WIZARD_UI_TIMEOUT'); };
+  const text = () => evaluate("document.querySelector('#content').textContent");
+  const waitTitle = title => until(`document.querySelector('#content').getAttribute('aria-busy') === 'false' && document.querySelector('#content h2')?.textContent === ${JSON.stringify(title)}`);
+  const click = name => evaluate(`[...document.querySelectorAll('#content button')].find(x=>x.textContent===${JSON.stringify(name)}).click()`);
+  const set = (id, value) => evaluate(`(()=>{const x=document.querySelector('[data-setup-field="${id}"]');x.value=${JSON.stringify(value)};x.dispatchEvent(new Event(x.tagName==='SELECT'?'change':'input',{bubbles:true}));})()`);
+  const record = async title => {
+    await waitTitle(title);
+    assert.equal(await evaluate('document.documentElement.scrollWidth > innerWidth + 1'), false, title);
+    report.views.push({ width, height, route: 'setup', title });
+  };
+  window.setContentSize(width, height);
+  await wc.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+  report.views = [];
+  await window.loadURL(new URL('/', wc.getURL()).href);
+  await record('欢迎使用'); assert.equal(await evaluate('location.hash'), '#setup');
+  await click('下一步'); await record('确认本地工作空间');
+  assert.ok((await text()).includes(root));
+  await click('下一步'); await record('基础配置');
+  await click('保存基础配置并继续'); await delay(100); await waitTitle('基础配置');
+  assert.equal(await evaluate('document.activeElement.dataset.setupField'), 'runtime.mode');
+  await set('runtime.mode', 'web'); await set('web.userId', '1234567');
+  const folder = path.join(root, 'config');
+  const icacls = path.join(process.env.SystemRoot, 'System32/icacls.exe');
+  const sid = execFileSync(path.join(process.env.SystemRoot, 'System32/whoami.exe'), ['/user', '/fo', 'csv', '/nh']).toString().match(/S-1-[0-9-]+/)[0];
+  execFileSync(icacls, [folder, '/deny', `*${sid}:(OI)(CI)(WD,AD,WEA,WA,DE,DC)`]);
+  report.expectedConfigFailure = true;
+  try {
+    await click('保存基础配置并继续');
+    await until("document.querySelector('#notice').dataset.kind === 'error' && document.querySelector('#notice').textContent.length > 0");
+    await assert.rejects(fs.access(path.join(folder, 'paperecho.config.json')));
+    assert.ok(!(await text()).includes('本地检查通过'));
+  } finally { await delay(100); report.expectedConfigFailure = false; execFileSync(icacls, [folder, '/remove:d', `*${sid}`]); }
+  await click('保存基础配置并继续'); await record('服务凭据');
+  assert.equal(await evaluate("document.querySelector('[data-credential=TITLE_TRANSLATION_API_KEY] input') === null"), true);
+  assert.equal(await evaluate("document.body.textContent.includes('dummy-external-wizard')"), false);
+  await click('继续本地检查（可跳过凭据）'); await record('本地检查与摘要');
+  assert.ok((await text()).includes('仍需配置，尚不能正式运行'));
+  const before = await fs.readFile(path.join(folder, 'paperecho.config.json'), 'utf8');
+  await window.loadURL(new URL('/', wc.getURL()).href); await waitTitle('欢迎使用');
+  assert.equal(await fs.readFile(path.join(folder, 'paperecho.config.json'), 'utf8'), before);
+  await click('下一步'); await waitTitle('确认本地工作空间'); await click('下一步'); await waitTitle('基础配置');
+  assert.equal(await evaluate("document.querySelector('[data-setup-field=\"web.userId\"]').value"), '1234567');
+  await set('runtime.mode', 'local'); await set('local.input', '../input.json'); await set('local.output', '../local');
+  await click('保存基础配置并继续'); await waitTitle('服务凭据');
+  await evaluate("(()=>{const x=document.querySelector('[data-credential=PREFERENCE_LEARNING_API_KEY] input');x.value='dummy-wizard-local';x.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-credential=PREFERENCE_LEARNING_API_KEY] button.primary').click()})()");
+  await until("document.querySelector('[data-credential=PREFERENCE_LEARNING_API_KEY] input').value === '' && document.querySelector('[data-credential=PREFERENCE_LEARNING_API_KEY]').textContent.includes('已配置')");
+  assert.equal(await evaluate("document.body.textContent.includes('dummy-wizard-local')"), false);
+  await click('继续本地检查（可跳过凭据）'); await waitTitle('本地检查与摘要');
+  assert.ok((await text()).includes('本地检查通过'));
+  const finalConfig = await fs.readFile(path.join(folder, 'paperecho.config.json'), 'utf8');
+  await click('重新检查'); await waitTitle('本地检查与摘要');
+  assert.equal(await fs.readFile(path.join(folder, 'paperecho.config.json'), 'utf8'), finalConfig);
+  window.show(); window.focus(); window.moveTop();
+  await wc.debugger.sendCommand('Page.bringToFront');
+  await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  await delay(250);
+  const capture = await wc.debugger.sendCommand('Page.captureScreenshot', { format: 'png', fromSurface: false });
+  const png = Buffer.from(capture.data, 'base64');
+  await fs.writeFile(path.join(outputRoot, `wizard-${width}.png`), png);
+  const bitmap = nativeImage.createFromBuffer(png).toBitmap(); let different = 0; let samples = 0;
+  for (let i = 0; i < bitmap.length; i += 64) { samples++; if (bitmap[i] !== bitmap[0] || bitmap[i + 1] !== bitmap[1] || bitmap[i + 2] !== bitmap[2]) different++; }
+  assert.ok(different > samples * 0.01, 'WIZARD_SCREENSHOT_BLANK');
+  await click('完成并进入 Control Center'); await until("location.hash === '#home' && document.querySelector('#content').getAttribute('aria-busy') === 'false'");
+  await window.loadURL(new URL('/', wc.getURL()).href);
+  await until("location.hash !== '#setup' && document.querySelector('#content').getAttribute('aria-busy') === 'false'");
+  assert.equal(await fs.readFile(path.join(folder, 'paperecho.config.json'), 'utf8'), finalConfig);
+  assert.deepEqual(report.consoleErrors, []); assert.deepEqual(report.runtimeErrors, []); assert.deepEqual(report.rendererGone, []);
+  report.wizard = { saved: true, resumed: true, ready: true, failedSaveRecovered: true, secretsWriteOnly: true, externalReadOnly: true, incompleteNotReady: true, repeatedCheckUnchanged: true, configuredSkipped: true };
+}

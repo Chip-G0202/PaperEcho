@@ -11,9 +11,12 @@ let settingsView = 'sources';
 let reviewSection = 'normal';
 let activeReview = null;
 let activeChannelModal = null;
+let setupState = null;
+let setupStep = 0;
+const setupDraft = new Map(); // Non-secret unsaved fields only; no browser persistence.
 const notificationChannelIds = ['email', 'qq', 'wechat', 'feishu', 'wecom'];
 const decisionReceipts = new Map();
-const pageNames = { home: '概览 · Overview', weekly: '文献 · Literature', feedback: '反馈 · Feedback', settings: '设置 · Settings', system: '系统 · System' };
+const pageNames = { home: '概览 · Overview', weekly: '文献 · Literature', feedback: '反馈 · Feedback', settings: '设置 · Settings', system: '系统 · System', setup: '首次配置 · Setup' };
 const errorMessages = { SETTING_VALUE_INVALID: '请检查字段格式或允许范围，原设置未改变。', SEARCH_KEYWORD_OWNER_REQUIRED: '请使用检索词分组修改检索式。', CREDENTIAL_VALUE_INVALID: '请输入有效单行凭据（最多 4096 字符）；请勿同时包含两种引号。', CREDENTIAL_EXTERNALLY_MANAGED: '该凭据由外部环境管理，请在原入口修改。', CREDENTIAL_WRITE_FAILED: '凭据未保存，请检查本地配置权限后重试。', CREDENTIAL_ENV_FORMAT_UNSUPPORTED: '凭据文件格式无法安全编辑，原文件未改变。', WEEKLY_CHANGED_RELOAD: '当前文献已更新，请刷新页面后重试。' };
 // Keep the existing API/canonical values; the stored learning action is unchanged.
 Object.assign(errorMessages, { SESSION_REQUIRED: '会话已失效，请刷新页面后重试。', CSRF_REQUIRED: '安全校验未通过，请刷新页面后重试。', ORIGIN_REJECTED: '请求来源未通过安全校验。', CREDENTIAL_ACL_UNSAFE: '文件权限无法安全确认，凭据未保存，请在原配置入口检查权限。', CREDENTIAL_CONCURRENT_CHANGE: '凭据文件已被其他操作更改，请重新读取后重试。', CREDENTIAL_RECOVERY_REQUIRED: '凭据恢复未完成，请通过原配置入口检查后再继续。', CREDENTIAL_KEY_NOT_ALLOWED: '此凭据字段不允许修改。' });
@@ -927,6 +930,71 @@ async function settings(group = settingsGroup, view = settingsView) {
     if (entries.length || group === 'Credentials') body.append(section);
   }
 }
+async function setup() {
+  const [state, entries] = await Promise.all([api('/api/setup'), api('/api/settings')]); setupState = state;
+  const titles = ['欢迎使用', '确认本地工作空间', '基础配置', '服务凭据', '本地检查与摘要'];
+  const section = el('section', undefined, 'settings-section setup-wizard');
+  section.append(pageIntro(titles[setupStep], `第 ${setupStep + 1} / 5 步 · 配置保存在本机，可返回修改或下次继续。`));
+  const actions = el('div', undefined, 'wizard-actions');
+  const go = async step => { setupStep = step; await render(); window.scrollTo?.(0, 0); main.focus({ preventScroll: true }); };
+  if (setupStep === 0) {
+    section.append(el('p', 'PaperEcho 在本机运行。向导不会自动检索、调用 AI、写入 Zotero、发送通知或创建计划任务。'), el('p', '已有配置和研究历史会保留；可选服务可以稍后在 Settings 中配置。'));
+  } else if (setupStep === 1) {
+    section.append(contextCard('已选定的数据位置', [`部署模式：${{ installed: '安装模式（程序与数据分离）', portable: '可携带模式', dev: '开发模式' }[state.roots.layout] || state.roots.layout}`, `用户数据目录：${state.roots.userDataRoot}`, `缓存目录：${state.roots.cacheRoot}`]), el('p', '数据目录由启动时的路径契约确定。此处仅确认，不迁移数据，也不切换到其它工作空间。'));
+  } else if (setupStep === 2) {
+    const form = el('form', undefined, 'settings-subgroup');
+    const saved = id => setupDraft.has(id) ? setupDraft.get(id) : entries.find(x => x.id === id)?.value;
+    const mode = select([['', '请选择运行路径'], ...Object.entries(runtimePaths).map(([id, value]) => [id, value.title])], saved('runtime.mode')); mode.required = true; mode.dataset.setupField = 'runtime.mode';
+    form.append(label('运行路径（必需）', mode));
+    const panel = el('div'); const controls = new Map();
+    const sync = () => {
+      panel.replaceChildren(); controls.clear();
+      const selected = mode.value;
+      if (!selected) return;
+      panel.append(el('p', runtimePaths[selected].summary), el('p', runtimePaths[selected].needs, 'meta'));
+      for (const spec of runtimePathFields[selected]) {
+        const entry = entries.find(x => x.id === spec.id); const input = settingControl(entry);
+        input.value = saved(spec.id) ?? ''; input.required = spec.required; input.dataset.setupField = spec.id;
+        input.addEventListener('input', () => setupDraft.set(spec.id, input.value));
+        panel.append(label(`${entry.description}${spec.required ? '（必需）' : '（可选）'}`, input)); controls.set(spec.id, input);
+      }
+    };
+    mode.addEventListener('change', () => { setupDraft.set('runtime.mode', mode.value); sync(); }); sync(); form.append(panel);
+    const save = button('保存基础配置并继续', async () => {
+      if (!form.reportValidity()) return;
+      const updates = [{ id: 'runtime.mode', value: mode.value }];
+      for (const [id, input] of controls) if (input.value.trim()) updates.push({ id, value: input.value.trim() });
+      await api('/api/settings', { updates }); setupDraft.clear();
+      notice.textContent = '基础配置已保存；运行路径将在下次启动时采用，当前检查读取已保存配置。';
+      await go(3);
+    });
+    form.addEventListener('submit', event => { event.preventDefault(); save.click(); });
+    form.append(save); section.append(form);
+  } else if (setupStep === 3) {
+    section.append(el('p', '密钥原值永不回显，也不会请求外部服务验证。可稍后配置；缺少运行必需凭据时，完成页仍会显示“仍需配置”。'));
+    const credentials = await api('/api/credentials');
+    const ids = ['TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY'];
+    if (entries.find(x => x.id === 'runtime.mode')?.value === 'web') ids.unshift('ZOTERO_API_KEY');
+    for (const id of ids) appendCredentialEditor(section, credentials.find(x => x.id === id));
+  } else {
+    section.append(el('h3', state.canRun ? '本地检查通过' : '仍需配置，尚不能正式运行'), el('p', '仅进行了本地配置与环境检查；密钥、网络连接及真实外部服务尚未验证。'), el('p', state.persisted ? '基础配置已持久保存。' : '基础配置尚未保存。'));
+    section.append(contextCard('已保存配置摘要', [`运行路径：${runtimePaths[state.mode]?.title || '仍需选择'}`, `用户数据目录：${state.roots.userDataRoot}`, `当前服务路径：${runtimePaths[state.roots.activeMode]?.title || '未选择'}`]));
+    if (state.mode && state.mode !== state.roots.activeMode) section.append(el('p', '已保存的新运行路径将在下次启动时采用；此处检查读取已保存配置。', 'meta'));
+    for (const [title, values] of [['必需项目', state.requiredMissing], ['可选或稍后配置', state.optionalMissing]]) {
+      section.append(el('h4', title)); const list = el('ul');
+      const names = { 'Stage5 recipient': '通知收件人', 'real LLM credentials': 'AI 服务凭据', 'local.input': '本地输入文件或目录', 'local.outputRoot': '本地结果目录', ZOTERO_API_KEY: 'Zotero Web 凭据', ZOTERO_USER_ID: 'Zotero 用户 ID' };
+      for (const item of values) list.append(el('li', `${names[item.name] || item.name}：${item.purpose || ''}。${title === '必需项目' ? '请返回基础配置或在设置中补充后重新检查。' : '可稍后在设置中配置。'}`));
+      if (!values.length) list.append(el('li', '无未完成项目')); section.append(list);
+    }
+    const checks = { production_entry: '工作流程序', local_input: '本地输入', local_output_root: '本地结果目录', local_feedback: '本地反馈文件', project_output_root: '研究结果目录', zotero_desktop: 'Zotero Desktop', desktop_cli_bridge: 'Zotero 连接组件', zotero_web_api: 'Zotero Web 配置（尚未连接）', smtp: '邮件配置' };
+    for (const item of state.readiness) section.append(el('p', `${checks[item.name] || '本地环境项目'}：${item.status === 'ready' ? '通过' : '仍需检查'}`, 'meta'));
+    actions.append(button('重新检查', () => go(4)), button(state.canRun ? '完成并进入 Control Center' : '进入 Control Center 继续设置', () => navigate('home')));
+  }
+  if (setupStep > 0) actions.prepend(button('上一步', () => go(setupStep - 1)));
+  if ([0, 1, 3].includes(setupStep)) actions.append(button(setupStep === 3 ? '继续本地检查（可跳过凭据）' : '下一步', () => go(setupStep + 1)));
+  if (setupStep < 4) actions.append(button('稍后继续', () => navigate('home')));
+  section.append(actions); main.replaceChildren(section);
+}
 async function render() {
   clearCredentialInputs();
   activeChannelModal?.close(true, false);
@@ -939,7 +1007,7 @@ async function render() {
     const active = page === 'feedback' ? section === feedbackView : page === 'settings' ? section === ({ common: 'general', review: 'models', runtime: 'runtime', automation: 'automation', connections: 'connections' }[settingsGroup]) : false;
     node.setAttribute('aria-current', active ? 'page' : 'false');
   });
-  try { await ({ home, weekly, feedback, settings, system })[page](); }
+  try { await ({ home, weekly, feedback, settings, system, setup })[page](); }
   catch { notice.dataset.kind = 'error'; notice.textContent = '无法读取当前页面，请检查本地服务后重试。'; empty('页面暂不可用', '没有更改你的数据。'); main.append(button('重新读取', render)); }
   finally { main.querySelector('.loading')?.remove(); main.setAttribute('aria-busy', 'false'); document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = false; }); }
 }
@@ -974,4 +1042,8 @@ document.querySelector('#menu-toggle').addEventListener('click', () => { const s
 window.addEventListener('hashchange', route);
 window.addEventListener('pagehide', () => clearCredentialInputs());
 window.addEventListener('pageshow', () => clearCredentialInputs());
-api('/api/session').then((session) => { csrf = session.token; return route(); }).catch(() => { main.replaceChildren(); empty('无法连接本地服务', '请确认 Control Center 正在运行，然后刷新页面。'); main.setAttribute('aria-busy', 'false'); });
+api('/api/session').then(async session => {
+  csrf = session.token; setupState = await api('/api/setup');
+  if (setupState.needsSetup) history.replaceState(null, '', '#setup');
+  return route();
+}).catch(() => { main.replaceChildren(); empty('无法连接本地服务', '请确认 Control Center 正在运行，然后刷新页面。'); main.setAttribute('aria-busy', 'false'); });

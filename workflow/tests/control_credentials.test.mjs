@@ -140,6 +140,25 @@ test('temporary and final ACL failures preserve old file/environment and remove 
   }
 });
 
+test('ACL rollback retries transient rename errors but preserves recovery evidence on persistent failure', async t => {
+  for (const persistent of [false, true]) {
+    const root = await fixture(t); const file = path.join(root, '.env'); const original = 'SMTP_PASS="dummy-rollback-old"\n';
+    await fs.writeFile(file, original); const env = {}; loadDotEnv({ env, envPath: file }); let attempts = 0;
+    const service = new SecretService({ root, env, atomicOptions: {
+      secureFile: async (target, options) => { if (target === file && options.checkOnly) throw new Error('CREDENTIAL_ACL_UNSAFE'); await secureCredentialFile(target, options); },
+      renameImpl: async (from, to) => {
+        if (from.endsWith('.rollback') && (++attempts === 1 || persistent)) throw Object.assign(new Error('dummy transient rename'), { code: 'EPERM' });
+        await fs.rename(from, to);
+      },
+    } });
+    await assert.rejects(service.replace('SMTP_PASS', 'dummy-rollback-new'), persistent ? /CREDENTIAL_RECOVERY_REQUIRED/ : /CREDENTIAL_ACL_UNSAFE/);
+    assert.equal(env.SMTP_PASS, 'dummy-rollback-old'); assert.ok(attempts > 1 && attempts <= 4);
+    const rollback = (await fs.readdir(root)).filter(x => x.endsWith('.rollback'));
+    if (persistent) { assert.equal(rollback.length, 1); assert.equal(await fs.readFile(path.join(root, rollback[0]), 'utf8'), original); await secureCredentialFile(path.join(root, rollback[0]), { checkOnly: true }); }
+    else { assert.equal(await fs.readFile(file, 'utf8'), original); assert.deepEqual(await fs.readdir(root), ['.env']); }
+  }
+});
+
 test('fresh processes load saved dummy credentials and preserve external priority without disclosing values', async t => {
   const root = await fixture(t); const file = path.join(root, '.env');
   await new SecretService({ root, env: {} }).replace('SMTP_PASS', 'saved-process-dummy');

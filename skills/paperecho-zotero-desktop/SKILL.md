@@ -5,6 +5,8 @@ description: use when running or changing the PaperEcho Zotero Desktop path, inc
 
 # PaperEcho - Zotero Desktop
 
+First-run is GUI-only; Headless uses the saved config and original preflight without a wizard completion flag. Setup checks never write Zotero; see shared workspace rules in [configuration](../../docs/configuration.md).
+
 The packaged `PaperEcho-headless.cmd --check --mode desktop` entry reuses Shared Runner and the same Stage0 core. See [configuration](../../docs/configuration.md) for data-root setup, embedded runtime/fuse requirements and Windows-only packaging acceptance; GUI smoke does not authorize real Zotero operations.
 
 Deployment paths reuse the shared `runtime_config.mjs` Portable/Installed/Dev contract, independently of Desktop backend selection. See [configuration](../../docs/configuration.md). Do not add adapter root discovery or implicitly migrate data.

@@ -37,6 +37,8 @@ This skill owns the shared execution contract, not a second pipeline invocation.
 
 ## Unified Configuration
 
+First-run setup is GUI-only and derives readiness from existing config/preflight. It must reuse ConfigService and write-only SecretService, preserve partial/legacy configuration, and never gate Headless on a UI completion flag or invoke real providers. See [configuration](../../docs/configuration.md).
+
 Windows packaged runtime uses the same root owner with a pinned read-only Resource Root. Headless delegates to Shared Runner using the embedded runtime; see [configuration](../../docs/configuration.md) for verified build/test commands, required fuses and platform limits.
 
 Deployment layout is resolved only by `runtime_config.mjs`; reuse its Portable/Installed/Dev roots before config or Secret loading. Do not add adapter root resolvers, infer layout from cwd, or migrate real data implicitly. See [configuration](../../docs/configuration.md) for bootstrap inputs and compatibility boundaries.

@@ -12,6 +12,8 @@ export function preparePackagedRuntime() {
     PAPERECHO_APPLICATION_ROOT: applicationRoot,
     PAPERECHO_RESOURCE_ROOT: core,
   });
+  // A stable packaged workspace lets a fresh GUI reach setup; Headless uses the same owner.
+  if (!process.env.PAPERECHO_DATA_ROOT && !process.env.PAPERECHO_WORKSPACE_ID) process.env.PAPERECHO_WORKSPACE_ID = 'default';
   if (process.type !== 'browser') process.env.ELECTRON_RUN_AS_NODE = '1';
   const paths = prepareRuntimePaths(resolveRuntimePaths({ env: process.env }));
   Object.assign(process.env, { TEMP: paths.tempRoot, TMP: paths.tempRoot, TMPDIR: paths.tempRoot });

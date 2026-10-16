@@ -10,7 +10,7 @@
 | `PAPERECHO_APPLICATION_ROOT` | 可选绝对程序根；默认由模块位置确定，代码、静态资源与未来 bundled runtime 位于这里 |
 | `PAPERECHO_RESOURCE_ROOT` | 只读代码资源根，默认等于 Application Root，必须为其内部绝对路径；packaged bootstrap 固定为 `<application>/resources/core`，不能由 `.env` 改写 |
 | `PAPERECHO_DATA_ROOT` | Portable 默认 `<application>/data`，覆盖值相对程序根且必须为其子目录；Installed 覆盖值必须为绝对、独立数据根；Dev 不接受此新参数，保留旧配置契约 |
-| `PAPERECHO_WORKSPACE_ID` | Installed 未显式给 data root 时必填；1–64 位字母数字/下划线/短横线，以字母数字起始；不从安装路径派生，更新程序目录不会换 workspace |
+| `PAPERECHO_WORKSPACE_ID` | 独立脚本的 Installed 模式未显式给 data root 时必填；packaged 入口在两者均缺省时绑定稳定的 `default` workspace；1–64 位字母数字/下划线/短横线，以字母数字起始，不从安装路径派生 |
 | `PAPERECHO_CACHE_ROOT` | Portable 默认 `<application>/cache`；Installed 显式 data root 时默认 `<data>/.cache`，可选独立绝对 cache root；cache 不能包含 data 或程序目录 |
 
 Installed 默认 Windows 数据根为 `%LOCALAPPDATA%/PaperEcho/workspaces/<id>`，cache 为 `%LOCALAPPDATA%/PaperEcho/cache/<id>`；使用本机非漫游目录，未设置合法 `LOCALAPPDATA` 时明确失败。macOS 路径契约为 `~/Library/Application Support/PaperEcho/<id>` 与 `~/Library/Caches/PaperEcho/<id>`，目前仅模拟路径测试，未实机验收。依据：[Microsoft 本机应用数据约定](https://learn.microsoft.com/en-us/windows/apps/develop/windows-app-restore)、[Apple 支持文件与缓存约定](https://developer.apple.com/documentation/foundation/using-the-file-system-effectively)。
@@ -43,13 +43,27 @@ npm run smoke:packaged --prefix desktop/electron-poc
 
 唯一打包工具为 Electron Packager。构建按代码/模板 allowlist 和 npm production dependency tree 组装一次 `resources/core`；Electron Shell 放入 `app.asar`。物理 workflow、静态资源和依赖只保留一份，供 Electron 与独立 Node 子进程共同读取。产物及报告在 `tests/runs/phase2b/`，不进入 Git。打包使用锁定 Electron npm 包的官方 `checksums.json` 验证 ZIP；`tests/runs/electron-cache/` 中由官方安装器或 `@electron/get` 填充的匹配缓存可离线复用，无需再次获取远程校验表。缺少资产时仍走官方下载和校验，不关闭 TLS/checksum。
 
-GUI 运行产物中的 `PaperEcho.exe`；独立无窗口入口为 `PaperEcho-headless.cmd --check --mode local`（或显式选择 `desktop` / `web`）。Headless 复用 Shared Runner、preflight 和原 workflow entry，退出码沿用 Runner，无系统 Node/npm 依赖。预先配置 `PAPERECHO_LAYOUT=installed` 与显式 `PAPERECHO_DATA_ROOT` 或 `PAPERECHO_WORKSPACE_ID`；配置和 Local input 由用户在数据根准备，不自动迁移或生成真实配置。Portable 需显式设置 `PAPERECHO_LAYOUT=portable`。
+GUI 运行产物中的 `PaperEcho.exe`；独立无窗口入口为 `PaperEcho-headless.cmd --check --mode local`（或显式选择 `desktop` / `web`）。Headless 复用 Shared Runner、preflight 和原 workflow entry，退出码沿用 Runner，无系统 Node/npm 依赖。Packaged 缺省为 Installed，未指定数据根/id 时使用 `default` workspace；GUI 首次配置通过下述向导完成。显式数据根/id 仍优先，Portable 需显式设置 `PAPERECHO_LAYOUT=portable`。不迁移数据或自动生成文献输入。
 
 Packaged bootstrap 固定 Application Root 为程序目录、Resource Root 为其 `resources/core`，不受 cwd 或外部程序根 override 影响。配置、Secret 和可变状态继续使用数据根，Electron profile/session/crash/log 使用 cache。业务脚本通过统一 owner 从 Resource Root 定位；模块边界测试使用 `realpath` 加 `path.relative`，兼容末尾分隔符并拒绝链接或外部根，不能用字符串前缀扩大允许范围。
 
 实际二进制 fuses：RunAsNode、CookieEncryption、EmbeddedAsarIntegrityValidation、OnlyLoadAppFromAsar、WasmTrapHandlers 开启；NodeOptionsEnvironmentVariable、NodeCliInspectArguments、BrowserProcessSpecificV8Snapshot、FileProtocolExtraPrivileges 关闭。RunAsNode 是独立入口和现有 Node 子进程链所必需，保留了执行任意 Node 代码的能力。ASAR integrity 覆盖 Shell，不覆盖物理 `resources/core`；这些资源必须作为程序代码保护写权限，正式签名/发行另行验收。不能将关闭 RunAsNode 的产物用于此 Headless 方案。
 
 Windows 验证使用中文/空格目录、空 PATH、仓库外 cwd、仅 dummy/mock 数据；同时验证三尺寸 GUI、真实 Headless Local 子进程、scheduled 入口 mock、模块来源、异常退出、无遗留进程、实际 fuses 与 EXE 内嵌 ASAR header hash。smoke 对临时 Application 副本实际拒写并在 finally 恢复 ACL；不会改真实安装目录或 Production ACL。复用既有产物时，先逐文件核对业务源码，仅更新测试副本内的测试文件；正式运行时或构建配置变化必须重建。macOS、Installer、系统调度注册、签名与升级迁移均未在此 Gate 验证。
+
+## 首次运行配置向导
+
+GUI 启动读取真实配置与原 `runPreflight` 的本地检查结果：缺少配置或必要条件未满足时进入向导；已配置且本地检查可运行时直接进入 Control Center。可从“设置 → 首次配置向导”再次进入。没有完成布尔标记或第二份配置状态；关闭、部分保存、重复进入均以现有 owner 的持久数据恢复。合法但未选择 mode 的配置仅在 UI bootstrap 中提供临时显示上下文，不回写默认 mode；歧义、错误配置或冲突数据根仍由正式 resolver 拒绝。
+
+步骤为欢迎、本地数据位置确认、基础配置、可选凭据、本地检查摘要。运行路径由用户明确选择，Local 输入/输出、Web User ID 等字段来自既有 Settings registry；凭据可稍后补充，缺少运行必需项仍显示“仍需配置”。普通设置走原 `/api/settings` / ConfigService 原子批量保存；凭据完全复用 Settings 编辑器及 SecretService write-only API，外部管理只读，旧值不回显，不写 URL/browser storage/普通 JSON。旧版配置不会在读取或检查时自动初始化、迁移或重写。新布局的缺省配置模板读取包内 Resource Root，保存目标始终为 User Data Root。
+
+`control_setup_service.mjs` 仅组合已有 ConfigService、Runner resolver 与 preflight，返回受既有会话保护的 `/api/setup` 摘要，不执行 workflow、LLM、Zotero 写入、通知测试或调度注册。本地检查通过不等于外部服务已连接。运行路径变更继续遵守 Settings 的下次启动语义；摘要区分已保存路径和当前服务路径，不原地切换工作空间。失败保持原子写与原 Secret ACL 约束；成功步骤保留，失败步骤可重试。
+
+Headless 不导入向导，也不弹窗等待配置；缺少配置或必要依赖时由原 Runner 返回失败码。Packaged GUI 和 Headless 使用同一默认/显式 workspace 契约。Windows 凭据写入继续依赖项目既有 PowerShell 7 ACL owner，不能回退 Windows PowerShell 5 或放宽权限；缺少该运行时应安全拒绝凭据保存。空 PATH 的凭据 smoke 通过 `PWSH_PATH` 显式提供已安装 PowerShell 7，同时保持系统 Node/npm 不可见。
+
+Secret 最终 ACL 校验失败后的原子回滚复用 `atomic_json.mjs` 的有界瞬时重命名重试；持久失败仍保留受保护的 rollback 旧值并报告 `CREDENTIAL_RECOVERY_REQUIRED`，不能冒报保存成功。对应安全回归在 `control_credentials.test.mjs`。
+
+验证入口：`node --test workflow/tests/control_setup.test.mjs`，加 ConfigService/SecretService/runtime/preflight/HTTP/UI 回归；`npm run smoke:packaged --prefix desktop/electron-poc` 在隔离假 AppData、空 PATH、只读程序目录验证三尺寸首次向导、保存失败恢复、Secret、重复进入及独立 Headless。原 Electron smoke 同时保留导航/renderer/ownership/fuses 检查；截图需真实绘制并拒绝空白图。最终运行 `npm run check`、`npm test` 和 diff check。Windows Installer Phase 3A 仍因缺少可信隔离安装环境而 Blocked；本向导不改变该 Gate。
 
 ## 用户实际需要处理的文件
 

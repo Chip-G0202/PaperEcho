@@ -324,7 +324,13 @@ export async function resolveApplicationRuntimeContext({ cwd = defaultProjectRoo
   const defaultConfigPath = paths.configPath;
   // The optional UI remains usable before a Runner config has been initialized.
   if (!cli.mode && !cli.configPath && !env.PAPERECHO_CONFIG && !existsSync(defaultConfigPath)) cli.mode = 'desktop';
-  const resolved = await resolveRunnerConfiguration(cli, { cwd, env, defaultConfigPath });
+  let resolved;
+  try { resolved = await resolveRunnerConfiguration(cli, { cwd, env, defaultConfigPath }); }
+  catch (error) {
+    // UI-only bootstrap for a valid but unfinished configuration; Runner still fails closed.
+    if (error.code !== 'CONFIG_MODE_REQUIRED' || cli.mode) throw error;
+    resolved = await resolveRunnerConfiguration({ ...cli, mode: 'desktop' }, { cwd, env, defaultConfigPath });
+  }
   let runtimeEnv = resolved.env;
   let localRepository = null;
   if (resolved.options.mode === 'local') {
