@@ -10,6 +10,11 @@ export const failurePage = 'data:text/html;charset=utf-8,' + encodeURIComponent(
 export function allowedDocument(value, origin) {
   try { const u = new URL(value); return u.origin === origin && u.pathname === '/' && !u.search && !u.username && !u.password; } catch { return false; }
 }
+export function allowedSupportDownload({ url, mime, filename, bytes, documentURL }, origin) {
+  return Boolean(origin && allowedDocument(documentURL, origin) && url.startsWith(`blob:${origin}/`)
+    && mime === 'application/zip' && filename === 'paperecho-support.zip'
+    && Number.isSafeInteger(bytes) && bytes > 0 && bytes <= 65536);
+}
 export async function sandboxWorkspace(root = path.join(sandboxBase, 'workspace')) {
   root = path.resolve(root);
   const relative = path.relative(sandboxBase, root);

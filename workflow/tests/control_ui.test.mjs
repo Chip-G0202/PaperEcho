@@ -13,6 +13,28 @@ test('System Health uses explicit refresh, fixed state labels and accessible rea
   for (const state of ['PASS', 'WARN', 'FAIL', 'UNKNOWN']) assert.ok(system.includes(state));
   assert.doesNotMatch(system, /setInterval|setTimeout|localStorage|sessionStorage|innerHTML/);
 });
+test('support download selects a destination before POST and handles cancellation, permissions and size safely', async () => {
+  const source = app.slice(app.indexOf('async function downloadSupportBundle()'), app.indexOf('async function system()'));
+  const flow = []; let aborts = 0; let posts = 0; let blobReads = 0;
+  const writable = { write: async value => { assert.equal(value.size, 3); flow.push('write'); }, close: async () => flow.push('close'), abort: async () => { aborts++; } };
+  const window = { showSaveFilePicker: async () => { flow.push('choose'); return { createWritable: async () => { flow.push('open'); return writable; } }; } };
+  let response = { ok: true, headers: new Map([['content-type', 'application/zip'], ['content-length', '3']]), blob: async () => { blobReads++; return new Blob(['zip']); } };
+  const scope = vm.createContext({ window, navigator: { userAgent: 'test-browser' }, csrf: 'dummy-csrf', AbortController, setTimeout, clearTimeout,
+    fetch: async (url, options) => { posts++; flow.push('post'); assert.equal(url, '/api/support-bundle'); assert.equal(options.method, 'POST'); assert.equal(options.headers['X-CSRF-Token'], 'dummy-csrf'); assert.equal(options.body, '{}'); return response; } });
+  const download = vm.runInContext(source + ';downloadSupportBundle', scope);
+  assert.equal(await download(), '诊断包已保存。'); assert.deepEqual(flow, ['choose', 'post', 'open', 'write', 'close']);
+  window.showSaveFilePicker = async () => { throw Object.assign(new Error('dummy-cancel'), { name: 'AbortError' }); };
+  await assert.rejects(download(), /dummy-cancel/); assert.equal(posts, 1);
+  window.showSaveFilePicker = async () => ({ createWritable: async () => { throw new Error('EACCES'); } });
+  await assert.rejects(download(), /EACCES/);
+  window.showSaveFilePicker = async () => ({ createWritable: async () => ({ ...writable, write: async () => { throw new Error('EACCES'); } }) });
+  await assert.rejects(download(), /EACCES/); assert.equal(aborts, 1);
+  const before = blobReads; response = { ...response, headers: new Map([['content-type', 'application/zip'], ['content-length', '65537']]) };
+  await assert.rejects(download(), /SUPPORT_EXPORT_FAILED/); assert.equal(blobReads, before);
+  const system = app.slice(app.indexOf('async function system()'), app.indexOf('async function feedback()'));
+  assert.match(system, /导出诊断包/); assert.match(system, /不自动上传/); assert.match(system, /supportExportBusy/); assert.match(system, /原健康检查结果保持不变/);
+});
+
 test('UI shell keeps five real routes, skip target, live status and collapsible navigation', () => {
   const routes = [...html.matchAll(/data-page="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(routes, ['home', 'weekly', 'feedback', 'settings', 'system']);

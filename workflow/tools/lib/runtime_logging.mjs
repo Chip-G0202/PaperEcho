@@ -21,6 +21,7 @@ const events = Object.freeze({
   HEADLESS_STARTED: ['info', 'Headless entry started'], HEADLESS_START_FAILED: ['error', 'Headless bootstrap failed'],
 });
 const observations = new Map();
+export const RUNTIME_LOG_EVENT_CODES = Object.freeze(Object.keys(events));
 const digest = value => createHash('sha256').update(String(value)).digest('hex').slice(0, 16);
 const errorCode = error => ['ENOSPC', 'EACCES', 'EPERM', 'EBUSY'].includes(error?.code) ? `RUNTIME_LOG_${error.code}` : 'RUNTIME_LOG_UNAVAILABLE';
 
@@ -147,5 +148,36 @@ export class RuntimeLog {
       }
       return finish({ status: recent?.code && !recent.recovered ? 'WARN' : 'PASS', code: recent?.code || 'RUNTIME_LOG_READY', maxBytes: this.maxBytes, archives: 1 });
     } catch { return { status: 'UNKNOWN', code: 'RUNTIME_LOG_INSPECTION_UNAVAILABLE' }; }
+  }
+  // Read-only support projection: inspect only the bounded current file, never
+  // acquire a writer lock, rotate, or copy free text/correlation identifiers.
+  async eventSummary({ signal } = {}) {
+    try {
+      signal?.throwIfAborted();
+      const root = this.paths().logsRoot; await this.safe(root, { directory: true });
+      if (!await this.owner(root)) throw new Error();
+      const current = path.join(root, 'runtime.jsonl'); await this.safe(current);
+      const handle = await this.fsApi.open(current, 'r');
+      let text;
+      try {
+        const stat = await handle.stat();
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > this.maxBytes) throw new Error();
+        const buffer = Buffer.alloc(this.maxBytes + 1);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        if (bytesRead > this.maxBytes) throw new Error();
+        text = buffer.subarray(0, bytesRead).toString('utf8');
+      } finally { await handle.close(); }
+      signal?.throwIfAborted();
+      if (text && !text.endsWith('\n')) throw new Error();
+      const lines = text.trim().split('\n').filter(Boolean); const counts = new Map(); let omitted = 0;
+      for (const line of lines.slice(-200)) {
+        let record; try { record = JSON.parse(line); } catch { omitted++; continue; }
+        if (!Object.hasOwn(events, record.code) || !['runner', 'gui', 'headless'].includes(record.subsystem)) { omitted++; continue; }
+        const key = `${record.code}:${record.subsystem}`;
+        const event = counts.get(key) || { code: record.code, severity: events[record.code][0], subsystem: record.subsystem, count: 0 };
+        event.count++; counts.set(key, event);
+      }
+      return { status: 'available', sampled: Math.min(lines.length, 200), truncated: lines.length > 200, omitted, events: [...counts.values()] };
+    } catch { return { status: 'omitted', code: 'RUNTIME_LOG_SNAPSHOT_UNAVAILABLE' }; }
   }
 }

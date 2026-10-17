@@ -99,12 +99,24 @@ function runNode(args, env) { return new Promise((resolve, reject) => {
 }); }
 test('concurrent instances and processes preserve every acknowledged event without truncation', async t => {
   const f = await fixture(t);
-  const same = await Promise.all(Array.from({ length: 30 }, () => new RuntimeLog({ env: f.env }).write('RUNNER_STARTED')));
-  assert.ok(same.every(x => x.ok), JSON.stringify({ step: 'instances.write', failures: same.filter(x => !x.ok).map(x => x.code) }));
+  const faults = []; const fsApi = { ...fs };
+  for (const method of ['open', 'rename', 'lstat', 'unlink']) fsApi[method] = async (...args) => {
+    try { return await fs[method](...args); }
+    catch (error) {
+      if (['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) faults.push({ step: `${method}.${['runtime.jsonl', 'runtime.previous.jsonl', 'runtime.pending.tmp', 'runtime.owner.json', 'runtime.owner.json.lock'].includes(path.basename(args[0])) ? path.basename(args[0]) : 'directory'}`, code: error.code });
+      throw error;
+    }
+  };
+  const same = await Promise.all(Array.from({ length: 30 }, () => new RuntimeLog({ env: f.env, fsApi }).write('RUNNER_STARTED')));
+  assert.ok(same.every(x => x.ok), JSON.stringify({ step: 'instances.write', failures: same.filter(x => !x.ok).map(x => x.code), faults }));
   const module = pathToFileURL(path.join(repo, 'workflow/tools/lib/runtime_logging.mjs')).href;
   const code = `import {RuntimeLog} from ${JSON.stringify(module)};import fs from 'node:fs/promises';import path from 'node:path';
     let first;const step=file=>['runtime.jsonl','runtime.previous.jsonl','runtime.pending.tmp','runtime.owner.json','runtime.owner.json.lock'].includes(path.basename(file||''))?path.basename(file):'directory';
-    const fsApi={...fs,lstat:async file=>{const stat=await fs.lstat(file);if(stat.isFile()&&stat.nlink!==1)first||={step:'lstat.'+step(file),code:'LOG_LINK_COUNT_UNSAFE'};return stat;}};
+    const fsApi={...fs};
+    for(const method of ['open','rename','unlink','lstat','stat','realpath','mkdir','chmod'])fsApi[method]=async(...args)=>{
+      try{const result=await fs[method](...args);if(method==='lstat'&&result.isFile()&&result.nlink!==1)first={step:'lstat.'+step(args[0]),code:'LOG_LINK_COUNT_UNSAFE'};return result;}
+      catch(error){if(['EPERM','EACCES','EBUSY'].includes(error.code))first={step:method+'.'+step(args[0]),code:'FS_'+error.code};throw error;}
+    };
     class Probe extends RuntimeLog {async safe(file,options){try{return await super.safe(file,options);}catch{first||={step:'safe.'+step(file),code:'LOG_PATH_UNSAFE'};throw new Error('LOG_PATH_UNSAFE');}}}
     const log=new Probe({fsApi});for(let i=0;i<20;i++){const result=await log.write('RUNNER_STARTED');if(!result.ok){console.log(JSON.stringify(first||{step:'write',code:result.code}));process.exitCode=1;break;}}`;
   const children = await Promise.allSettled([runNode(['--input-type=module', '-e', code], f.env), runNode(['--input-type=module', '-e', code], f.env)]);

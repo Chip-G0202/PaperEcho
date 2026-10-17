@@ -2,6 +2,7 @@
 const main = document.querySelector('#content');
 const notice = document.querySelector('#notice');
 let csrf = '';
+let supportExportBusy = false;
 let page = 'home';
 let feedbackView = 'rating';
 let researchDraft = '';
@@ -253,11 +254,49 @@ async function home() {
   if (status.integrity) main.append(el('p', `完整性提醒：新撤稿 ${status.integrity.newlyConfirmedRetractions ?? 0} · 更正 ${status.integrity.newCorrections ?? 0} · 关注声明 ${status.integrity.newExpressionsOfConcern ?? 0}`, 'meta'));
 }
 function empty(title, text) { const box = el('section', undefined, 'empty-state'); box.append(el('h3', title), el('p', text)); main.append(box); }
+async function downloadSupportBundle() {
+  const name = 'paperecho-support.zip'; let handle;
+  if (!navigator.userAgent.includes('Electron/') && typeof window.showSaveFilePicker === 'function') handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'PaperEcho 诊断包', accept: { 'application/zip': ['.zip'] } }] });
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch('/api/support-bundle', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: '{}', signal: controller.signal });
+    const length = Number(response.headers.get('content-length'));
+    if (!response.ok || response.headers.get('content-type') !== 'application/zip' || !Number.isSafeInteger(length) || length < 1 || length > 65536) throw new Error('SUPPORT_EXPORT_FAILED');
+    const blob = await response.blob();
+    if (blob.size !== length) throw new Error('SUPPORT_EXPORT_FAILED');
+    if (handle) {
+      const writable = await handle.createWritable();
+      try { await writable.write(blob); await writable.close(); }
+      catch (error) { await writable.abort().catch(() => {}); throw error; }
+      return '诊断包已保存。';
+    }
+    const url = URL.createObjectURL(blob); const link = el('a'); link.href = url; link.download = name;
+    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+    return '诊断包下载已发起，请在浏览器或桌面保存对话框确认；取消保存不会上传文件。';
+  } finally { clearTimeout(timer); }
+}
 async function system() {
   main.append(pageIntro('系统健康 · System Health', '只读本地检查；不会连接外部服务、修改权限、恢复工作流或显示凭据。'));
   const facts = el('dl', undefined, 'status-list');
   for (const [name, value] of [['版本', 'PaperEcho v2.5'], ['本地服务', '已响应 · 仅本机访问']]) facts.append(el('dt', name), el('dd', value));
   main.append(facts);
+  const support = el('section', undefined, 'settings-section');
+  const supportState = el('p', '尚未导出。', 'meta'); supportState.setAttribute('role', 'status'); supportState.setAttribute('aria-live', 'polite'); supportState.dataset.supportStatus = 'idle';
+  const exportButton = button('导出诊断包', async () => {
+    if (supportExportBusy) return;
+    const restoreFocus = document.activeElement === exportButton;
+    supportExportBusy = true; exportButton.disabled = true; supportState.dataset.supportStatus = 'busy'; support.setAttribute('aria-busy', 'true');
+    supportState.textContent = '正在生成安全诊断包…';
+    try { supportState.textContent = await downloadSupportBundle(); supportState.dataset.supportStatus = 'success'; }
+    catch (error) { supportState.dataset.supportStatus = 'failed'; supportState.textContent = error.name === 'AbortError' ? '已取消选择或导出超时；没有上传文件，可稍后重试。' : '无法安全导出或保存诊断包；请检查本地凭据安全状态、保存权限后重试。原健康检查结果保持不变。'; }
+    finally {
+      supportExportBusy = false; exportButton.disabled = false; main.querySelectorAll('[data-support-export]').forEach(node => { node.disabled = false; }); support.removeAttribute('aria-busy');
+      if (restoreFocus && exportButton.isConnected && document.activeElement === document.body) exportButton.focus({ preventScroll: true });
+    }
+  });
+  exportButton.dataset.supportExport = ''; exportButton.disabled = supportExportBusy;
+  support.append(el('h3', '本地诊断包'), el('p', '仅包含版本、运行环境、健康检查状态及有限事件统计；不包含 Secret、用户目录、研究正文或原始日志。仅在主动操作后生成，由你选择保存位置，不自动上传。'), exportButton, supportState);
+  main.append(support);
   const results = el('section', undefined, 'settings-section doctor-results'); results.setAttribute('aria-live', 'polite');
   const refresh = button('检查 / 刷新健康状态', async () => {
     results.setAttribute('aria-busy', 'true');

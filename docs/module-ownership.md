@@ -19,6 +19,7 @@ Runtime logging：`workflow/tools/lib/runtime_logging.mjs` 独占固定运行事
 
 Control Center application boundary：
 
+- `control_support_bundle_service.mjs`：用户主动导出的只读诊断投影与内存 ZIP owner；复用 Doctor、RuntimeLog 固定事件、SecretService 和 Runtime Root。受保护 POST 返回下载，不保存诊断副本、不上传、不创建平行状态或日志系统；schema/限制见 [配置指南](configuration.md#support-bundle)。
 - `workflow/tools/lib/control_application_services.mjs`：组合 services；研究反馈提交只调用 `research_evaluation_service.mjs` 持久保存，不即时调用 LLM。
 - `research_evaluation_service.mjs`：原 `research_evaluations` 事件生命周期及 run-scoped 准备/发布 owner；复用 `manual_standard_evaluation.mjs` 的 prepare-only 核心与统一 suggestion owner，不创建第二套建议队列。
 - `control_feedback_service.mjs`：canonical paper feedback history/current、幂等提交和批量原子写入；`control_legacy_feedback_adapter.mjs`：单向 XLSX import。

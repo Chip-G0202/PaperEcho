@@ -81,6 +81,16 @@ Control Center 的“系统”页提供显式的“检查 / 刷新健康状态�
 
 验证：`node --test workflow/tests/control_doctor.test.mjs`，加 preflight、runtime、Secret、安全、ledger/recovery、研究反馈和 HTTP/UI 回归；打包 GUI/Headless 使用 `npm run smoke:packaged --prefix desktop/electron-poc`，检查显式刷新、三尺寸、空 PATH 和 Doctor 前后数据快照不变。Windows Installer Phase 3A 仍为 Blocked；Phase 5/6 未实施。
 
+## Support Bundle
+
+System Health 的“导出诊断包”仅由用户主动触发。`POST /api/support-bundle` 接受空 JSON，复用 loopback、Host、session、Origin、CSRF 与 body 限制；普通 Doctor GET 不生成包。下载使用用户选择的保存位置，不上传。服务端只在内存构造 ZIP，不创建临时下载 URL 或磁盘诊断副本；浏览器下载发起不等同于用户已确认保存。
+
+schema v1 固定四个 UTF-8 JSON：`manifest.json`、`doctor-summary.json`、`runtime-summary.json`、`log-events-summary.json`。只投影版本/平台/运行模式、Doctor checkId/status/severity、注册的错误码及固定日志事件统计；不复制 Doctor 对象或原始日志。缺失证据保持 UNKNOWN/omitted；Secret 安全检查不明确或最终内容安全校验失败时拒绝导出。Secret、用户绝对路径、用户名、研究正文、配置全文、ledger/receipt 原文和异常栈均不在白名单内。
+
+限制：4 个文件，单文件 32 KiB，总解压内容与 ZIP 各 64 KiB，最多 100 项 Doctor 检查和最近 200 条日志事件，导出响应时限 10 秒。每个服务实例仅允许一个在途导出；取消或超时后，正在进行的只读检查结束前不释放名额。日志读取失败或轮转期间无法取得完整记录时明确 omitted，不修改或轮转日志。manifest 记录导出时间、限制及三个内容文件的大小和 SHA256；manifest 不自哈希，包未签名，SHA256 仅用于内容完整性检查，不证明来源。
+
+验证：`node --test workflow/tests/control_support_bundle.test.mjs`，配合 Doctor、RuntimeLog、Secret、HTTP、runtime 与 UI 回归；`npm run smoke:packaged --prefix desktop/electron-poc` 验证真实三尺寸 POST、原生下载、ZIP 解包/hash、键盘焦点及独立 Headless。Electron smoke 跨进程求值只返回可序列化值；修改函数属性的测试脚本以 `void 0` 结束。异步导出等待下载事件和页面状态，不用固定延时猜测完成。按钮禁用后只在原控件仍连接且焦点退回 body 时恢复焦点，不抢走用户已选择的其它控件。macOS 未实测，Phase 3A 仍为 Blocked。
+
 ## RuntimeLog 与日志轮转
 
 `workflow/tools/lib/runtime_logging.mjs` 是 Runner、GUI、Headless 的共享运行日志 owner，复用 Runtime Root、`atomic_json.mjs` 和 Secret registry，不替代业务审计。Dev/Portable/Installed 均写入 `<User Data Root>/logs`，不由 cwd 选择，不向 Installed 程序目录或 `app.asar` 写入。

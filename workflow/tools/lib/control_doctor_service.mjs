@@ -22,13 +22,15 @@ export class DoctorService {
   constructor({ config, secrets, research, review, context, env, fsApi = fs, preflight = runPreflight }) {
     Object.assign(this, { config, secrets, research, review, context, env, fsApi, preflight });
   }
-  async status() {
+  async status({ signal } = {}) {
     const checks = [];
     const add = (checkId, status, summary, actionableHint = '', blocking = false) => checks.push({ checkId, status,
       severity: blocking ? 'blocking' : status === 'PASS' ? 'info' : 'advisory', summary, actionableHint, blocking });
     const inspect = async (id, task, blocking = false, milliseconds = 2500) => {
+      signal?.throwIfAborted();
       try { await bounded(task, milliseconds); }
       catch { add(id, 'UNKNOWN', '无法安全完成此项检查', '检查本地文件访问条件后手动刷新；不会自动修复或重试业务操作。', blocking); }
+      signal?.throwIfAborted();
     };
     let paths;
     await inspect('runtime.roots', async () => {

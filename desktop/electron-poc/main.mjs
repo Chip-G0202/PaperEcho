@@ -2,7 +2,7 @@ import { app, BrowserWindow, session } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { sandboxWorkspace, acquireServer, allowedDocument, preferences, failurePage } from './shell.mjs';
+import { sandboxWorkspace, acquireServer, allowedDocument, allowedSupportDownload, preferences, failurePage } from './shell.mjs';
 let runtimeLog;
 
 export async function prepareShell({ workspace } = {}) {
@@ -44,7 +44,12 @@ export async function startShell({ root, show = true } = {}) {
   const partition = session.fromPartition('paperecho-poc'); // Memory-only cookies, no shared browser profile.
   partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   partition.setPermissionCheckHandler(() => false);
-  partition.on('will-download', event => event.preventDefault());
+  partition.on('will-download', (event, item, source) => {
+    const allowed = source === window?.webContents && allowedSupportDownload({ url: item.getURL(), mime: item.getMimeType(),
+      filename: item.getFilename(), bytes: item.getTotalBytes(), documentURL: source.getURL() }, origin);
+    if (!allowed) { event.preventDefault(); return; }
+    item.setSaveDialogOptions({ title: '保存 PaperEcho 诊断包', filters: [{ name: 'ZIP 诊断包', extensions: ['zip'] }] });
+  });
   window = new BrowserWindow({ width: 1366, height: 768, minWidth: 390, minHeight: 600, show, autoHideMenuBar: true, webPreferences: { ...preferences, session: partition } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('render-process-gone', () => { void runtimeLog?.write('GUI_RENDERER_GONE', { subsystem: 'gui' }); });

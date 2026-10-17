@@ -3,8 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
-import { sandboxWorkspace, sandboxBase, acquireServer, allowedDocument, preferences } from '../../desktop/electron-poc/shell.mjs';
+import { sandboxWorkspace, sandboxBase, acquireServer, allowedDocument, allowedSupportDownload, preferences } from '../../desktop/electron-poc/shell.mjs';
 process.env.PAPERECHO_SKIP_DOTENV = '1';
+test('only bounded same-origin support ZIP blobs may use the desktop save dialog', () => {
+  const origin = 'http://127.0.0.1:8765';
+  const input = { url: `blob:${origin}/dummy-id`, documentURL: origin + '/#system', mime: 'application/zip', filename: 'paperecho-support.zip', bytes: 2048 };
+  assert.equal(allowedSupportDownload(input, origin), true);
+  for (const invalid of [{ url: 'https://example.invalid/file.zip' }, { url: 'blob:http://127.0.0.1:9999/dummy' }, { filename: '../paperecho-support.zip' }, { filename: 'other.zip' }, { mime: 'text/html' }, { bytes: 0 }, { bytes: 65537 }, { documentURL: origin + '/api/session' }]) assert.equal(allowedSupportDownload({ ...input, ...invalid }, origin), false);
+});
 const { requestLocal } = await import('../../workflow/tools/web/launcher.mjs');
 async function fixture(t) {
   await fs.mkdir(sandboxBase, { recursive: true });

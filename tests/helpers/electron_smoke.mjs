@@ -8,6 +8,8 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { prepareShell, startShell } from '../../desktop/electron-poc/main.mjs';
 import { sandboxBase, allowedDocument, failurePage } from '../../desktop/electron-poc/shell.mjs';
+import JSZip from 'jszip';
+import { createHash } from 'node:crypto';
 export async function smoke({ root, outputRoot = sandboxBase, prepare = true, startShellImpl = startShell } = {}) {
 const began = performance.now();
 let shell;
@@ -80,6 +82,39 @@ try {
         assert.ok(await evaluate("['PASS','WARN','FAIL','UNKNOWN'].includes(document.querySelector('.doctor-results').dataset.doctorStatus)"));
         assert.equal(await evaluate("document.querySelector('.doctor-results').textContent.includes('dummy-external')"), false);
         report.checks.push(`Doctor explicit read-only diagnostics ${width}`);
+        const checkCount = await evaluate("document.querySelectorAll('[data-check-id]').length");
+        assert.equal(await evaluate("document.querySelector('[data-support-status]').dataset.supportStatus"), 'idle');
+        if (width === 1366) {
+          await evaluate("window.__supportFetch = window.fetch; window.fetch = (url, options) => url === '/api/support-bundle' ? Promise.resolve(new Response('{}', {status:400,headers:{'Content-Type':'application/json'}})) : window.__supportFetch(url, options); void 0");
+          await evaluate("document.querySelector('[data-support-export]').click()");
+          await until("document.querySelector('[data-support-status]').dataset.supportStatus === 'failed'");
+          await evaluate("window.fetch = window.__supportFetch; delete window.__supportFetch");
+          assert.equal(await evaluate("document.querySelectorAll('[data-check-id]').length"), checkCount);
+        }
+        const zipPath = path.join(outputRoot, `support-${width}.zip`);
+        const downloaded = new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('SUPPORT_DOWNLOAD_TIMEOUT')), 15000);
+          wc.session.once('will-download', (event, item, source) => {
+            try {
+              assert.equal(event.defaultPrevented, false); assert.equal(source, wc); assert.equal(item.getFilename(), 'paperecho-support.zip');
+              assert.equal(item.getSaveDialogOptions().filters[0].extensions[0], 'zip');
+              item.setSavePath(zipPath);
+              item.once('done', (_event, state) => { clearTimeout(timer); state === 'completed' ? resolve() : reject(new Error('SUPPORT_DOWNLOAD_FAILED')); });
+            } catch (error) { clearTimeout(timer); reject(error); }
+          });
+        });
+        await wc.executeJavaScript("document.querySelector('[data-support-export]').focus(); document.querySelector('[data-support-export]').click()", true);
+        await downloaded; await until("document.querySelector('[data-support-status]').dataset.supportStatus === 'success'");
+        const zipBytes = await fs.readFile(zipPath); assert.ok(zipBytes.length <= 65536);
+        const bundle = await JSZip.loadAsync(zipBytes, { checkCRC32: true }); assert.equal(Object.keys(bundle.files).length, 4);
+        const manifest = JSON.parse(await bundle.file('manifest.json').async('string'));
+        for (const file of manifest.files) {
+          const bytes = await bundle.file(file.name).async('nodebuffer'); assert.equal(bytes.length, file.size); assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256);
+          assert.ok(!bytes.includes(Buffer.from(root))); assert.ok(!bytes.includes(Buffer.from('PoC dummy paper')));
+        }
+        assert.equal(await evaluate("document.querySelectorAll('[data-check-id]').length"), checkCount);
+        assert.equal(await evaluate("document.activeElement?.matches('[data-support-export]')"), true, 'support export keyboard focus after download');
+        report.checks.push(`Support ZIP download and integrity ${width}`);
       }
       const state = await evaluate("({ title: document.querySelector('#page-title').textContent, error: document.querySelector('#notice').dataset.kind === 'error' ? document.querySelector('#notice').textContent : '', overflow: document.documentElement.scrollWidth > innerWidth + 1, text: document.querySelector('#content').textContent.length, passwords: [...document.querySelectorAll('input[type=password]')].map(x=>x.value) })");
       assert.equal(state.error, '', route); assert.ok(state.text > 10, route); assert.equal(state.overflow, false, `${route} width ${width}`);
@@ -115,7 +150,7 @@ try {
   window.close();
 } catch (error) {
   await shell?.lease?.close();
-  writeFileSync(path.join(outputRoot, 'smoke-failure.json'), JSON.stringify({ code: error.code || error.message, stack: error.stack?.split('\n').slice(0, 3) }));
+  writeFileSync(path.join(outputRoot, 'smoke-failure.json'), JSON.stringify({ code: error.code || error.message, location: error.stack?.match(/electron_smoke\.mjs:\d+:\d+/)?.[0], completedChecks: report.checks, lastView: report.views?.at(-1), stack: error.stack?.split('\n').slice(0, 3) }));
   app.exit(1);
 }
 }

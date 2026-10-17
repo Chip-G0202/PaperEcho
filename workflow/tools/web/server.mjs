@@ -102,6 +102,18 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       if (req.headers.origin !== `http://${req.headers.host}`) return send(403, { error: 'ORIGIN_REJECTED' });
       if (!equal(req.headers['x-csrf-token'], token)) return send(403, { error: 'CSRF_REQUIRED' });
       const input = await body(req);
+      if (decoded === '/api/support-bundle') {
+        if (url.search || Object.keys(input).length) return send(400, { error: 'SUPPORT_INPUT_INVALID' });
+        const controller = new AbortController();
+        const cancel = () => { if (!res.writableFinished) controller.abort(); };
+        res.once('close', cancel); req.once('aborted', cancel);
+        try {
+          const zip = await services.supportBundle.export({ signal: controller.signal });
+          if (controller.signal.aborted || res.destroyed) return;
+          res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="paperecho-support.zip"', 'Content-Length': zip.length });
+          return res.end(zip);
+        } finally { res.off('close', cancel); req.off('aborted', cancel); }
+      }
       if (decoded === '/api/notifications/test') return send(200, await services.notifications.test(input));
       if (decoded === '/api/shutdown') {
         res.once('finish', () => {
