@@ -328,7 +328,7 @@ export async function releaseRunLease(lease, { fsApi = fs } = {}) {
   return { released: true };
 }
 
-export async function acquireWorkflowLease({ runRoot, runId, profile, ttlMs = 60_000, ownerId = randomUUID() }, dependencies = {}) {
+export async function acquireWorkflowLease({ runRoot, runId, profile, ttlMs = 60_000, ownerId = randomUUID(), allowTakeover = true }, dependencies = {}) {
   const fsApi = dependencies.fsApi || fs;
   const clock = dependencies.clock || (() => new Date());
   const hostname = dependencies.hostname || os.hostname();
@@ -360,6 +360,7 @@ export async function acquireWorkflowLease({ runRoot, runId, profile, ttlMs = 60
       if (attempt < 4) { await new Promise((resolve) => setTimeout(resolve, 5)); continue; }
       throw new Error("WORKFLOW_LEASE_UNREADABLE");
     }
+    if (!allowTakeover) return { acquired: false, reason: 'existing_workflow_lease', leasePath };
     if (previous.schemaVersion !== RUN_LEASE_SCHEMA_VERSION || !previous.runId) throw new Error("WORKFLOW_LEASE_INVALID");
     const expired = Date.parse(previous.expiresAt || 0) <= now.getTime();
     if (!expired || ownerAlive(previous, { hostname, processAlive })) return { acquired: false, reason: "active_lease", leasePath, lease: previous, takeover: null };

@@ -7,6 +7,7 @@ import { CONTROL_SECRET_NAMES, credentialOrigin, markLocalCredential, redactSecr
 import { secureCredentialFile, credentialSecurityRuntimeAvailable } from './credential_file_security.mjs';
 import { resolveRuntimePaths, assertRuntimeDataPath } from './runtime_config.mjs';
 export { CONTROL_SECRET_NAMES } from './credential_registry.mjs';
+export { inspect as inspectCredentialText };
 
 // Editing supports a strict subset of the existing loader's single-line format.
 // Unknown entries are preserved byte-for-byte; ambiguous files fail closed.

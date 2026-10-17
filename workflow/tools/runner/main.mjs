@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { watchProductionChild } from "./child_watchdog.mjs";
-import { writeAtomicJson } from "../lib/atomic_json.mjs";
+import { writeAtomicJson, withAtomicJsonLock } from "../lib/atomic_json.mjs";
 import { terminalWorkflowStatus, workflowLedgerStatus } from "../lib/orchestrator_status.mjs";
 import { finishRunGroup } from "../lib/runtime_housekeeping.mjs";
 import { OperationLedgerStore } from "../recovery/operation_ledger.mjs";
@@ -93,6 +93,10 @@ function notificationSummary(result) {
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
+  if (argv.includes('--backup') || argv.includes('--verify-backup')) {
+    const { backupMain } = await import('./backup.mjs');
+    return backupMain(argv, dependencies);
+  }
   if (argv.includes('--doctor')) {
     const { doctorMain } = await import('./doctor.mjs');
     return doctorMain(argv, dependencies);
@@ -157,6 +161,9 @@ async function executeMain(argv, dependencies) {
   if (options.action === "check") return EXIT_CODES.success;
 
   const plan = (dependencies.buildExecutionPlanImpl || buildExecutionPlan)(options, runtimeDependencies);
+  // Parent completion can still write ledger/receipts after the child exits.
+  // Backup takes this admission lock before taking workflow leases.
+  const execute = async () => {
   dependencies.logRunId = plan.runId;
   await dependencies.runtimeLog.write('RUNNER_ADMITTED', { runId: plan.runId });
   let processResult;
@@ -213,6 +220,8 @@ async function executeMain(argv, dependencies) {
   const validation = await (dependencies.validateProductionResultImpl || validateProductionResult)({ options, plan, processResult, fsApi: dependencies.fsApi });
   stdout.write(`${JSON.stringify({ type: "result", ...validation })}\n`);
   return validation.exitCode;
+  };
+  return plan.runRoot ? withAtomicJsonLock(path.join(plan.runRoot, '.runner.operation'), execute, { timeoutMs: 0, staleMs: Infinity, metadata: { owner: 'paperecho-runner' } }) : execute();
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {

@@ -17,6 +17,8 @@ Packaged runtime：`desktop/electron-poc/package-win.mjs` 负责构建 allowlist
 
 Runtime logging：`workflow/tools/lib/runtime_logging.mjs` 独占固定运行事件、日志 ownership、跨进程写入与 1 MiB × 2 轮转；复用 `runtime_config.mjs` 的 `logsRoot`、`atomic_json.mjs` 和 `credential_registry.mjs`。Runner/GUI/Headless 只提交安全事件，Doctor 只读检查健康状态；业务 ledger、receipt、feedback、研究结果仍由原 owner 管理，不受日志轮转影响。契约与测试命令见 [配置指南](configuration.md#runtimelog-与日志轮转)。
 
+User data backup：`workflow/tools/lib/backup_service.mjs` 持有数据 owner 清单、一致性编排、安全发布与只读 Verify；`backup_format.mjs` 持有版本化加密容器和完整性校验，`runner/backup.mjs` 仅负责显式 CLI 与密码输入。复用 Runtime Root、Config/Secret 校验、writer lock 和 workflow lease，不替代原业务状态 owner，不复用诊断包白名单，也不执行 Restore。契约与测试见 [配置指南](configuration.md#用户数据备份与-verify)。
+
 Control Center application boundary：
 
 - `control_support_bundle_service.mjs`：用户主动导出的只读诊断投影与内存 ZIP owner；复用 Doctor、RuntimeLog 固定事件、SecretService 和 Runtime Root。受保护 POST 返回下载，不保存诊断副本、不上传、不创建平行状态或日志系统；schema/限制见 [配置指南](configuration.md#support-bundle)。

@@ -81,6 +81,22 @@ Control Center 的“系统”页提供显式的“检查 / 刷新健康状态�
 
 验证：`node --test workflow/tests/control_doctor.test.mjs`，加 preflight、runtime、Secret、安全、ledger/recovery、研究反馈和 HTTP/UI 回归；打包 GUI/Headless 使用 `npm run smoke:packaged --prefix desktop/electron-poc`，检查显式刷新、三尺寸、空 PATH 和 Doctor 前后数据快照不变。Windows Installer Phase 3A 仍为 Blocked；Phase 5/6 未实施。
 
+## 用户数据备份与 Verify
+
+源码入口为 `node workflow/tools/runner/main.mjs --backup "<绝对输出路径>.pebackup"` 或 `--verify-backup "<绝对输入路径>.pebackup"`；打包版使用 `PaperEcho-headless.cmd` 加同样参数，不需要系统 Node/npm。两种操作与 workflow 参数互斥，不启动 GUI、Doctor 或外部服务。交互终端密码不回显；自动化仅接受显式 `--password-stdin` 管道，不接受密码参数或环境变量。密码长度为 12–1024 个 UTF-8 字节，不落盘；调用方不得把密码写进命令、日志或脚本。
+
+备份需要有效的 canonical config，复用 Runtime Root 与正式 resolver。Portable/Installed 从 User Data Root 选择数据，Dev 只选择既有配置、研究/审核/结果/恢复状态和已配置的 Local 输入，不扫描程序源码。正式 owner 包含 Config、本地 `.env`、研究反馈与规则、审核历史、工作流结果、run manifest、ledger、receipt、recovery 和 Local state；manifest 记录各类文件数量及每个文件的相对路径、大小和 SHA256。外部注入凭据只记录变量名，不读取其值；已配置 owner 位于数据根之外时拒绝备份，不静默漏备或自动迁移。日志、已知可重建缓存及活动锁/lease 排除并说明原因；合法 runId 为 `tmp` 或 `cache` 的业务状态仍保留。
+
+容器 `PEBK0001` 使用 scrypt（N=32768、r=8、p=1）派生 256-bit key，随机 16-byte salt、12-byte nonce，AES-256-GCM 和 16-byte tag；头部作为 AAD，manifest 与文件内容一起加密。schemaVersion 1 / restoreContract 1 记录相对 root 映射、owner 清单、排除项、兼容信息与恢复约束。它包含用户数据和本地 Secret，必须作为私密备份保管，不能当作 Support Bundle 分享。
+
+上限为 20,000 个文件、单文件 64 MiB、文件总量 256 MiB、manifest 8 MiB；超限明确拒绝，不截断内容。文件读取检查身份、大小、mtime/ctime，禁止 traversal、symlink/junction、hardlink 与不安全路径。输出必须为数据根和程序根之外的绝对路径，且目标不存在。仅加密字节写入受保护的同目录临时文件，完成同步、自验证和源文件复核后独占发布；不覆盖已有文件，失败清理本次临时产物，不放宽源 Secret ACL。
+
+一致性策略为 `quiescent-owner-locks-and-double-read`：先取得正式 writer locks（含 Runner admission），再取得 workflow lease，不接管已有活动或陈旧 lease；Local 运行登记和 lease 使用同一个 runId，覆盖失败清理。源文件重复核对，变化时拒绝发布。它是协作 owner 协议，不是操作系统文件系统快照；备份前须关闭旧版执行程序和不遵守锁的编辑器。业务文件字节、权限和文件 mtime 不变，临时锁创建/删除会改变父目录的目录项时间。
+
+Verify 不解析现有数据根、不加载 `.env`、不创建目录或解密副本；先验证 AEAD，再验证 manifest、路径、文件大小/SHA256、Config/Secret/ledger 格式与兼容约束。错误密码、篡改、缺失内容或不兼容均拒绝。成功仍为 `restoreReady:false`、`requiresRestorePlanning:true`，不能冒充已完成恢复演练；未来 Restore 必须重新映射路径、验证 Secret ACL 和兼容性，绝不能重新激活 claim/lease。本阶段不执行 Restore。
+
+验证：`node --test workflow/tests/backup.test.mjs`，配合 Local、Secret、Runtime Root、Runner 与 ledger/recovery 回归。Local fixture 必须符合真实 Import 的“标题 + 稳定身份”契约，标题单独存在仍应被拒绝。Windows 使用已校验的本地 Electron ZIP 执行 `npm run package:win --prefix desktop/electron-poc`，随后 `npm run smoke:packaged --prefix desktop/electron-poc`，验证空 PATH、仓库外 cwd 下的真实 packaged Backup/Verify、源数据快照和独立 Headless。macOS 未实测；Phase 3A 仍为 Blocked。
+
 ## Support Bundle
 
 System Health 的“导出诊断包”仅由用户主动触发。`POST /api/support-bundle` 接受空 JSON，复用 loopback、Host、session、Origin、CSRF 与 body 限制；普通 Doctor GET 不生成包。下载使用用户选择的保存位置，不上传。服务端只在内存构造 ZIP，不创建临时下载 URL 或磁盘诊断副本；浏览器下载发起不等同于用户已确认保存。

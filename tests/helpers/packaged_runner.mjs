@@ -30,10 +30,11 @@ const env = { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, CO
   ...(process.env.PWSH_PATH ? { PWSH_PATH: process.env.PWSH_PATH } : {}),
   PATH: '', PAPERECHO_LAYOUT: 'installed', PAPERECHO_DATA_ROOT: data, PAPERECHO_SKIP_DOTENV: '1', TEMP: path.join(data, '.cache/tmp'), TMP: path.join(data, '.cache/tmp') };
 await fs.mkdir(env.TEMP, { recursive: true });
-async function run(command, args, overrides = {}, shell = false) {
+async function run(command, args, overrides = {}, shell = false, input = '') {
   const began = performance.now();
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: os.tmpdir(), env: { ...env, ...overrides }, shell, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd: os.tmpdir(), env: { ...env, ...overrides }, shell, windowsHide: true, stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    if (input) child.stdin.end(input);
     let output = ''; const timer = setTimeout(() => { child.kill(); reject(new Error('PACKAGED_TIMEOUT')); }, 60000);
     child.stdout.on('data', b => output += b); child.stderr.on('data', b => output += b);
     child.once('error', error => { clearTimeout(timer); reject(error); });
@@ -82,11 +83,11 @@ assert.equal(check.code, 0, 'headless wrapper: ' + check.output);
 const preflight = check.output.split(/\r?\n/).filter(x => x.startsWith('{')).map(x => JSON.parse(x)).find(x => x.type === 'preflight');
 assert.equal(preflight?.canRun, true); assert.deepEqual(preflight.requiredMissing, []);
 assert.equal(preflight.mode, 'local'); assert.ok(preflight.readiness.some(x => x.name === 'production_entry' && x.status === 'ready'));
-async function dataSnapshot(directory) {
+async function dataSnapshot(directory, { directoryTimes = true } = {}) {
   const entries = {};
   async function visit(dir) { for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
     const file = path.join(dir, entry.name); const stat = await fs.stat(file);
-    entries[path.relative(directory, file)] = [stat.mode, stat.mtimeMs, entry.isDirectory() ? null : createHash('sha256').update(await fs.readFile(file)).digest('hex')];
+    entries[path.relative(directory, file)] = [stat.mode, entry.isDirectory() && !directoryTimes ? null : stat.mtimeMs, entry.isDirectory() ? null : createHash('sha256').update(await fs.readFile(file)).digest('hex')];
     if (entry.isDirectory()) await visit(file);
   } }
   await visit(directory); return entries;
@@ -142,6 +143,21 @@ for (const root of loggingRoots) {
   assert.equal(new Set(records.map(record => record.eventId)).size, records.length);
 }
 assert.deepEqual(await inventory(application), before, 'application directory was modified');
+// Existing writer locks change only their parent directory entry timestamps.
+// Preserve names/modes and every file's bytes/mtime; Doctor still checks all times.
+const backupBefore = await dataSnapshot(data, { directoryTimes: false });
+const backupOutput = path.join(fixture, '用户 备份.pebackup');
+const backup = await run('"' + cmd + '"', ['--backup', '"' + backupOutput + '"', '--password-stdin'], {}, true, 'dummy-packaged-backup-password\n');
+assert.equal(backup.code, 0, 'packaged backup failed: ' + backup.output);
+assert.equal(JSON.parse(backup.output).status, 'created');
+const verifyRoot = path.join(fixture, 'verify-no-workspace');
+const verify = await run('"' + cmd + '"', ['--verify-backup', '"' + backupOutput + '"', '--password-stdin'], { PAPERECHO_DATA_ROOT: verifyRoot }, true, 'dummy-packaged-backup-password\n');
+assert.equal(verify.code, 0, 'packaged verify failed: ' + verify.output);
+assert.equal(JSON.parse(verify.output).authenticated, true);
+assert.equal(JSON.parse(verify.output).restoreReady, false);
+await assert.rejects(fs.access(verifyRoot));
+assert.deepEqual(await dataSnapshot(data, { directoryTimes: false }), backupBefore, 'backup/verify changed source user state');
+for (const process of [backup, verify]) assert.throws(() => globalThis.process.kill(process.pid, 0), 'backup/verify orphan process');
 for (const run of [gui, check, probe, bad, nodeOptions]) assert.throws(() => process.kill(run.pid, 0));
 const sizes = await Promise.all(Object.keys(before).map(f => fs.stat(path.join(application, f))));
 await fs.writeFile(path.join(fixture, 'report.json'), JSON.stringify({ application, data, sizeBytes: sizes.reduce((n, s) => n + s.size, 0), fileCount: sizes.length, fuses: wire, gui: { startupMs: report.startupMs, idleWorkingSetMiB: report.idleWorkingSetMiB, views: report.views.length }, wizardReports, headless, check: { code: check.code, durationMs: check.ms }, exceptionCode: bad.code, pathEmpty: true, cwdOutsideRepo: true, noOrphans: true, applicationUnchanged: true, readOnlyApplication: true, asarIntegrityMatch: true }, null, 2));

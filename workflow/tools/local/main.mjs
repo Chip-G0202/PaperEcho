@@ -17,7 +17,7 @@ import { emailDeliveryPolicy } from '../notification/policy.mjs';
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
 import { createRunRecoveryCoordinator, resumeRunFromLedger } from "../recovery/run_recovery.mjs";
 import { buildLocalRecoveryReconcilers } from "../recovery/local_reconciliation.mjs";
-import { hashFile } from "../recovery/operation_ledger.mjs";
+import { hashFile, acquireWorkflowLease, releaseRunLease } from "../recovery/operation_ledger.mjs";
 import {
   finishRunGroup,
   recordImmediateCleanup,
@@ -64,9 +64,20 @@ function feedbackRows(events, repository) {
   });
 }
 
+async function withLocalWorkflowLease(options, dependencies, operation) {
+  if (dependencies.localWorkflowLeaseHeld || options.help) return operation(dependencies);
+  if (!options.outputRoot) throw new Error('LOCAL_OUTPUT_ROOT_REQUIRED');
+  const lease = await acquireWorkflowLease({ runRoot: path.join(path.resolve(options.outputRoot), 'runs'), runId: options.resume || options.runId || process.env.PAPERECHO_RUN_ID || 'local-' + randomUUID(), profile: 'standard' });
+  if (!lease.acquired) throw new Error('LOCAL_WORKFLOW_BUSY');
+  try { return await operation({ ...dependencies, localWorkflowLeaseHeld: true, localWorkflowRunId: lease.lease.runId }); }
+  finally { await releaseRunLease(lease); }
+}
 export async function runLocalPipeline(options = {}, dependencies = {}) {
+  return withLocalWorkflowLease(options, dependencies, deps => executeLocalPipeline(options, deps));
+}
+async function executeLocalPipeline(options = {}, dependencies = {}) {
   if (!emailDeliveryPolicy('weekly', { env: dependencies.env || process.env }).required) options = { ...options, recipient: '' };
-  const runId = options.runId || `local-${new Date().toISOString().replace(/[-:.]/g, "")}-${randomUUID().slice(0, 8)}`;
+  const runId = options.runId || dependencies.localWorkflowRunId || `local-${new Date().toISOString().replace(/[-:.]/g, "")}-${randomUUID().slice(0, 8)}`;
   const recoveryCoordinator = options.recoveryCoordinator || null;
   const startedAt = new Date().toISOString();
   const timing = dependencies.timing || new LocalTiming(runId);
@@ -354,6 +365,9 @@ export async function runLocalPipeline(options = {}, dependencies = {}) {
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
+  return withLocalWorkflowLease(parseLocalArgs(argv), dependencies, deps => executeLocalMain(argv, deps));
+}
+async function executeLocalMain(argv = process.argv.slice(2), dependencies = {}) {
   const options = parseLocalArgs(argv);
   if (options.help) {
     console.log("Usage: node workflow/tools/local/main.mjs [--output-root PATH] [--input FILE_OR_DIR] [--feedback JSONL] [--llm-mode disabled|mock|real] [--email ADDRESS] [--force-resend]\nThe sender transport must be configured by the deployer.");
@@ -394,7 +408,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
       }),
     }, dependencies);
   } else {
-    const runId = String(process.env.PAPERECHO_RUN_ID || `local-${new Date().toISOString().replace(/[-:.]/g, "")}-${randomUUID().slice(0, 8)}`);
+    const runId = String(dependencies.localWorkflowRunId || process.env.PAPERECHO_RUN_ID || `local-${new Date().toISOString().replace(/[-:.]/g, "")}-${randomUUID().slice(0, 8)}`);
     const recoveryCoordinator = await createRunRecoveryCoordinator({ runRoot, runId, mode: "local", profile, launcherId: String(process.env.PAPERECHO_LAUNCHER_ID || "local-controlled-entry"), configHash, inputHash, artifactPath: path.join(runRoot, runId, "input_artifact.json") }, dependencies);
     result = await runLocalPipeline({ ...options, runId, recoveryCoordinator }, dependencies);
   }
