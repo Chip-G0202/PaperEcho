@@ -24,7 +24,7 @@ for (const source of sources) {
 await fs.mkdir(path.join(data, 'config'), { recursive: true });
 await fs.writeFile(path.join(data, '.packaged-smoke-fixture'), 'dummy-only');
 await fs.writeFile(path.join(data, 'input.json'), JSON.stringify([{ title: 'Packaged dummy local paper', doi: '10.1234/dummy-packaged' }]));
-await fs.writeFile(path.join(data, 'config/paperecho.config.json'), JSON.stringify({ schemaVersion: 2, mode: 'local', common: { projectRoot: data, llm: { enabled: false, mode: 'disabled' }, email: { enabled: false }, radar: { enabled: true } }, local: { input: '../input.json', outputRoot: '../local' } }));
+await fs.writeFile(path.join(data, 'config/paperecho.config.json'), JSON.stringify({ schemaVersion: 2, mode: 'local', common: { projectRoot: '..', llm: { enabled: false, mode: 'disabled' }, email: { enabled: false }, radar: { enabled: true } }, local: { input: '../input.json', outputRoot: '../local' } }));
 const exe = path.join(application, 'PaperEcho.exe');
 const env = { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, COMSPEC: process.env.COMSPEC, LOCALAPPDATA: process.env.LOCALAPPDATA, USERPROFILE: process.env.USERPROFILE,
   ...(process.env.PWSH_PATH ? { PWSH_PATH: process.env.PWSH_PATH } : {}),
@@ -83,11 +83,14 @@ assert.equal(check.code, 0, 'headless wrapper: ' + check.output);
 const preflight = check.output.split(/\r?\n/).filter(x => x.startsWith('{')).map(x => JSON.parse(x)).find(x => x.type === 'preflight');
 assert.equal(preflight?.canRun, true); assert.deepEqual(preflight.requiredMissing, []);
 assert.equal(preflight.mode, 'local'); assert.ok(preflight.readiness.some(x => x.name === 'production_entry' && x.status === 'ready'));
-async function dataSnapshot(directory, { directoryTimes = true } = {}) {
+async function dataSnapshot(directory, { directoryTimes = true, temporaryRoot = '' } = {}) {
   const entries = {};
+  if (temporaryRoot) assert.ok(path.relative(directory, temporaryRoot) && !path.relative(directory, temporaryRoot).startsWith('..') && !path.isAbsolute(path.relative(directory, temporaryRoot)));
   async function visit(dir) { for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
     const file = path.join(dir, entry.name); const stat = await fs.stat(file);
-    entries[path.relative(directory, file)] = [stat.mode, entry.isDirectory() && !directoryTimes ? null : stat.mtimeMs, entry.isDirectory() ? null : createHash('sha256').update(await fs.readFile(file)).digest('hex')];
+    assert.equal((await fs.lstat(file)).isSymbolicLink(), false);
+    if (temporaryRoot && path.relative(temporaryRoot, file) === '') continue;
+    entries[path.relative(directory, file)] = [stat.mode, entry.isDirectory() && (!directoryTimes || temporaryRoot && file === path.dirname(temporaryRoot)) ? null : stat.mtimeMs, entry.isDirectory() ? null : createHash('sha256').update(await fs.readFile(file)).digest('hex')];
     if (entry.isDirectory()) await visit(file);
   } }
   await visit(directory); return entries;
@@ -145,6 +148,10 @@ for (const root of loggingRoots) {
 assert.deepEqual(await inventory(application), before, 'application directory was modified');
 // Existing writer locks change only their parent directory entry timestamps.
 // Preserve names/modes and every file's bytes/mtime; Doctor still checks all times.
+const { secureCredentialFile } = await import('../../workflow/tools/lib/credential_file_security.mjs');
+await fs.writeFile(path.join(data, '.env'), '', { flag: 'wx', mode: 0o600 });
+await secureCredentialFile(path.join(data, '.env'));
+await fs.writeFile(path.join(data, '.env'), 'SMTP_PASS=dummy-packaged-restore-value\n');
 const backupBefore = await dataSnapshot(data, { directoryTimes: false });
 const backupOutput = path.join(fixture, '用户 备份.pebackup');
 const backup = await run('"' + cmd + '"', ['--backup', '"' + backupOutput + '"', '--password-stdin'], {}, true, 'dummy-packaged-backup-password\n');
@@ -157,7 +164,29 @@ assert.equal(JSON.parse(verify.output).authenticated, true);
 assert.equal(JSON.parse(verify.output).restoreReady, false);
 await assert.rejects(fs.access(verifyRoot));
 assert.deepEqual(await dataSnapshot(data, { directoryTimes: false }), backupBefore, 'backup/verify changed source user state');
-for (const process of [backup, verify]) assert.throws(() => globalThis.process.kill(process.pid, 0), 'backup/verify orphan process');
+const restoreTarget = path.join(fixture, '全新 恢复数据');
+const restored = await run('"' + cmd + '"', ['--restore-backup', '"' + backupOutput + '"', '--target-data-root', '"' + restoreTarget + '"', '--password-stdin'], {}, true, 'dummy-packaged-backup-password\n');
+assert.equal(restored.code, 0, 'packaged restore failed: ' + restored.output);
+const restoreResult = JSON.parse(restored.output); assert.equal(restoreResult.status, 'restored'); assert.equal(restoreResult.byteIdentical, true); assert.equal(restoreResult.reactivatedClaims, false);
+const { openBackup } = await import('../../workflow/tools/lib/backup_format.mjs');
+const { validateBackupManifest } = await import('../../workflow/tools/lib/backup_service.mjs');
+const manifest = await openBackup(await fs.readFile(backupOutput), Buffer.from('dummy-packaged-backup-password'), validateBackupManifest);
+for (const file of manifest.files) assert.equal(createHash('sha256').update(await fs.readFile(path.join(restoreTarget, file.path))).digest('hex'), file.sha256);
+const { resolveRuntimePaths } = await import('../../workflow/tools/lib/runtime_config.mjs');
+const restoredPaths = resolveRuntimePaths({ applicationRoot: application, env: { ...env, PAPERECHO_DATA_ROOT: restoreTarget } });
+// PowerShell ACL inspection uses the formal Temporary Root for transient runtime
+// files. Keep strict business snapshots and require this one directory to be empty.
+const restoredBefore = await dataSnapshot(restoreTarget, { temporaryRoot: restoredPaths.tempRoot });
+const restoredDoctor = await run('"' + cmd + '"', ['--doctor'], { PAPERECHO_DATA_ROOT: restoreTarget }, true);
+const restoredReport = JSON.parse(restoredDoctor.output); assert.equal(restoredReport.canRun, false);
+assert.equal(restoredReport.checks.find(x => x.checkId === 'configuration')?.status, 'PASS'); assert.equal(restoredReport.checks.find(x => x.checkId === 'secrets')?.status, 'PASS');
+assert.deepEqual(await dataSnapshot(restoreTarget, { temporaryRoot: restoredPaths.tempRoot }), restoredBefore, 'restored Doctor wrote persistent user data');
+assert.deepEqual(await fs.readdir(restoredPaths.tempRoot), [], 'Doctor left temporary runtime files');
+const restoredCheck = await run('"' + cmd + '"', ['--check'], { PAPERECHO_DATA_ROOT: restoreTarget }, true);
+assert.notEqual(restoredCheck.code, 0, 'restored history cannot activate without review');
+for (const file of manifest.files) assert.equal(createHash('sha256').update(await fs.readFile(path.join(restoreTarget, file.path))).digest('hex'), file.sha256, 'restored check changed business data');
+assert.deepEqual(await dataSnapshot(data, { directoryTimes: false }), backupBefore, 'restore changed source workspace');
+for (const process of [backup, verify, restored, restoredDoctor, restoredCheck]) assert.throws(() => globalThis.process.kill(process.pid, 0), 'backup/restore orphan process');
 for (const run of [gui, check, probe, bad, nodeOptions]) assert.throws(() => process.kill(run.pid, 0));
 const sizes = await Promise.all(Object.keys(before).map(f => fs.stat(path.join(application, f))));
 await fs.writeFile(path.join(fixture, 'report.json'), JSON.stringify({ application, data, sizeBytes: sizes.reduce((n, s) => n + s.size, 0), fileCount: sizes.length, fuses: wire, gui: { startupMs: report.startupMs, idleWorkingSetMiB: report.idleWorkingSetMiB, views: report.views.length }, wizardReports, headless, check: { code: check.code, durationMs: check.ms }, exceptionCode: bad.code, pathEmpty: true, cwdOutsideRepo: true, noOrphans: true, applicationUnchanged: true, readOnlyApplication: true, asarIntegrityMatch: true }, null, 2));

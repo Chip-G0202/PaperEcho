@@ -146,8 +146,18 @@ test('CLI and authenticated UI share status, exit semantics, workspace isolation
   const code = await main(['--doctor'], { env: f.env, cwd: f.app, stdout: { write: text => output += text } });
   assert.deepEqual(JSON.parse(output), ui); assert.equal(code, ui.status === 'FAIL' ? 2 : ui.status === 'UNKNOWN' ? 3 : 0);
   assert.equal(check(await diagnostic(other).status(), 'configuration').status, 'FAIL'); assert.equal(check(ui, 'configuration').status, 'PASS');
-  const server = await startControlCenter({ root: f.app, context: f.context, services: f.services, port: 0 }); t.after(() => new Promise(resolve => server.server.close(resolve)));
-  assert.equal((await fetch(server.url + '/api/doctor')).status, 403);
+  let server, unauthenticated;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const candidate = await startControlCenter({ root: f.app, context: f.context, services: f.services, port: 0 });
+    try { unauthenticated = await fetch(candidate.url + '/api/doctor'); server = candidate; break; }
+    catch (error) {
+      candidate.server.closeAllConnections(); await new Promise(resolve => candidate.server.close(resolve));
+      if (error.cause?.message !== 'bad port' || attempt === 2) throw error;
+      t.diagnostic('DOCTOR_FIXTURE_FETCH_BLOCKED_PORT=' + new URL(candidate.url).port);
+    }
+  }
+  t.after(() => { server.server.closeAllConnections(); return new Promise(resolve => server.server.close(resolve)); });
+  assert.equal(unauthenticated.status, 403);
   const session = await fetch(server.url + '/api/session'); const cookie = session.headers.get('set-cookie').split(';')[0];
   const response = await fetch(server.url + '/api/doctor', { headers: { cookie } }); assert.equal(response.status, 200); assert.deepEqual(await response.json(), ui);
   assert.deepEqual(await snapshot(f.root), before);

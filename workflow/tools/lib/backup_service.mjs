@@ -65,6 +65,11 @@ export function validateBackupManifest(m) {
 export class BackupService {
   constructor({ context, env = process.env, fsApi = fs, hook = async () => {} } = {}) { Object.assign(this, { context, env, fsApi, hook }); this.active = false; }
   async verify({ input, password, signal } = {}) {
+    return this.withVerifiedContents({ input, password, signal }, m => ({ schemaVersion: 1, status: 'verified', encrypted: true, authenticated: true, files: m.files.length, bytes: m.totalBytes, restoreContract: 1,
+      restoreReady: false, requiresRestorePlanning: true, externalSecretCount: m.externalSecrets.length }), false);
+  }
+  async withVerifiedContents({ input, password, signal } = {}, operation, capture = true) {
+    const contents = new Map();
     let bytes;
     try {
       signal?.throwIfAborted(); await backupSafePath(input, this.fsApi);
@@ -76,10 +81,10 @@ export class BackupService {
           if (path.posix.basename(file.path) === 'operation_ledger.json') validateOperationLedger(JSON.parse(bytes.toString('utf8')));
           if (file.path === '.env') inspectCredentialText(bytes.toString('utf8'));
         } catch { throw backupError('BACKUP_OWNER_INVALID'); }
+        if (capture) contents.set(file.path, Buffer.from(bytes));
       }); signal?.throwIfAborted();
-      return { schemaVersion: 1, status: 'verified', encrypted: true, authenticated: true, files: m.files.length, bytes: m.totalBytes, restoreContract: 1,
-        restoreReady: false, requiresRestorePlanning: true, externalSecretCount: m.externalSecrets.length };
-    } finally { bytes?.fill(0); }
+      return await operation(m, contents);
+    } finally { bytes?.fill(0); for (const value of contents.values()) value.fill(0); }
   }
   async create({ output, password, signal } = {}) {
     if (this.active) throw backupError('BACKUP_BUSY'); this.active = true;

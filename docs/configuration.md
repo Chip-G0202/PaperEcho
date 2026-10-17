@@ -93,9 +93,21 @@ Control Center 的“系统”页提供显式的“检查 / 刷新健康状态�
 
 一致性策略为 `quiescent-owner-locks-and-double-read`：先取得正式 writer locks（含 Runner admission），再取得 workflow lease，不接管已有活动或陈旧 lease；Local 运行登记和 lease 使用同一个 runId，覆盖失败清理。源文件重复核对，变化时拒绝发布。它是协作 owner 协议，不是操作系统文件系统快照；备份前须关闭旧版执行程序和不遵守锁的编辑器。业务文件字节、权限和文件 mtime 不变，临时锁创建/删除会改变父目录的目录项时间。
 
-Verify 不解析现有数据根、不加载 `.env`、不创建目录或解密副本；先验证 AEAD，再验证 manifest、路径、文件大小/SHA256、Config/Secret/ledger 格式与兼容约束。错误密码、篡改、缺失内容或不兼容均拒绝。成功仍为 `restoreReady:false`、`requiresRestorePlanning:true`，不能冒充已完成恢复演练；未来 Restore 必须重新映射路径、验证 Secret ACL 和兼容性，绝不能重新激活 claim/lease。本阶段不执行 Restore。
+Verify 不解析现有数据根、不加载 `.env`、不创建目录或解密副本；先验证 AEAD，再验证 manifest、路径、文件大小/SHA256、Config/Secret/ledger 格式与兼容约束。错误密码、篡改、缺失内容或不兼容均拒绝。成功仍为 `restoreReady:false`、`requiresRestorePlanning:true`，不能冒充已完成恢复演练；Restore 仍须验证路径映射、Secret ACL 和兼容性，不能重新激活 claim/lease。Verify 本身不执行 Restore。
 
 验证：`node --test workflow/tests/backup.test.mjs`，配合 Local、Secret、Runtime Root、Runner 与 ledger/recovery 回归。Local fixture 必须符合真实 Import 的“标题 + 稳定身份”契约，标题单独存在仍应被拒绝。Windows 使用已校验的本地 Electron ZIP 执行 `npm run package:win --prefix desktop/electron-poc`，随后 `npm run smoke:packaged --prefix desktop/electron-poc`，验证空 PATH、仓库外 cwd 下的真实 packaged Backup/Verify、源数据快照和独立 Headless。macOS 未实测；Phase 3A 仍为 Blocked。
+
+## 恢复到全新 User Data Root
+
+源码入口：`node workflow/tools/runner/main.mjs --restore-backup "<绝对备份路径>.pebackup" --target-data-root "<绝对全新数据根>"`；打包版使用 `PaperEcho-headless.cmd` 加同样参数。密码沿用备份的隐藏终端输入或显式 `--password-stdin`，不接受密码参数或环境变量。仅验证了 Windows NTFS / PowerShell 7；其它平台安全拒绝，macOS 未实测。目标的父目录必须存在，目标本身必须不存在，空目录也不覆盖；目标不得与当前程序根、数据根重叠，不执行真实用户数据迁移。
+
+复用 AES-GCM、manifest 和 SHA256，认证全部内容后才创建私有 staging。原生句柄固定现有父目录链，拒绝 reparse point；staging 从创建起具有私有 DACL，`.env` 写入前另由正式 Secret owner 保护。逐文件同步并复核内容、路径和 ACL 后，以 NTFS 不覆盖目录 rename 发布，不降级为复制。相对配置通过正式 resolver 重新定位；仍引用旧数据绝对路径时返回 `RESTORE_PATH_MAPPING_REQUIRED`，不重写配置。外部凭据只保留变量名，需要用户另行配置。
+
+恢复保留历史文件字节，另写 `.paperecho-restore.json`，标记 `restored-history-only`、`requiresStateReview:true`、`reactivateClaims:false`。成功恢复不等于可以运行 workflow：preflight 阻止普通、scheduled 和 `--check` 自动激活历史状态；Doctor 可确认配置和 Secret，同时报告 `canRun:false`。本阶段不提供解除历史审阅门槛、覆盖恢复、回滚或断电恢复机制。发布前失败只清理本次身份核对通过的 staging；清理失败为 `RESTORE_CLEANUP_REQUIRED`，发布后检查失败为 `RESTORE_PUBLISHED_INSPECTION_REQUIRED`，均不得冒报成功。
+
+验证入口：`node --test workflow/tests/restore.test.mjs workflow/tests/backup.test.mjs`，配合 Secret、runtime、ledger/recovery、Doctor 与 Runner 回归；离线构建后用 `npm run smoke:packaged --prefix desktop/electron-poc` 验证真实内置运行时的 Backup→Verify→Restore→Doctor、逐文件 hash、历史执行阻断、源数据不变和进程退出。Doctor 业务快照只排除正式 resolver 给出的 Temporary Root，并要求诊断后其中无残留文件；PowerShell ACL 检查的临时编译文件不算业务状态。最后运行默认 `npm test`、`npm run check` 与 diff check。
+
+Windows ACL 负例在隔离 staging 的测试 `.env` 上使用 `.NET FileSystemAclExtensions.GetAccessControl(file, AccessControlSections.Access)` 和 `SetAccessControl`，只增加不安全 DACL ACE。重新读取 Access 验证 Everyone ReadData Allow 确实存在且无对应 Deny，另读 Owner 确认未改变，再调用正式 Restore 并断言 `CREDENTIAL_ACL_UNSAFE`、未发布及清理完成。此方法无需管理员或 `SeSecurityPrivilege`，不读取或改写 SACL；不能用通用 `Set-Acl` 的权限异常代替正式安全拒绝断言。
 
 ## Support Bundle
 

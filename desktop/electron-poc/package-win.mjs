@@ -27,6 +27,7 @@ export async function build() {
   await fs.mkdir(shell); await fs.mkdir(core);
   const tracked = execFileSync('git', ['ls-files', '-z', 'workflow/tools', 'skills', 'config'], { cwd: repo }).toString().split('\0').filter(Boolean);
   tracked.push('workflow/tools/lib/backup_service.mjs', 'workflow/tools/lib/backup_format.mjs', 'workflow/tools/runner/backup.mjs');
+  tracked.push('workflow/tools/lib/restore_service.mjs', 'workflow/tools/lib/restore_filesystem.mjs');
   const sources = [...new Set([...tracked, 'workflow/tools/lib/control_support_bundle_service.mjs', 'workflow/tools/lib/runtime_logging.mjs', 'workflow/tools/lib/control_setup_service.mjs', 'workflow/tools/lib/control_doctor_service.mjs', 'workflow/tools/runner/doctor.mjs', 'desktop/electron-poc/runtime.mjs', 'desktop/electron-poc/headless.mjs', 'desktop/electron-poc/main.mjs', 'desktop/electron-poc/shell.mjs', 'tests/helpers/electron_smoke.mjs', 'tests/helpers/first_run_smoke.mjs', 'tests/helpers/packaged_probe.mjs'])].filter(sourceAllowed);
   for (const file of sources) { const target = path.join(core, file); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.copyFile(path.join(repo, file), target); }
   const metadata = JSON.parse(await fs.readFile(path.join(repo, 'package.json'), 'utf8'));

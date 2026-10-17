@@ -29,6 +29,13 @@ export async function backupMain(argv, { env = process.env, cwd, stdout = proces
   let password;
   try {
     const action = argv[0];
+    if (action === '--restore-backup') {
+      if (![4, 5].includes(argv.length) || argv[2] !== '--target-data-root' || argv.length === 5 && argv[4] !== '--password-stdin' || !path.isAbsolute(argv[1] || '') || !path.isAbsolute(argv[3] || '')) throw backupError('BACKUP_ARGUMENT_INVALID');
+      password = await readBackupPassword(stdin, stderr, argv.includes('--password-stdin'));
+      const { RestoreService } = await import('../lib/restore_service.mjs');
+      const result = await new RestoreService({ ...(cwd ? { applicationRoot: cwd } : {}), env }).restore({ input: argv[1], target: argv[3], password });
+      stdout.write(JSON.stringify(result) + '\n'); return 0;
+    }
     if (!['--backup', '--verify-backup'].includes(action) || !argv[1] || argv[1].startsWith('--') || argv.slice(2).some(x => x !== '--password-stdin') || argv.length > 3) throw backupError('BACKUP_ARGUMENT_INVALID');
     if (!path.isAbsolute(argv[1])) throw backupError('BACKUP_PATH_ABSOLUTE_REQUIRED');
     password = await readBackupPassword(stdin, stderr, argv.includes('--password-stdin'));
@@ -55,7 +62,7 @@ export async function backupMain(argv, { env = process.env, cwd, stdout = proces
     const result = action === '--backup' ? await service.create({ output: argv[1], password }) : await service.verify({ input: argv[1], password });
     stdout.write(JSON.stringify(result) + '\n'); return 0;
   } catch (error) {
-    const code = /^BACKUP_[A-Z_]+$/.test(error?.code) ? error.code : ['ENOSPC', 'EACCES', 'EPERM'].includes(error?.code) ? `BACKUP_${error.code}` : 'BACKUP_FAILED';
+    const code = /^(?:BACKUP|RESTORE)_[A-Z_]+$/.test(error?.code) ? error.code : ['ENOSPC', 'EACCES', 'EPERM'].includes(error?.code) ? `BACKUP_${error.code}` : 'BACKUP_FAILED';
     stdout.write(JSON.stringify({ schemaVersion: 1, status: 'failed', code }) + '\n'); return 2;
   } finally { password?.fill(0); }
 }

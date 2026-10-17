@@ -8,7 +8,8 @@ import { randomUUID } from "node:crypto";
 import { emailTransportConfig } from "../stage5/email_sender.mjs";
 import { resolveStage5Request } from "../stage5/main.mjs";
 import { resolveLlmRuntime } from "../lib/llm_json_support.mjs";
-import { buildRuntimeConfig } from "../lib/runtime_config.mjs";
+import { buildRuntimeConfig, resolveRuntimePaths } from "../lib/runtime_config.mjs";
+import { readBoundedJson } from '../lib/atomic_json.mjs';
 import { RUNNER_SCHEMA_VERSION } from "./constants.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
 import { copyEnvironment } from '../lib/credential_registry.mjs';
@@ -157,6 +158,15 @@ export async function runPreflight(options, dependencies = {}) {
   const optionalMissing = [];
   const readiness = [];
   const warnings = [...(options.configWarnings || [])];
+  try {
+    const paths = resolveRuntimePaths({ applicationRoot: repoRoot, env });
+    const receipt = path.join(paths.userDataRoot, '.paperecho-restore.json');
+    const present = await fsp.lstat(receipt).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
+    if (present) {
+      await readBoundedJson(paths.userDataRoot, receipt, { maxBytes: 8192 });
+      requiredMissing.push(missing('restored history review', '恢复的历史状态不能自动重新激活', '保留历史数据；完成独立的恢复状态审阅后再启用 workflow', 'recovery'));
+    }
+  } catch { requiredMissing.push(missing('restore status inspection', '无法确认恢复状态安全', '检查恢复凭据和数据根权限；不会自动清理或重放', 'recovery')); }
   const entry = path.resolve(entries[options.mode]);
   const radarProfile = options.profile === "radar";
 
