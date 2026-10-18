@@ -93,6 +93,10 @@ function notificationSummary(result) {
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
+  if (argv.some(x => ['--upgrade-preflight', '--upgrade-dry-run'].includes(x))) {
+    const { upgradeMain } = await import('./upgrade.mjs');
+    return upgradeMain(argv, dependencies);
+  }
   if (argv.some(x => ['--schedule-preflight', '--schedule-dry-run'].includes(x))) {
     const { schedulerMain } = await import('./os_scheduler.mjs');
     return schedulerMain(argv, dependencies);

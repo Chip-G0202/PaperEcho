@@ -27,13 +27,14 @@ export async function build() {
   await fs.mkdir(shell); await fs.mkdir(core);
   const tracked = execFileSync('git', ['ls-files', '-z', 'workflow/tools', 'skills', 'config'], { cwd: repo }).toString().split('\0').filter(Boolean);
   tracked.push('workflow/tools/lib/os_scheduler.mjs', 'workflow/tools/runner/os_scheduler.mjs');
+  tracked.push('workflow/tools/lib/upgrade_preflight_service.mjs', 'workflow/tools/runner/upgrade.mjs');
   tracked.push('workflow/tools/lib/backup_service.mjs', 'workflow/tools/lib/backup_format.mjs', 'workflow/tools/runner/backup.mjs');
   tracked.push('workflow/tools/lib/restore_service.mjs', 'workflow/tools/lib/restore_filesystem.mjs');
   tracked.push('workflow/tools/recovery/restore_transaction.mjs', 'workflow/tools/recovery/restore_transaction_status.mjs');
   const sources = [...new Set([...tracked, 'workflow/tools/lib/control_support_bundle_service.mjs', 'workflow/tools/lib/runtime_logging.mjs', 'workflow/tools/lib/control_setup_service.mjs', 'workflow/tools/lib/control_doctor_service.mjs', 'workflow/tools/runner/doctor.mjs', 'desktop/electron-poc/runtime.mjs', 'desktop/electron-poc/headless.mjs', 'desktop/electron-poc/main.mjs', 'desktop/electron-poc/shell.mjs', 'tests/helpers/electron_smoke.mjs', 'tests/helpers/first_run_smoke.mjs', 'tests/helpers/packaged_probe.mjs'])].filter(sourceAllowed);
   for (const file of sources) { const target = path.join(core, file); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.copyFile(path.join(repo, file), target); }
   const metadata = JSON.parse(await fs.readFile(path.join(repo, 'package.json'), 'utf8'));
-  await fs.writeFile(path.join(core, 'package.json'), JSON.stringify({ name: 'paperecho-core', private: true, type: 'module', dependencies: metadata.dependencies }));
+  await fs.writeFile(path.join(core, 'package.json'), JSON.stringify({ name: 'paperecho-core', version: '2.6.0', private: true, type: 'module', dependencies: metadata.dependencies }));
   // npm's installed production tree is copied once; no Electron/build dependencies enter core.
   const installed = execFileSync(process.execPath, [process.env.npm_execpath, 'ls', '--omit=dev', '--all', '--parseable'], { cwd: repo }).toString().trim().split(/\r?\n/).slice(1);
   const modules = installed.filter(file => !installed.some(parent => parent !== file && file.startsWith(parent + path.sep)));

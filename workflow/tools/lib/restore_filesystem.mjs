@@ -1,7 +1,33 @@
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 
 export const restoreError = code => Object.assign(new Error(code), { code });
+export async function inspectRestoreVolume(directory) {
+  if (process.platform !== 'win32') throw restoreError('RESTORE_PLATFORM_UNVERIFIED');
+  const env = Object.fromEntries(['SystemRoot', 'PATH', 'TEMP', 'TMP', 'USERPROFILE'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
+  env.PAPERECHO_VOLUME_ROOT = path.parse(directory).root;
+  env.PAPERECHO_VOLUME_PARENT = directory;
+  // Windows access(W_OK) does not evaluate the DACL. Request ADD_SUBDIRECTORY
+  // on an existing directory, then close the handle without creating anything.
+  const command = `$ErrorActionPreference='Stop'; if($PSVersionTable.PSVersion.Major -lt 7){exit 2}
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class UpgradeDirectoryAccess {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern SafeFileHandle CreateFileW(string p,uint access,uint share,IntPtr sa,uint creation,uint flags,IntPtr template);
+}
+'@
+$h=[UpgradeDirectoryAccess]::CreateFileW($env:PAPERECHO_VOLUME_PARENT,4,7,[IntPtr]::Zero,3,0x02000000,[IntPtr]::Zero)
+try { if($h.IsInvalid){[Console]::Out.Write('PARENT_ACCESS_DENIED');exit 0} } finally {$h.Dispose()}
+$d=[IO.DriveInfo]::new($env:PAPERECHO_VOLUME_ROOT); [Console]::Out.Write($d.DriveFormat+'|'+$d.AvailableFreeSpace)`;
+  const { stdout } = await promisify(execFile)(process.env.PWSH_PATH || 'pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], { env, windowsHide: true, timeout: 5000, maxBuffer: 128 });
+  if (stdout === 'PARENT_ACCESS_DENIED') throw restoreError('RESTORE_PARENT_ACCESS_DENIED');
+  const match = /^(NTFS)\|(\d+)$/.exec(stdout);
+  if (!match) throw restoreError('RESTORE_PLATFORM_UNVERIFIED');
+  return { filesystem: match[1], freeBytes: BigInt(match[2]) };
+}
 // A live Windows handle without FILE_SHARE_DELETE pins each existing ancestor.
 // The staging DACL is private from creation, before any plaintext is written.
 const script = `

@@ -71,6 +71,40 @@ schedule spec v1 的任务标识来自规范化数据根 hash，同根重复标�
 
 本阶段的 OS 适配结果是离线/模拟验证，未调用任何真实注册、触发、修改或删除计划任务接口。Phase 5B 的 Windows 注册/身份权限、实际触发、休眠重启、修改卸载及数据保留仍需可信 VM/Sandbox；当前缺少该环境。Phase 3A Installer 保持 Blocked，macOS 未实测，不据此宣称 Phase 5 或双平台发行完成。
 
+## 离线升级兼容性预检（Phase 6A）
+
+`upgrade_preflight_service.mjs` 只读识别源程序/数据契约并生成 schema v1 计划，始终返回 `executionAllowed:false`。不创建目标根、锁、日志、备份或迁移副本，不执行升级、Restore、调度注册或外部服务调用。显式指定的源根、目标根不能重叠；目标必须全新，父目录已存在。未知证据保持 UNKNOWN，危险或不支持的映射为 BLOCKED，不自动选择多个候选根。
+
+| 证据或状态 | 支持范围与限制 |
+|---|---|
+| v2.5 tag `2b5e65e` | canonical schema 已是 6，Runner 可读 1–6；旧程序仅 Dev 布局。根 package 无 version，以该 tag 的公开 Runtime Root 文件精确 SHA256 识别契约族；不是整个程序或签名真实性证明 |
+| 当前 v2.6 | packaged `resources/core/package.json` 明确携带 2.6.x 版本；缺少版本元数据的旧包保持 UNKNOWN，不从目录名推断 |
+| canonical schema 3/4/5/6 | 3→4→5→6 已由现有 `application_config_migration.mjs` 实现，本预检仅调用纯对象预览；6 保留原字节，绝不自动写回 |
+| canonical schema 1/2 | Runner 兼容读取，但完整迁移涉及旧领域文件及 env 合成；本预检不调用会写入的迁移器，标记 BLOCKED，需另行验证 |
+| 同为 schema 6 的字段差异 | v2.5 未定义 scheduler，混入该字段的旧契约拒绝；当前配置的 scheduler absent/disabled/enabled 原样保留，不注册或启用任务 |
+| 数据布局 | 源 Dev/Portable/Installed，目标仅全新 Portable/Installed；绝对业务数据路径需要人工重映射时 BLOCKED，不静默改写或丢弃字段 |
+| 状态格式 | 现有 ledger schema 1、lease schema 1、receipt schema 2 保持原 owner；活动/不明 claim、未完成 ledger/恢复事务、待审阅恢复历史阻塞，保留历史调度决定为 UNKNOWN，绝不自动激活 |
+
+旧 `.env` 无当前来源登记语义。本地文件先由 SecretService 检查 hardlink、路径和 ACL；当前环境中的引用名称以及认证备份声明的 external Secret 依赖分别保留，需重新配置时 UNKNOWN。不加载源 `.env` 到环境，不读取或复制外部凭据值，报告不含自定义 Secret 名称、路径、正文或配置全文。
+
+计划复用 BackupService 的九类 owner：config、secrets、research-feedback、rules、review-history、results、run-recovery、local-state、user-input。清单只输出各类数量/覆盖状态、源清单摘要、配置 hash、依赖步骤和安全动作标识。顺序为停止写入并复核 → 认证备份 → 保留各 owner → 配置与 Secret 校验 → Doctor/Runtime/recovery 验证且历史不激活 → 后续 Phase 6B 发布或回滚。当前不会执行这些步骤。
+
+回滚前提要求源程序和原数据根保留；提供的加密备份必须由现有 Verify 完成 AES-GCM、manifest/SHA256 验证，并与当前源文件及 owner 清单逐项匹配。备份 schema 1、creator releaseLine 2.6、restoreContract 1 不等于已证明跨版本恢复。缺少备份为 UNKNOWN，错误密码、篡改或源已变更为 BLOCKED。旧程序能否读取新数据、实际失败回滚和 Doctor 后验须在 Phase 6B 隔离环境验证，不能靠 Verify PASS 宣称成立。
+
+文件系统预检复用路径 owner 和安全文件读取；拒绝 symlink/junction、hardlink、外部 owner、已有目标和跨卷方案。Windows 只读检查 NTFS、可用空间（至少源数据三倍加 64 MiB）及父目录创建权限。Node `access(W_OK)` 不能证明 NTFS DACL 允许创建，因此额外申请现有目录的 `FILE_ADD_SUBDIRECTORY` 句柄并立即关闭，不创建探针、不修改 ACL；拒绝为 BLOCKED，无法确认平台或空间为 UNKNOWN。该预检是当时观察，不代替执行前重新校验。
+
+打包命令示例（所有路径均为明确选定的隔离根）：
+
+```powershell
+PaperEcho.exe --headless --runtime-layout installed --user-data-root "<host data>" --cache-root "<host cache>" --upgrade-dry-run --source-application-root "<old app>" --source-data-root "<old data>" --source-layout dev --target-data-root "<new data>" --target-layout installed --verified-backup "<source.pebackup>" --password-stdin
+```
+
+`--upgrade-preflight` 返回相同安全摘要和简化步骤；与 `--upgrade-dry-run`、workflow 参数互斥。密码沿用 Backup 的隐藏终端或显式 stdin，不接受 argv/env 密码。退出码 PASS/WARN 为 0，BLOCKED 为 2，UNKNOWN/参数错误为 3。源布局可选 dev/portable/installed，目标可选 portable/installed；Portable 仍受统一程序内数据子目录边界约束。源码入口为 `node workflow/tools/runner/main.mjs` 加相同 Upgrade 参数，目标程序证据不充分时不能得到 PASS。
+
+验证：`node --test workflow/tests/upgrade_preflight.test.mjs`，配合 Config、Runtime、Secret、Backup/Verify、Restore transaction、Stage0/ledger/recovery、Scheduler 和 Doctor 回归。`tests/helpers/upgrade-v2.5-runtime-contract.txt` 是上述 tag 的公开源文件 fixture，不作为代码执行。离线缓存构建 `npm run package:win --prefix desktop/electron-poc` 后，`node tests/helpers/packaged_upgrade.mjs` 核对最终源码、真实 native executable/内置 Node、空 PATH、仓库外 cwd、Portable/Installed、源文件 hash 不变、目标不存在与进程退出。最终运行默认 `npm test`、`npm run check` 和 diff check，不降低并行度。所有测试数据虚构，不访问 Production。
+
+Phase 6B 的实际隔离迁移/回滚、Phase 6C 的真实安装升级尚未实现；Phase 3A Installer 仍 Blocked，Phase 5B 真实 OS 注册仍待可信 VM，macOS 未实测。契约识别不替代完整安装资产完整性、签名或发行 Gate。
+
 ## 首次运行配置向导
 
 GUI 启动读取真实配置与原 `runPreflight` 的本地检查结果：缺少配置或必要条件未满足时进入向导；已配置且本地检查可运行时直接进入 Control Center。可从“设置 → 首次配置向导”再次进入。没有完成布尔标记或第二份配置状态；关闭、部分保存、重复进入均以现有 owner 的持久数据恢复。合法但未选择 mode 的配置仅在 UI bootstrap 中提供临时显示上下文，不回写默认 mode；歧义、错误配置或冲突数据根仍由正式 resolver 拒绝。

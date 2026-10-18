@@ -11,6 +11,7 @@ import { resolveRuntimePaths } from '../tools/lib/runtime_config.mjs';
 import { CONTROL_SECRET_NAMES, redactSecrets } from '../tools/lib/credential_registry.mjs';
 import { main, runProduction } from '../tools/runner/main.mjs';
 import { EventEmitter } from 'node:events';
+import { Session } from 'node:inspector';
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 async function fixture(t, layout = 'installed') {
   const base = path.join(repo, 'tests/runs/logging'); await fs.mkdir(base, { recursive: true });
@@ -117,6 +118,33 @@ function logChildCode(maxBytes = 1048576) {
 }
 test('concurrent instances and processes preserve every acknowledged event without truncation', async t => {
   const f = await fixture(t);
+  // A non-pausing, in-process test logpoint captures the cause before the public
+  // safety wrapper discards it. No inspector port or production hook is added.
+  const causes = []; const session = new Session(); session.connect();
+  const post = (method, params = {}) => new Promise((resolve, reject) => session.post(method, params, (error, value) => error ? reject(error) : resolve(value)));
+  const probeKey = '__paperechoRuntimeLogTestCause';
+  assert.equal(Object.hasOwn(globalThis, probeKey), false);
+  globalThis[probeKey] = error => causes.push({
+    reason: error.message === 'ATOMIC_JSON_LOCK_TIMEOUT:runtime.owner.json' ? 'ATOMIC_JSON_LOCK_TIMEOUT'
+      : ['LOG_EVENT_INVALID', 'LOG_PATH_UNSAFE', 'LOG_OWNER_INVALID', 'LOG_UNOWNED_FILE', 'LOG_RECORD_TOO_LARGE', 'LOG_FILE_TOO_LARGE', 'INSPECTION_PATH_UNSAFE', 'INSPECTION_FILE_UNSAFE', 'INSPECTION_LIMIT'].includes(error.message) ? error.message : 'UNCLASSIFIED',
+    code: ['EPERM', 'EACCES', 'EBUSY', 'ENOSPC', 'ENOENT', 'EEXIST', 'EMFILE', 'ENFILE', 'ENOMEM'].includes(error.code) ? error.code : null,
+    errno: Number.isInteger(error.errno) ? error.errno : null,
+    syscall: ['open', 'rename', 'unlink', 'stat', 'lstat', 'realpath', 'mkdir', 'read', 'write', 'close'].includes(error.syscall) ? error.syscall : null,
+    location: error.stack?.match(/(?:atomic_json|runtime_logging)\.mjs:\d+:\d+/g) || [],
+  });
+  let breakpoint;
+  t.after(async () => {
+    try { if (breakpoint) await post('Debugger.removeBreakpoint', { breakpointId: breakpoint }); await post('Debugger.disable'); }
+    finally { session.disconnect(); delete globalThis[probeKey]; }
+  });
+  const moduleUrl = pathToFileURL(path.join(repo, 'workflow/tools/lib/runtime_logging.mjs')).href;
+  const lineNumber = (await fs.readFile(new URL(moduleUrl), 'utf8')).split('\n').findIndex(line => line.includes('const code = errorCode(error);'));
+  assert.ok(lineNumber >= 0);
+  await post('Debugger.enable');
+  const point = await post('Debugger.setBreakpointByUrl', { url: moduleUrl, lineNumber, condition: `globalThis.${probeKey}(error), false` });
+  breakpoint = point.breakpointId; assert.ok(point.locations.length > 0, 'RuntimeLog cause logpoint must bind');
+  assert.equal((await f.log.write('DIAGNOSTIC_INVALID_EVENT')).ok, false);
+  assert.equal(causes.at(-1)?.reason, 'LOG_EVENT_INVALID', 'cause capture must execute before the public wrapper'); causes.length = 0;
   const faults = []; const fsApi = { ...fs };
   const lockHandles = new Set(); let releasing = 0;
   const state = file => { try { const s = lstatSync(file); return { exists: true, directory: s.isDirectory(), linked: s.isSymbolicLink(), links: s.nlink, identity: `${s.dev}:${s.ino}` }; } catch (e) { return { exists: false, code: e.code }; } };
@@ -142,7 +170,7 @@ test('concurrent instances and processes preserve every acknowledged event witho
     } finally { if (method === 'unlink' && lock) releasing--; }
   };
   const same = await Promise.all(Array.from({ length: 30 }, () => new RuntimeLog({ env: f.env, fsApi }).write('RUNNER_STARTED')));
-  assert.ok(same.every(x => x.ok), JSON.stringify({ step: 'instances.write', failures: same.filter(x => !x.ok).map(x => x.code), faults }));
+  assert.ok(same.every(x => x.ok), JSON.stringify({ step: 'instances.write', failures: same.filter(x => !x.ok).map(x => x.code), faults, causes }));
   const code = logChildCode();
   const children = await Promise.allSettled([runNode(['--input-type=module', '-e', code], f.env), runNode(['--input-type=module', '-e', code], f.env)]);
   for (const result of children) assert.equal(result.status, 'fulfilled', result.status === 'rejected' ? result.reason.message : '');

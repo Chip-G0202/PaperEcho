@@ -18,6 +18,43 @@ const absent = async file => { try { await fs.lstat(file); return false; } catch
 const category = name => name === '.env' ? 'secrets' : name.startsWith('config/') ? 'config' : /research_evaluations\//.test(name) ? 'research-feedback'
   : /screening_standards|rule_suggestions/.test(name) ? 'rules' : /paper_feedback|manual|feedback\//i.test(name) ? 'review-history'
     : /\/runs\/|run_manifests\/|source_state\/|runtime_state\.json|schedule_decisions\//.test(name) ? 'run-recovery' : /\/state\//.test(name) ? 'local-state' : name.startsWith('review_results/') ? 'results' : 'user-input';
+export const BACKUP_DATA_OWNERS = Object.freeze([...owners]);
+// One selection policy for Backup and read-only upgrade planning; no new store.
+export function backupSourceSelection(p, context) {
+  const root = p.userDataRoot;
+  const roots = [...new Set([...(p.layout !== 'dev' ? [root] : []), path.join(root, 'config'), path.join(root, 'review_results'), context.researchRoot, context.reviewRoot, context.localRepository?.root,
+    context.env?.PAPERECHO_SOURCE_STATE_ROOT, context.env?.PAPERECHO_NOTIFICATION_RECEIPT_ROOT, context.env?.PAPERECHO_NOTIFICATION_HEALTH_ROOT].filter(Boolean).map(x => path.resolve(x)))];
+  const files = [p.secretPath, context.configPath, ...(context.backupInputs || [])].filter(Boolean);
+  const cacheDirectories = new Set([p.cacheRoot, p.logsRoot, path.join(root, '.cache')].map(x => path.resolve(x)));
+  const cacheFiles = new Set([context.researchRoot, path.join(root, 'review_results')].flatMap(r => ['translation_cache.json', 'journal_quality_cache.json'].map(name => path.join(r, name))));
+  for (const f of [...roots, ...files]) if (!inside(root, f)) throw backupError('BACKUP_EXTERNAL_OWNER');
+  return { roots, files, cacheDirectories, cacheFiles };
+}
+export async function inspectBackupSources(p, context) {
+  const { roots, files, cacheDirectories, cacheFiles } = backupSourceSelection(p, context);
+  const entries = new Map(); const visited = new Set(); let totalBytes = 0;
+  const walk = async file => {
+    if (visited.has(file)) return; visited.add(file);
+    if (visited.size > BACKUP_LIMITS.files * 4 || path.relative(p.userDataRoot, file).split(path.sep).length > 64) throw backupError('BACKUP_LIMIT_EXCEEDED');
+    await backupSafePath(file); if (await absent(file)) return;
+    const stat = await fs.lstat(file);
+    if (stat.isDirectory()) {
+      if (cacheDirectories.has(file)) return;
+      for (const entry of (await boundedDirectory(file, BACKUP_LIMITS.files)).sort((a, b) => a.name.localeCompare(b.name))) await walk(path.join(file, entry.name));
+      return;
+    }
+    const relative = path.relative(p.userDataRoot, file).split(path.sep).join('/'); backupPath(relative);
+    if (/\.lock$|\.lease\.json$|\.tmp$/.test(relative)) throw backupError('BACKUP_ACTIVE_STATE');
+    if (cacheFiles.has(file)) return;
+    if (stat.size > BACKUP_LIMITS.fileBytes || entries.size >= BACKUP_LIMITS.files || (totalBytes += stat.size) > BACKUP_LIMITS.totalBytes) throw backupError('BACKUP_LIMIT_EXCEEDED');
+    const bytes = await readBackupFile(file, BACKUP_LIMITS.fileBytes);
+    try { entries.set(relative, { path: relative, owner: category(relative), size: bytes.length, sha256: sha256(bytes) }); }
+    finally { bytes.fill(0); }
+  };
+  for (const file of [...roots, ...files].sort()) await walk(file);
+  const result = [...entries.values()].sort((a, b) => a.path.localeCompare(b.path));
+  return { files: result, totalBytes, ownerInventory: Object.fromEntries(owners.map(owner => [owner, result.filter(f => f.owner === owner).length])) };
+}
 export async function backupSafePath(file, fsApi = fs) {
   if (!path.isAbsolute(file)) throw backupError('BACKUP_PATH_UNSAFE');
   if (process.platform === 'win32' && (/^\\\\[?.]\\/.test(file) || file.slice(path.parse(file).root.length).includes(':'))) throw backupError('BACKUP_PATH_UNSAFE');
@@ -107,11 +144,7 @@ export class BackupService {
       if (path.resolve(this.context.userDataRoot) !== root || !path.isAbsolute(output) || inside(root, output) || inside(p.applicationRoot, output)) throw backupError('BACKUP_TARGET_UNSAFE');
       await backupSafePath(output); if (!await absent(output)) throw backupError('BACKUP_TARGET_EXISTS');
       await this.fsApi.access(path.dirname(output));
-      const roots = [...new Set([...(p.layout !== 'dev' ? [root] : []), path.join(root, 'config'), path.join(root, 'review_results'), this.context.researchRoot, this.context.reviewRoot, this.context.localRepository?.root,
-        this.context.env?.PAPERECHO_SOURCE_STATE_ROOT, this.context.env?.PAPERECHO_NOTIFICATION_RECEIPT_ROOT, this.context.env?.PAPERECHO_NOTIFICATION_HEALTH_ROOT].filter(Boolean).map(x => path.resolve(x)))];
-      const files = [p.secretPath, this.context.configPath, ...(this.context.backupInputs || [])].filter(Boolean);
-      const cacheDirectories = new Set([p.cacheRoot, p.logsRoot, path.join(root, '.cache')].map(x => path.resolve(x)));
-      const cacheFiles = new Set([this.context.researchRoot, path.join(root, 'review_results')].flatMap(r => ['translation_cache.json', 'journal_quality_cache.json'].map(name => path.join(r, name))));
+      const { roots, files, cacheDirectories, cacheFiles } = backupSourceSelection(p, this.context);
       // The runtime owner resolves paths. Backup only verifies that every selected
       // owner belongs to this one data root; external owners require a later contract.
       for (const f of [...roots, ...files]) if (!inside(root, f)) throw backupError('BACKUP_EXTERNAL_OWNER');

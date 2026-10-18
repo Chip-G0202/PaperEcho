@@ -21,6 +21,8 @@ User data backup：`workflow/tools/lib/backup_service.mjs` 持有数据 owner �
 
 Restore：`workflow/tools/lib/restore_service.mjs` 复用 BackupService 的认证内容读取，持有全新根发布；`recovery/restore_transaction.mjs` 编排已有根的显式替换、保留旧根、回滚与崩溃恢复，`restore_transaction_status.mjs` 提供只读状态投影和正式 writer admission。`restore_filesystem.mjs` 持有 Windows NTFS 父目录句柄、私有 staging 与排他操作句柄。Config、Secret、ledger 等仍归原 owner；复用 BackupService 的 writer lock 清单，不另建业务状态。CLI 复用 `runner/backup.mjs`，历史自动激活仍由 preflight 阻止。契约与测试见 [恢复指南](configuration.md#恢复到全新-user-data-root)。
 
+Upgrade planning：`workflow/tools/lib/upgrade_preflight_service.mjs` 只编排兼容性证据、只读预检和版本化迁移计划，`runner/upgrade.mjs` 持有显式 CLI。复用 Config 纯迁移预览、BackupService 的源选择/清单与认证 Verify、Runtime Root、SecretService、恢复状态及文件系统检查；不调用迁移/Restore 执行器、不持有新状态。契约与验证见 [离线升级预检](configuration.md#离线升级兼容性预检phase-6a)。
+
 Control Center application boundary：
 
 - `control_support_bundle_service.mjs`：用户主动导出的只读诊断投影与内存 ZIP owner；复用 Doctor、RuntimeLog 固定事件、SecretService 和 Runtime Root。受保护 POST 返回下载，不保存诊断副本、不上传、不创建平行状态或日志系统；schema/限制见 [配置指南](configuration.md#support-bundle)。
