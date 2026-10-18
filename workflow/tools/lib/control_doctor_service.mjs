@@ -8,6 +8,7 @@ import { resolveRuntimePaths, prepareRuntimePaths, resolveApplicationRuntimeCont
 import { readBoundedJson } from './atomic_json.mjs';
 import { ControlScheduleStatusService } from './control_schedule_status_service.mjs';
 import { RuntimeLog } from './runtime_logging.mjs';
+import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
 
 const labels = { PASS: '正常', WARN: '建议处理', FAIL: '立即阻塞', UNKNOWN: '无法确认' };
 const overall = checks => ['FAIL', 'UNKNOWN', 'WARN', 'PASS'].find(status => checks.some(check => check.status === status)) || 'UNKNOWN';
@@ -33,6 +34,8 @@ export class DoctorService {
       signal?.throwIfAborted();
     };
     let paths;
+    const restore = inspectRestoreTransaction(this.context.userDataRoot);
+    add('restore.transaction', restore.blocking ? 'FAIL' : 'PASS', restore.blocking ? '恢复事务未完成或状态存在歧义' : '没有未完成的恢复事务', restore.blocking ? '使用显式恢复事务入口检查；Doctor 不修改、回滚或重放。' : '', true);
     await inspect('runtime.roots', async () => {
       try {
         paths = resolveRuntimePaths({ applicationRoot: this.context.applicationRoot, env: this.env });

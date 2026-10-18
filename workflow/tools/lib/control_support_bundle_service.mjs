@@ -10,7 +10,7 @@ const statuses = ['PASS', 'WARN', 'FAIL', 'UNKNOWN'];
 const severities = ['info', 'advisory', 'blocking'];
 const checkIds = new Set([
   'runtime.roots', 'runtime.application', 'runtime.data', 'runtime.cache', 'runtime.node', 'runtime.platform', 'runtime.resources', 'runtime.pwsh',
-  'configuration', 'preflight', 'preflight.optional', 'secrets', 'workflow', 'workflow.claim', 'workflow.manifest', 'workflow.ledger', 'workflow.recovery',
+  'configuration', 'preflight', 'preflight.optional', 'secrets', 'restore.transaction', 'workflow', 'workflow.claim', 'workflow.manifest', 'workflow.ledger', 'workflow.recovery',
   'workflow.receipts', 'workflow.runner', 'workflow.scheduleClaim', 'research', 'research.pending', 'research.prepared', 'research.unknown', 'research.recoverable', 'research.processed', 'logging', 'logging.lastError',
   ...CONTROL_SECRET_NAMES.map(name => `secret.${name}`),
   ...['local.input', 'local.outputRoot', 'readable Local input', 'supported Local input', 'safe Local output root', 'writable Local output root', 'readable Local feedback JSONL', 'Zotero Desktop', 'Zotero Desktop CLI bridge', 'ZOTERO_API_KEY', 'ZOTERO_USER_ID', 'production entry', 'Node.js >= 18'].map(name => `preflight.missing.${name.replace(/[^A-Za-z0-9]/g, '_')}`),

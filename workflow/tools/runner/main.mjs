@@ -93,7 +93,7 @@ function notificationSummary(result) {
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
-  if (argv.some(x => ['--backup', '--verify-backup', '--restore-backup'].includes(x))) {
+  if (argv.some(x => ['--backup', '--verify-backup', '--restore-backup', '--restore-existing', '--restore-preflight', '--restore-recover', '--restore-rollback'].includes(x))) {
     const { backupMain } = await import('./backup.mjs');
     return backupMain(argv, dependencies);
   }

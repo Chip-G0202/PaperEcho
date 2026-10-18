@@ -62,6 +62,13 @@ export function validateBackupManifest(m) {
   for (const relative of [m.roots.research, m.roots.review, ...m.roots.runRoots, ...m.roots.inputs]) if (relative !== '.') backupPath(relative);
   return m;
 }
+export async function backupWriterLockTargets(p, context, runRoots) {
+  const reviewRoots = [...new Set([context.reviewRoot, path.join(p.userDataRoot, 'review_results/文献评价')])];
+  const targets = [p.secretPath, context.configPath, ...reviewRoots.flatMap(review => [screeningStandardsPath(review), ruleSuggestionsLogPath(review),
+    path.join(review, 'paper_feedback.json'), path.join(review, 'research_evaluations/events')]), ...runRoots.map(r => path.join(r, '.runner.operation'))].filter(Boolean);
+  for (const e of await boundedDirectory(path.join(p.userDataRoot, 'config'), BACKUP_LIMITS.files)) if (/\.(json|md)$/.test(e.name)) targets.push(path.join(p.userDataRoot, 'config', e.name));
+  return [...new Set(targets)].sort();
+}
 export class BackupService {
   constructor({ context, env = process.env, fsApi = fs, hook = async () => {} } = {}) { Object.assign(this, { context, env, fsApi, hook }); this.active = false; }
   async verify({ input, password, signal } = {}) {
@@ -132,11 +139,7 @@ export class BackupService {
           if (!lease.acquired) throw backupError('BACKUP_WORKFLOW_BUSY'); leases.push(lease); ignored.add(lease.leasePath);
         }
       };
-      const lockTargets = [...new Set([p.secretPath, this.context.configPath, ...reviewRoots.flatMap(review => [screeningStandardsPath(review), ruleSuggestionsLogPath(review),
-        path.join(review, 'paper_feedback.json'), path.join(review, 'research_evaluations/events')]), ...runRoots.map(r => path.join(r, '.runner.operation'))])].filter(Boolean).sort();
-      const configDir = path.join(root, 'config');
-      if (!await absent(configDir)) for (const e of await boundedDirectory(configDir, BACKUP_LIMITS.files)) if (/\.(json|md)$/.test(e.name)) lockTargets.push(path.join(configDir, e.name));
-      const locked = [...new Set(lockTargets)].sort();
+      const locked = await backupWriterLockTargets(p, this.context, runRoots);
       const withLocks = async (index, work) => {
         if (index === locked.length) return work();
         const file = locked[index]; await backupSafePath(file);

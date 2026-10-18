@@ -19,6 +19,7 @@ export async function wizardSmoke({ window, root, outputRoot, report }) {
     report.views.push({ width, height, route: 'setup', title });
   };
   window.setContentSize(width, height);
+  window.center();
   await wc.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
   report.views = [];
   await window.loadURL(new URL('/', wc.getURL()).href);

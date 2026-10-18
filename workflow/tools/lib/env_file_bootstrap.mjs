@@ -46,4 +46,4 @@ export function environmentForControlChild(env) {
   return child;
 }
 
-if (!process.argv.some(x => ['--backup', '--verify-backup', '--restore-backup'].includes(x))) loadDotEnv();
+if (!process.argv.some(x => ['--backup', '--verify-backup', '--restore-backup', '--restore-existing', '--restore-preflight', '--restore-recover', '--restore-rollback'].includes(x))) loadDotEnv();

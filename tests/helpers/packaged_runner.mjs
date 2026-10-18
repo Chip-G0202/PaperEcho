@@ -31,6 +31,8 @@ const env = { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, CO
   PATH: '', PAPERECHO_LAYOUT: 'installed', PAPERECHO_DATA_ROOT: data, PAPERECHO_SKIP_DOTENV: '1', TEMP: path.join(data, '.cache/tmp'), TMP: path.join(data, '.cache/tmp') };
 await fs.mkdir(env.TEMP, { recursive: true });
 async function run(command, args, overrides = {}, shell = false, input = '') {
+  // The exact-pixel GUI matrix explicitly runs at 100%; leave product/system DPI unchanged.
+  if (command === exe && args.includes('--smoke')) args = ['--force-device-scale-factor=1', ...args];
   const began = performance.now();
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd: os.tmpdir(), env: { ...env, ...overrides }, shell, windowsHide: true, stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
@@ -187,6 +189,53 @@ assert.notEqual(restoredCheck.code, 0, 'restored history cannot activate without
 for (const file of manifest.files) assert.equal(createHash('sha256').update(await fs.readFile(path.join(restoreTarget, file.path))).digest('hex'), file.sha256, 'restored check changed business data');
 assert.deepEqual(await dataSnapshot(data, { directoryTimes: false }), backupBefore, 'restore changed source workspace');
 for (const process of [backup, verify, restored, restoredDoctor, restoredCheck]) assert.throws(() => globalThis.process.kill(process.pid, 0), 'backup/restore orphan process');
+// Explicit confirmation is injected into the real packaged CLI entry, never via
+// a production env switch or --force. All inputs are this dummy-only fixture.
+const runnerUrl = pathToFileURL(path.join(application, 'resources/core/workflow/tools/runner/main.mjs')).href;
+const runtimeUrl = pathToFileURL(path.join(application, 'resources/core/desktop/electron-poc/runtime.mjs')).href;
+const transactionCache = path.join(fixture, '独立 事务缓存'); await fs.mkdir(path.join(transactionCache, 'tmp'), { recursive: true });
+async function transactionCli(args, input = '') {
+  const code = `if(!process.versions.electron)throw Error('PACKAGED_RUNTIME_REQUIRED');const args=${JSON.stringify(args)};process.argv=[process.execPath,'packaged-confirmation-test',...args];const {preparePackagedRuntime}=await import(${JSON.stringify(runtimeUrl)});preparePackagedRuntime({readOnly:true});const {main}=await import(${JSON.stringify(runnerUrl)});process.exitCode=await main(args,{confirmRestore:async()=>true});`;
+  const selectedRoot = args[args.indexOf('--target-data-root') + 1];
+  const result = await run(exe, ['--input-type=module', '-e', code], { ELECTRON_RUN_AS_NODE: '1', PAPERECHO_DATA_ROOT: selectedRoot, PAPERECHO_CACHE_ROOT: transactionCache }, false, input);
+  assert.equal(result.code, 0, 'packaged transaction CLI: ' + result.output);
+  assert.throws(() => process.kill(result.pid, 0)); return JSON.parse(result.output);
+}
+const transactionBefore = await dataSnapshot(restoreTarget, { directoryTimes: false });
+const transactionPreview = await transactionCli(['--restore-preflight', backupOutput, '--target-data-root', restoreTarget, '--password-stdin'], 'dummy-packaged-backup-password\n');
+assert.equal(transactionPreview.confirmationRequired, true);
+const committed = await transactionCli(['--restore-existing', backupOutput, '--target-data-root', restoreTarget, '--password-stdin'], 'dummy-packaged-backup-password\n');
+assert.equal(committed.status, 'committed'); assert.equal(committed.rollbackRetained, true);
+const { restoreTransactionRoot } = await import('../../workflow/tools/recovery/restore_transaction_status.mjs');
+assert.deepEqual(await dataSnapshot(path.join(restoreTransactionRoot(restoreTarget), 'old'), { directoryTimes: false }), transactionBefore);
+assert.equal((await transactionCli(['--restore-rollback', '--target-data-root', restoreTarget])).status, 'rolled-back');
+assert.deepEqual(await dataSnapshot(restoreTarget, { directoryTimes: false }), transactionBefore);
+const pendingRoot = path.join(fixture, '中断 恢复数据');
+const pendingSetup = await run('"' + cmd + '"', ['--restore-backup', '"' + backupOutput + '"', '--target-data-root', '"' + pendingRoot + '"', '--password-stdin'], {}, true, 'dummy-packaged-backup-password\n');
+assert.equal(pendingSetup.code, 0, 'pending GUI fixture restore'); assert.throws(() => process.kill(pendingSetup.pid, 0));
+const transactionUrl = pathToFileURL(path.join(application, 'resources/core/workflow/tools/recovery/restore_transaction.mjs')).href;
+const pauseCode = `process.argv=[process.execPath,'packaged-crash-test','--restore-existing'];const {preparePackagedRuntime}=await import(${JSON.stringify(runtimeUrl)});preparePackagedRuntime({readOnly:true});const {RestoreTransaction}=await import(${JSON.stringify(transactionUrl)});await new RestoreTransaction({hook:async phase=>{if(phase==='NEW_PUBLISHED'){process.send({phase});await new Promise(()=>setInterval(()=>{},1000));}}}).replace({input:${JSON.stringify(backupOutput)},target:${JSON.stringify(pendingRoot)},password:Buffer.from('dummy-packaged-backup-password'),confirm:async()=>true});`;
+const paused = spawn(exe, ['--input-type=module', '-e', pauseCode], { cwd: fixture, env: { ...env, ELECTRON_RUN_AS_NODE: '1', PAPERECHO_DATA_ROOT: pendingRoot, PAPERECHO_CACHE_ROOT: transactionCache }, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+const pausedClosed = new Promise(resolve => paused.once('close', resolve)); let pauseTimer;
+try {
+  await new Promise((resolve, reject) => {
+    pauseTimer = setTimeout(() => reject(new Error('PACKAGED_TRANSACTION_PHASE_TIMEOUT')), 60000);
+    paused.once('error', reject); paused.once('close', () => reject(new Error('PACKAGED_TRANSACTION_EARLY_EXIT')));
+    paused.once('message', message => message.phase === 'NEW_PUBLISHED' ? resolve() : reject(new Error('PACKAGED_TRANSACTION_PHASE_INVALID')));
+  }); clearTimeout(pauseTimer);
+  const pendingBefore = await dataSnapshot(pendingRoot, { directoryTimes: false });
+  const recoveryGui = await run(exe, ['--smoke', '--smoke-restore'], { PAPERECHO_DATA_ROOT: pendingRoot });
+  assert.equal(recoveryGui.code, 0, 'packaged recovery GUI: ' + recoveryGui.output);
+  const recoveryReport = JSON.parse(await fs.readFile(path.join(restoreTransactionRoot(pendingRoot), 'gui-cache/smoke/smoke-report.json')));
+  assert.deepEqual(recoveryReport.views, [[1920, 1080], [1366, 768], [390, 844]].map(([width, height]) => ({ width, height, route: 'system', restoreBlocked: true })));
+  assert.equal(recoveryReport.ownedServerClosed, true);
+  for (const child of recoveryReport.processes) assert.throws(() => process.kill(child.pid, 0));
+  assert.deepEqual(await dataSnapshot(pendingRoot, { directoryTimes: false }), pendingBefore);
+} finally { clearTimeout(pauseTimer); paused.kill('SIGKILL'); await pausedClosed; }
+assert.throws(() => process.kill(paused.pid, 0));
+assert.equal((await transactionCli(['--restore-recover', '--target-data-root', pendingRoot])).status, 'rolled-back');
+assert.deepEqual(await dataSnapshot(data, { directoryTimes: false }), backupBefore, 'transaction changed source workspace');
+assert.deepEqual(await inventory(application), before, 'transaction changed application');
 for (const run of [gui, check, probe, bad, nodeOptions]) assert.throws(() => process.kill(run.pid, 0));
 const sizes = await Promise.all(Object.keys(before).map(f => fs.stat(path.join(application, f))));
 await fs.writeFile(path.join(fixture, 'report.json'), JSON.stringify({ application, data, sizeBytes: sizes.reduce((n, s) => n + s.size, 0), fileCount: sizes.length, fuses: wire, gui: { startupMs: report.startupMs, idleWorkingSetMiB: report.idleWorkingSetMiB, views: report.views.length }, wizardReports, headless, check: { code: check.code, durationMs: check.ms }, exceptionCode: bad.code, pathEmpty: true, cwdOutsideRepo: true, noOrphans: true, applicationUnchanged: true, readOnlyApplication: true, asarIntegrityMatch: true }, null, 2));

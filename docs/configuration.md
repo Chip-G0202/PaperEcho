@@ -51,6 +51,8 @@ Packaged bootstrap 固定 Application Root 为程序目录、Resource Root 为�
 
 Windows 验证使用中文/空格目录、空 PATH、仓库外 cwd、仅 dummy/mock 数据；同时验证三尺寸 GUI、真实 Headless Local 子进程、scheduled 入口 mock、模块来源、异常退出、无遗留进程、实际 fuses 与 EXE 内嵌 ASAR header hash。smoke 对临时 Application 副本实际拒写并在 finally 恢复 ACL；不会改真实安装目录或 Production ACL。复用既有产物时，先逐文件核对业务源码，仅更新测试副本内的测试文件；正式运行时或构建配置变化必须重建。macOS、Installer、系统调度注册、签名与升级迁移均未在此 Gate 验证。
 
+常规与恢复页面的精确尺寸 smoke 显式使用测试进程参数 `--force-device-scale-factor=1`，逐项验证原生 content DIP、renderer CSS viewport、zoom 和窗口所在工作区，不在原生尺寸校验后叠加 viewport 仿真。报告在分支前初始化 `views`，只在真实页面检查完成后追加记录；失败保留数值 `lastViewport`，不保留页面正文。这是 100% 测试缩放下的矩阵，不能代表所有系统 DPI；产品默认缩放和系统设置不变。首次向导的仿真在独立测试进程执行。
+
 ## 首次运行配置向导
 
 GUI 启动读取真实配置与原 `runPreflight` 的本地检查结果：缺少配置或必要条件未满足时进入向导；已配置且本地检查可运行时直接进入 Control Center。可从“设置 → 首次配置向导”再次进入。没有完成布尔标记或第二份配置状态；关闭、部分保存、重复进入均以现有 owner 的持久数据恢复。合法但未选择 mode 的配置仅在 UI bootstrap 中提供临时显示上下文，不回写默认 mode；歧义、错误配置或冲突数据根仍由正式 resolver 拒绝。
@@ -103,11 +105,23 @@ Verify 不解析现有数据根、不加载 `.env`、不创建目录或解密副
 
 复用 AES-GCM、manifest 和 SHA256，认证全部内容后才创建私有 staging。原生句柄固定现有父目录链，拒绝 reparse point；staging 从创建起具有私有 DACL，`.env` 写入前另由正式 Secret owner 保护。逐文件同步并复核内容、路径和 ACL 后，以 NTFS 不覆盖目录 rename 发布，不降级为复制。相对配置通过正式 resolver 重新定位；仍引用旧数据绝对路径时返回 `RESTORE_PATH_MAPPING_REQUIRED`，不重写配置。外部凭据只保留变量名，需要用户另行配置。
 
-恢复保留历史文件字节，另写 `.paperecho-restore.json`，标记 `restored-history-only`、`requiresStateReview:true`、`reactivateClaims:false`。成功恢复不等于可以运行 workflow：preflight 阻止普通、scheduled 和 `--check` 自动激活历史状态；Doctor 可确认配置和 Secret，同时报告 `canRun:false`。本阶段不提供解除历史审阅门槛、覆盖恢复、回滚或断电恢复机制。发布前失败只清理本次身份核对通过的 staging；清理失败为 `RESTORE_CLEANUP_REQUIRED`，发布后检查失败为 `RESTORE_PUBLISHED_INSPECTION_REQUIRED`，均不得冒报成功。
+恢复保留历史文件字节，另写 `.paperecho-restore.json`，标记 `restored-history-only`、`requiresStateReview:true`、`reactivateClaims:false`。成功恢复不等于可以运行 workflow：preflight 阻止普通、scheduled 和 `--check` 自动激活历史状态；Doctor 可确认配置和 Secret，同时报告 `canRun:false`。本入口不提供解除历史审阅门槛或覆盖已有根；已有根必须使用下述显式事务入口。发布前失败只清理本次身份核对通过的 staging；清理失败为 `RESTORE_CLEANUP_REQUIRED`，发布后检查失败为 `RESTORE_PUBLISHED_INSPECTION_REQUIRED`，均不得冒报成功。
 
 验证入口：`node --test workflow/tests/restore.test.mjs workflow/tests/backup.test.mjs`，配合 Secret、runtime、ledger/recovery、Doctor 与 Runner 回归；离线构建后用 `npm run smoke:packaged --prefix desktop/electron-poc` 验证真实内置运行时的 Backup→Verify→Restore→Doctor、逐文件 hash、历史执行阻断、源数据不变和进程退出。Doctor 业务快照只排除正式 resolver 给出的 Temporary Root，并要求诊断后其中无残留文件；PowerShell ACL 检查的临时编译文件不算业务状态。最后运行默认 `npm test`、`npm run check` 与 diff check。
 
 Windows ACL 负例在隔离 staging 的测试 `.env` 上使用 `.NET FileSystemAclExtensions.GetAccessControl(file, AccessControlSections.Access)` 和 `SetAccessControl`，只增加不安全 DACL ACE。重新读取 Access 验证 Everyone ReadData Allow 确实存在且无对应 Deny，另读 Owner 确认未改变，再调用正式 Restore 并断言 `CREDENTIAL_ACL_UNSAFE`、未发布及清理完成。此方法无需管理员或 `SeSecurityPrivilege`，不读取或改写 SACL；不能用通用 `Set-Acl` 的权限异常代替正式安全拒绝断言。
+
+## 已有 User Data Root 的事务恢复
+
+Windows NTFS / PowerShell 7 下，Shared Runner 与 `PaperEcho-headless.cmd` 共用 `--restore-preflight <绝对备份路径> --target-data-root <绝对已有根>`、`--restore-existing`、`--restore-recover --target-data-root <绝对已有根>` 和 `--restore-rollback --target-data-root <绝对已有根>`。前两项复用备份密码输入。替换、回滚及未完成事务恢复需要独立的明确确认；普通非交互 CLI 不因提供密码而允许替换，也没有 `--force` 或自动确认环境变量。
+
+目标须为合法、静止的已有根，不得与程序根重叠；活跃或不明确的 lease、writer lock、claim 一律拒绝，不接管未知锁。选中当前根且默认 Cache 位于目标内时，须先通过正式 `PAPERECHO_CACHE_ROOT` 选择目标树外的可信 Cache；运行时临时目录与目标也不能互为祖先，否则返回 `RESTORE_TEMP_CONFLICT`，不暗中搬迁数据。
+
+认证备份并复核旧根完整清单后，在同卷私有 `.paperecho-restore-tx-*` 中准备新根；以 NTFS 分步 rename 保留旧根、发布新根并复核 hash、Secret ACL 和 Doctor。此处不是两个目录同时原子替换。私有 journal 的不可变检查点与状态文件记录进度；非终态或无法确认身份时，Runner 与正式写入阻塞，GUI 跳过首次配置并进入 System Health，Doctor 只读显示恢复事务。显式恢复根据实际目录身份保守回滚，无法确认则保持 `RECOVERY_REQUIRED`，不冒报成功。
+
+提交后旧根继续私有保留；回滚也不删除未知文件。当前不提供自动清理旧根，已有保留事务会阻止下一次替换。恢复仍保留历史字节与 `requiresStateReview`，不自动激活 workflow、claim、通知或外部操作。
+
+验证：`node --test workflow/tests/restore_transaction.test.mjs workflow/tests/restore_transaction_crash.test.mjs workflow/tests/restore_transaction_security.test.mjs`，配合 Backup/Verify、Secret、NTFS、runtime、ledger/recovery 与 Doctor 回归。`npm run smoke:packaged --prefix desktop/electron-poc` 使用真实内置运行时和隔离 fixture 验证替换、回滚、中断恢复及三尺寸阻塞页面；默认 `npm test` 不覆盖文件并行度。macOS 未实测，Phase 3A Installer 仍为 Blocked。
 
 ## Support Bundle
 
@@ -130,6 +144,8 @@ schema v1 固定四个 UTF-8 JSON：`manifest.json`、`doctor-summary.json`、`r
 链接、hardlink、未知 ownership 与越界路径安全拒绝；不扩大目录权限。锁等待有上限，只允许回收本机已确认死亡且未被替换的陈旧锁，不接管远程或存活进程。Doctor 只读检查目录权限元数据、大小、ownership 和锁状态；不创建探针、不清理、不轮转。最近日志错误只报告当前进程确知的证据，不推断其他进程历史；权限元数据检查不等于实际写入已成功。
 
 验证：`node --test workflow/tests/runtime_logging.test.mjs workflow/tests/control_doctor.test.mjs`，覆盖跨进程成功事件完整性、容量轮转、故障释放/恢复、正文脱敏、业务文件保护和只读诊断；再运行相关 Runner/Secret/runtime/workspace 回归、`npm run check`、`npm test`。`npm run smoke:packaged --prefix desktop/electron-poc` 检查真实三尺寸 GUI、Headless、四个隔离日志根、只读程序目录、无残留锁及 Doctor 前后快照。Packaged smoke 必须复用已初始化的 ASAR shell 入口，避免测试加载另一份模块实例。macOS 未实测；Phase 3A 仍为 Blocked。
+
+RuntimeLog 并发定向检查可运行 `node --test --test-name-pattern="concurrent instances and processes|concurrent processes rotate bounded" workflow/tests/runtime_logging.test.mjs`。测试等待所有子进程的 `close` 后才清理独立 fixture；安全诊断区分同进程实例与子进程阶段，仅记录操作、flags、PID 和锁资源状态。单项或全量通过不能证明历史 Windows EPERM 根因已经修复。
 
 ## 用户实际需要处理的文件
 

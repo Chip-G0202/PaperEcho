@@ -81,7 +81,8 @@ if (import.meta.url.startsWith(pathToFileURL(app.getAppPath()).href + '/') || pr
     const { smoke } = await import(pathToFileURL(path.join(process.resourcesPath, 'core/tests/helpers/electron_smoke.mjs')).href);
     // The diagnostic runs only against an explicitly provisioned dummy workspace.
     if (await fs.readFile(path.join(root, '.packaged-smoke-fixture'), 'utf8') !== 'dummy-only') throw new Error('SMOKE_FIXTURE_REQUIRED');
-    void smoke({ root, outputRoot: path.join(root, 'smoke'), prepare: false, startShellImpl: startShell });
+    const outputRoot = process.argv.includes('--smoke-restore') ? path.join(process.env.PAPERECHO_CACHE_ROOT, 'smoke') : path.join(root, 'smoke');
+    void smoke({ root, outputRoot, prepare: false, startShellImpl: startShell });
   } else {
   // Resolve the ESM entry before waiting for ready; only path setup is top-level awaited.
   startShell({ root }).catch(() => { process.stderr.write('PAPERECHO_POC_START_FAILED\n'); app.exit(1); });

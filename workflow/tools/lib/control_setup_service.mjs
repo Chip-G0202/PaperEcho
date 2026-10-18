@@ -1,11 +1,13 @@
 import { parseRunnerArgs } from '../runner/args.mjs';
 import { resolveRunnerConfiguration } from '../runner/config_loader.mjs';
 import { runPreflight } from '../runner/preflight.mjs';
+import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
 
 // Readiness is derived from saved owners; no completion flag, credential copy or workflow execution.
 export class SetupService {
   constructor({ config, context, env }) { Object.assign(this, { config, context, env }); }
   async status() {
+    if (inspectRestoreTransaction(this.context.userDataRoot).blocking) return { needsSetup: false, restoreRequired: true, canRun: false, status: 'blocked', requiredMissing: [], optionalMissing: [], readiness: [] };
     const settings = await this.config.list();
     const mode = settings.find(x => x.id === 'runtime.mode');
     const roots = { layout: this.context.layout, userDataRoot: this.context.userDataRoot, cacheRoot: this.context.cacheRoot, activeMode: this.context.mode };

@@ -6,6 +6,7 @@ import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { createControlServices } from '../lib/control_application_services.mjs';
 import '../lib/env_file_bootstrap.mjs';
 import { resolveApplicationRuntimeContext } from '../lib/runtime_config.mjs';
+import { assertRestoreWritable, restoreIdentity, inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const CONTROL_CENTER_HOST = '127.0.0.1';
@@ -49,6 +50,8 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
     services = createControlServices({ root, env, context });
   }
   const instance = controlCenterInstance(root, context);
+  const dataRoot = context?.userDataRoot || root;
+  const startupIdentity = await fs.lstat(dataRoot).then(restoreIdentity, error => { if (error.code === 'ENOENT') return null; throw error; });
   const session = randomBytes(32).toString('hex');
   const token = randomBytes(32).toString('hex');
   const server = http.createServer(async (req, res) => {
@@ -101,6 +104,8 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       if (req.method !== 'POST') return send(405, { error: 'METHOD_NOT_ALLOWED' });
       if (req.headers.origin !== `http://${req.headers.host}`) return send(403, { error: 'ORIGIN_REJECTED' });
       if (!equal(req.headers['x-csrf-token'], token)) return send(403, { error: 'CSRF_REQUIRED' });
+        assertRestoreWritable(dataRoot);
+        if (startupIdentity ? restoreIdentity(await fs.lstat(dataRoot)) !== startupIdentity : inspectRestoreTransaction(dataRoot).state !== 'ABSENT') return send(409, { error: 'WORKSPACE_CHANGED' });
       const input = await body(req);
       if (decoded === '/api/support-bundle') {
         if (url.search || Object.keys(input).length) return send(400, { error: 'SUPPORT_INPUT_INVALID' });

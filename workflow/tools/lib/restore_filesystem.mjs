@@ -35,6 +35,10 @@ public static class RestoreNative {
     $handles.Add($h); $info = [RestoreNative+Info]::new()
     if (-not [RestoreNative]::GetFileInformationByHandle($h,[ref]$info) -or ($info.attributes -band 0x400) -ne 0 -or ($info.attributes -band 0x10) -eq 0) { throw 'reparse' }
   }
+  if ($env:PAPERECHO_RESTORE_EXISTING -eq '1') {
+    $item = Get-Item -LiteralPath $env:PAPERECHO_RESTORE_STAGE -Force
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'directory' }
+  } else {
   $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
   $descriptor = [IntPtr]::Zero; [uint32]$size=0
   try {
@@ -43,6 +47,14 @@ public static class RestoreNative {
     if (-not [RestoreNative]::CreateDirectoryW($env:PAPERECHO_RESTORE_STAGE,[ref]$sa)) { throw 'mkdir' }
     $created = $true
   } finally { if ($descriptor -ne [IntPtr]::Zero) { [void][RestoreNative]::LocalFree($descriptor) } }
+  }
+  if ($env:PAPERECHO_RESTORE_EXCLUSIVE -eq '1') {
+    $directory = [RestoreNative]::CreateFileW($env:PAPERECHO_RESTORE_STAGE,1,3,[IntPtr]::Zero,3,0x02200000,[IntPtr]::Zero)
+    if ($directory.IsInvalid) { $directory.Dispose(); throw 'directory' }; $handles.Add($directory)
+    $lock = [RestoreNative]::CreateFileW([IO.Path]::Combine($env:PAPERECHO_RESTORE_STAGE,'operation.lock'),3221225472,0,[IntPtr]::Zero,4,0x00200000,[IntPtr]::Zero)
+    if ($lock.IsInvalid) { $lock.Dispose(); throw 'busy' }
+    $handles.Add($lock)
+  }
   [Console]::Out.WriteLine('RESTORE_GUARD_READY')
   [void][Console]::ReadLine()
 } catch {
@@ -50,11 +62,11 @@ public static class RestoreNative {
   [Console]::Error.Write('RESTORE_GUARD_FAILED'); exit 1
 } finally { foreach ($h in $handles) { $h.Dispose() } }
 `;
-export async function holdRestoreParent(stage) {
+export async function holdRestoreParent(stage, { existing = false, exclusive = false } = {}) {
   if (process.platform !== 'win32' || !/^[A-Za-z]:[\\/]/.test(stage)) throw restoreError('RESTORE_PLATFORM_UNVERIFIED');
   const ancestors = []; for (let p = path.dirname(stage); ; p = path.dirname(p)) { ancestors.unshift(p); if (p === path.dirname(p)) break; }
   const env = Object.fromEntries(['SystemRoot', 'PATH', 'TEMP', 'TMP', 'USERPROFILE'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
-  Object.assign(env, { PAPERECHO_RESTORE_STAGE: stage, PAPERECHO_RESTORE_ANCESTORS: Buffer.from(JSON.stringify(ancestors)).toString('base64') });
+  Object.assign(env, { PAPERECHO_RESTORE_STAGE: stage, PAPERECHO_RESTORE_ANCESTORS: Buffer.from(JSON.stringify(ancestors)).toString('base64'), PAPERECHO_RESTORE_EXISTING: existing ? '1' : '', PAPERECHO_RESTORE_EXCLUSIVE: exclusive ? '1' : '' });
   const child = spawn(process.env.PWSH_PATH || 'pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   let closed = false; let ready = false;
   const completion = new Promise(resolve => { child.once('close', code => { closed = true; resolve(code); }); });

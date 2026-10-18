@@ -19,7 +19,7 @@ Runtime logging：`workflow/tools/lib/runtime_logging.mjs` 独占固定运行事
 
 User data backup：`workflow/tools/lib/backup_service.mjs` 持有数据 owner 清单、一致性编排、安全发布与只读 Verify；`backup_format.mjs` 持有版本化加密容器和完整性校验，`runner/backup.mjs` 仅负责显式 CLI 与密码输入。复用 Runtime Root、Config/Secret 校验、writer lock 和 workflow lease，不替代原业务状态 owner，不复用诊断包白名单，也不执行 Restore。契约与测试见 [配置指南](configuration.md#用户数据备份与-verify)。
 
-Restore：`workflow/tools/lib/restore_service.mjs` 复用 BackupService 的认证内容读取，持有全新数据根的恢复事务；`restore_filesystem.mjs` 只持有 Windows NTFS 父目录句柄和私有 staging 创建。Config、Secret、历史状态仍归原 owner；Runner preflight 根据恢复凭据阻止历史自动激活。CLI 复用 `runner/backup.mjs`，不提供覆盖恢复。契约与测试见 [恢复指南](configuration.md#恢复到全新-user-data-root)。
+Restore：`workflow/tools/lib/restore_service.mjs` 复用 BackupService 的认证内容读取，持有全新根发布；`recovery/restore_transaction.mjs` 编排已有根的显式替换、保留旧根、回滚与崩溃恢复，`restore_transaction_status.mjs` 提供只读状态投影和正式 writer admission。`restore_filesystem.mjs` 持有 Windows NTFS 父目录句柄、私有 staging 与排他操作句柄。Config、Secret、ledger 等仍归原 owner；复用 BackupService 的 writer lock 清单，不另建业务状态。CLI 复用 `runner/backup.mjs`，历史自动激活仍由 preflight 阻止。契约与测试见 [恢复指南](configuration.md#恢复到全新-user-data-root)。
 
 Control Center application boundary：
 

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { assertRestoreWritable } from './restore_transaction_status.mjs';
 
 import { canonicalQueryHash, writeAtomicJson } from "../stage1/source_state.mjs";
 
@@ -264,8 +265,11 @@ export function inspectWorkflowLease(lease, { now = new Date(), hostname = os.ho
 }
 
 async function writeNewLease(leasePath, lease, fsApi) {
+  assertRestoreWritable(leasePath);
   const handle = await fsApi.open(leasePath, "wx");
   try {
+    try { assertRestoreWritable(leasePath); }
+    catch (error) { await handle.close(); await fsApi.unlink(leasePath); throw error; }
     await handle.writeFile(`${JSON.stringify(lease, null, 2)}\n`, "utf8");
     if (typeof handle.sync === "function") await handle.sync();
   } finally { await handle.close(); }

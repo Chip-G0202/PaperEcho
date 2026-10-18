@@ -10,6 +10,7 @@ import { resolveStage5Request } from "../stage5/main.mjs";
 import { resolveLlmRuntime } from "../lib/llm_json_support.mjs";
 import { buildRuntimeConfig, resolveRuntimePaths } from "../lib/runtime_config.mjs";
 import { readBoundedJson } from '../lib/atomic_json.mjs';
+import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
 import { RUNNER_SCHEMA_VERSION } from "./constants.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
 import { copyEnvironment } from '../lib/credential_registry.mjs';
@@ -160,6 +161,7 @@ export async function runPreflight(options, dependencies = {}) {
   const warnings = [...(options.configWarnings || [])];
   try {
     const paths = resolveRuntimePaths({ applicationRoot: repoRoot, env });
+    if (inspectRestoreTransaction(paths.userDataRoot).blocking) requiredMissing.push(missing('restore transaction', '恢复事务尚未完成或无法确认', '运行只读恢复状态检查，再显式恢复事务；不会自动重放 workflow', 'recovery'));
     const receipt = path.join(paths.userDataRoot, '.paperecho-restore.json');
     const present = await fsp.lstat(receipt).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
     if (present) {

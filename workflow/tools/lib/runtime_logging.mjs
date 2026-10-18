@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { resolveRuntimePaths, prepareRuntimePaths } from './runtime_config.mjs';
 import { writeAtomicText, withAtomicJsonLock, readBoundedJson } from './atomic_json.mjs';
 import { redactSecrets, secretValues } from './credential_registry.mjs';
+import { assertRestoreWritable } from '../recovery/restore_transaction_status.mjs';
 
 export const RUNTIME_LOG_MAX_BYTES = 1048576;
 const files = ['runtime.jsonl', 'runtime.previous.jsonl', 'runtime.pending.tmp', 'runtime.owner.json'];
@@ -59,6 +60,7 @@ export class RuntimeLog {
       try {
         if (!Object.hasOwn(events, code) || !['runner', 'headless', 'gui'].includes(subsystem)) throw new Error('LOG_EVENT_INVALID');
         root = this.paths().logsRoot;
+        assertRestoreWritable(root);
         await this.safe(root, { directory: true }); await this.fsApi.mkdir(root, { recursive: true, mode: 0o700 }); await this.safe(root, { directory: true });
         const result = await withAtomicJsonLock(path.join(root, 'runtime.owner.json'), async () => {
           // Windows replacement can fail while another writer inspects an open file.

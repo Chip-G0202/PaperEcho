@@ -4,6 +4,17 @@ import { backupError, sha256 } from '../lib/backup_format.mjs';
 import { resolveRuntimePaths, resolveApplicationRuntimeContext } from '../lib/runtime_config.mjs';
 import { parseRunnerArgs } from './args.mjs';
 import { resolveRunnerConfiguration } from './config_loader.mjs';
+import { createInterface } from 'node:readline/promises';
+
+async function confirmTarget(summary, { stdin, stderr, confirmRestore }) {
+  // Test harnesses inject a callback, never a production env flag or --force.
+  if (confirmRestore) return await confirmRestore(summary) === true;
+  if (!stdin.isTTY || !stderr.isTTY) return false;
+  stderr.write(JSON.stringify(summary) + '\n');
+  const terminal = createInterface({ input: stdin, output: stderr });
+  try { return await terminal.question('Type REPLACE ' + summary.target + ' to confirm replacement (or rollback): ') === 'REPLACE ' + summary.target; }
+  finally { terminal.close(); }
+}
 
 // Passwords are accepted only from a non-echoing terminal or explicit stdin pipe.
 export async function readBackupPassword(input = process.stdin, output = process.stderr, pipe = false) {
@@ -25,10 +36,28 @@ export async function readBackupPassword(input = process.stdin, output = process
     input.on('data', onData); input.once('end', onEnd); input.once('error', onError); input.resume();
   });
 }
-export async function backupMain(argv, { env = process.env, cwd, stdout = process.stdout, stderr = process.stderr, stdin = process.stdin } = {}) {
+export async function backupMain(argv, { env = process.env, cwd, stdout = process.stdout, stderr = process.stderr, stdin = process.stdin, confirmRestore } = {}) {
   let password;
   try {
     const action = argv[0];
+    if (['--restore-existing', '--restore-preflight', '--restore-recover', '--restore-rollback'].includes(action)) {
+      const { RestoreTransaction } = await import('../recovery/restore_transaction.mjs');
+      const transaction = new RestoreTransaction({ applicationRoot: cwd, env });
+      const confirm = summary => confirmTarget(summary, { stdin, stderr, confirmRestore });
+      let result;
+      if (['--restore-recover', '--restore-rollback'].includes(action)) {
+        if (argv.length !== 3 || argv[1] !== '--target-data-root' || !path.isAbsolute(argv[2] || '')) throw backupError('BACKUP_ARGUMENT_INVALID');
+        result = await transaction.recover({ target: argv[2], rollback: action === '--restore-rollback', confirm });
+      } else {
+        if (![4, 5].includes(argv.length) || argv[2] !== '--target-data-root' || !path.isAbsolute(argv[1] || '') || !path.isAbsolute(argv[3] || '') || argv.length === 5 && argv[4] !== '--password-stdin') throw backupError('BACKUP_ARGUMENT_INVALID');
+        // Non-interactive replacement is refused before consuming the password.
+        if (action === '--restore-existing' && !confirmRestore && !stdin.isTTY) throw Object.assign(new Error('RESTORE_CONFIRMATION_REQUIRED'), { code: 'RESTORE_CONFIRMATION_REQUIRED' });
+        password = await readBackupPassword(stdin, stderr, argv.includes('--password-stdin'));
+        const input = { input: argv[1], target: argv[3], password, confirm };
+        result = action === '--restore-preflight' ? await transaction.preflight(input) : await transaction.replace(input);
+      }
+      stdout.write(JSON.stringify(result) + '\n'); return 0;
+    }
     if (action === '--restore-backup') {
       if (![4, 5].includes(argv.length) || argv[2] !== '--target-data-root' || argv.length === 5 && argv[4] !== '--password-stdin' || !path.isAbsolute(argv[1] || '') || !path.isAbsolute(argv[3] || '')) throw backupError('BACKUP_ARGUMENT_INVALID');
       password = await readBackupPassword(stdin, stderr, argv.includes('--password-stdin'));

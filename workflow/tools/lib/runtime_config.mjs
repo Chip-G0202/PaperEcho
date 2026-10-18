@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from "node:url";
 import { yyMd, isoWeek } from "./date_label_support.mjs";
 import { copyEnvironment } from './credential_registry.mjs';
+import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
 
 function toPosix(p) {
   return String(p || "").replace(/\\/g, "/");
@@ -129,6 +130,7 @@ export function assertRuntimeDataPath(paths, value, { cache = false, fsApi = fs 
   return value;
 }
 export function prepareRuntimePaths(paths, { fsApi = fs, readOnly = false } = {}) {
+  if (inspectRestoreTransaction(paths.userDataRoot).blocking) readOnly = true;
   if (paths.layout === 'dev') return paths;
   assertNoLinkedAncestors(paths.applicationRoot, fsApi);
   assertNoLinkedAncestors(paths.resourceRoot, fsApi);

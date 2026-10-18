@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { lstatSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -91,34 +92,58 @@ function runNode(args, env) { return new Promise((resolve, reject) => {
     clearTimeout(timer);
     if (code === 0) { resolve(child.pid); return; }
     const diagnostics = output.split(/\r?\n/).flatMap(line => {
-      try { const value = JSON.parse(line); return /^LOG_[A-Z_]+$|^RUNTIME_LOG_[A-Z_]+$|^FS_[A-Z_]+$/.test(value.code) && /^[a-z._]+$/.test(value.step) ? [{ step: value.step, code: value.code }] : []; } catch { return []; }
+      try { const value = JSON.parse(line); return /^LOG_[A-Z_]+$|^RUNTIME_LOG_[A-Z_]+$|^FS_[A-Z_]+$/.test(value.code) && /^[a-z._]+$/.test(value.step) ? [{ step: value.step, code: value.code,
+        syscall: value.syscall, flags: value.flags, pid: value.pid, lockExists: value.lockExists, lockStateCode: value.lockStateCode, openLockHandles: value.openLockHandles, releasing: value.releasing, rootIdentityUnchanged: value.rootIdentityUnchanged }] : []; } catch { return []; }
     });
     const errorType = output.match(/(?:^|\n)(SyntaxError|ReferenceError|TypeError|Error)(?::| \[)/)?.[1] || null;
     reject(new Error(JSON.stringify({ step: 'child.close', code: 'LOG_CHILD_FAILED', started, exitCode: code, signal, errorType, diagnostics })));
   });
 }); }
+function logChildCode(maxBytes = 1048576) {
+  const module = pathToFileURL(path.join(repo, 'workflow/tools/lib/runtime_logging.mjs')).href;
+  return `import {RuntimeLog} from ${JSON.stringify(module)};import fs from 'node:fs/promises';import {lstatSync} from 'node:fs';import path from 'node:path';
+    let first,rootIdentity,releasing=0;const handles=new Set();
+    const state=file=>{try{const s=lstatSync(file);return{exists:true,identity:s.dev+':'+s.ino}}catch(e){return{exists:false,code:e.code}}};
+    const step=file=>['runtime.jsonl','runtime.previous.jsonl','runtime.pending.tmp','runtime.owner.json','runtime.owner.json.lock'].includes(path.basename(file||''))?path.basename(file):'directory';
+    const fsApi={...fs};
+    for(const method of ['open','rename','unlink','lstat','stat','realpath','mkdir','chmod'])fsApi[method]=async(...args)=>{
+      const lock=path.basename(args[0])==='runtime.owner.json.lock';if(method==='unlink'&&lock)releasing++;
+      try{const result=await fs[method](...args);if(method==='open'&&lock){handles.add(result);rootIdentity??=state(path.dirname(args[0])).identity}if(method==='lstat'&&result.isFile()&&result.nlink!==1)first={step:'lstat.'+step(args[0]),code:'LOG_LINK_COUNT_UNSAFE'};return result;}
+      catch(error){if(['EPERM','EACCES','EBUSY'].includes(error.code)){const s=state(args[0]);first={step:method+'.'+step(args[0]),code:'FS_'+error.code,syscall:error.syscall||method,flags:method==='open'?args[1]:undefined,pid:process.pid,lockExists:lock?s.exists:undefined,lockStateCode:lock?s.code:undefined,openLockHandles:[...handles].filter(h=>h.fd!==-1).length,releasing,rootIdentityUnchanged:rootIdentity===state(path.dirname(args[0])).identity}}throw error;}
+      finally{if(method==='unlink'&&lock)releasing--;}
+    };
+    class Probe extends RuntimeLog {async safe(file,options){try{return await super.safe(file,options);}catch{first||={step:'safe.'+step(file),code:'LOG_PATH_UNSAFE'};throw new Error('LOG_PATH_UNSAFE');}}}
+    const log=new Probe({fsApi,maxBytes:${maxBytes}});for(let i=0;i<20;i++){const result=await log.write('RUNNER_STARTED');if(!result.ok){console.log(JSON.stringify(first||{step:'write',code:result.code}));process.exitCode=1;break;}}`;
+}
 test('concurrent instances and processes preserve every acknowledged event without truncation', async t => {
   const f = await fixture(t);
   const faults = []; const fsApi = { ...fs };
+  const lockHandles = new Set(); let releasing = 0;
+  const state = file => { try { const s = lstatSync(file); return { exists: true, directory: s.isDirectory(), linked: s.isSymbolicLink(), links: s.nlink, identity: `${s.dev}:${s.ino}` }; } catch (e) { return { exists: false, code: e.code }; } };
+  let rootIdentity;
   for (const method of ['open', 'rename', 'lstat', 'unlink']) fsApi[method] = async (...args) => {
-    try { return await fs[method](...args); }
-    catch (error) {
-      if (['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) faults.push({ step: `${method}.${['runtime.jsonl', 'runtime.previous.jsonl', 'runtime.pending.tmp', 'runtime.owner.json', 'runtime.owner.json.lock'].includes(path.basename(args[0])) ? path.basename(args[0]) : 'directory'}`, code: error.code });
-      throw error;
+    const lock = path.basename(args[0]) === 'runtime.owner.json.lock';
+    if (method === 'unlink' && lock) releasing++;
+    try {
+      const result = await fs[method](...args);
+      if (method === 'open' && lock) {
+        rootIdentity ??= state(f.paths.logsRoot).identity;
+        lockHandles.add(result); const close = result.close.bind(result);
+        result.close = async () => { try { return await close(); } finally { lockHandles.delete(result); } };
+      }
+      return result;
     }
+    catch (error) {
+      if (['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) faults.push({ step: `${method}.${['runtime.jsonl', 'runtime.previous.jsonl', 'runtime.pending.tmp', 'runtime.owner.json', 'runtime.owner.json.lock'].includes(path.basename(args[0])) ? path.basename(args[0]) : 'directory'}`, code: error.code,
+        syscall: error.syscall || method, flags: method === 'open' ? args[1] : undefined, pid: process.pid, stage: method === 'open' && lock ? 'acquire' : method,
+        workspace: 'isolated-logging-fixture', lock: state(path.join(f.paths.logsRoot, 'runtime.owner.json.lock')), openLockHandles: lockHandles.size, releasing,
+        rootIdentityUnchanged: rootIdentity === state(f.paths.logsRoot).identity, location: error.stack?.match(/(?:atomic_json|runtime_logging)\.mjs:\d+:\d+/g) || [] });
+      throw error;
+    } finally { if (method === 'unlink' && lock) releasing--; }
   };
   const same = await Promise.all(Array.from({ length: 30 }, () => new RuntimeLog({ env: f.env, fsApi }).write('RUNNER_STARTED')));
   assert.ok(same.every(x => x.ok), JSON.stringify({ step: 'instances.write', failures: same.filter(x => !x.ok).map(x => x.code), faults }));
-  const module = pathToFileURL(path.join(repo, 'workflow/tools/lib/runtime_logging.mjs')).href;
-  const code = `import {RuntimeLog} from ${JSON.stringify(module)};import fs from 'node:fs/promises';import path from 'node:path';
-    let first;const step=file=>['runtime.jsonl','runtime.previous.jsonl','runtime.pending.tmp','runtime.owner.json','runtime.owner.json.lock'].includes(path.basename(file||''))?path.basename(file):'directory';
-    const fsApi={...fs};
-    for(const method of ['open','rename','unlink','lstat','stat','realpath','mkdir','chmod'])fsApi[method]=async(...args)=>{
-      try{const result=await fs[method](...args);if(method==='lstat'&&result.isFile()&&result.nlink!==1)first={step:'lstat.'+step(args[0]),code:'LOG_LINK_COUNT_UNSAFE'};return result;}
-      catch(error){if(['EPERM','EACCES','EBUSY'].includes(error.code))first={step:method+'.'+step(args[0]),code:'FS_'+error.code};throw error;}
-    };
-    class Probe extends RuntimeLog {async safe(file,options){try{return await super.safe(file,options);}catch{first||={step:'safe.'+step(file),code:'LOG_PATH_UNSAFE'};throw new Error('LOG_PATH_UNSAFE');}}}
-    const log=new Probe({fsApi});for(let i=0;i<20;i++){const result=await log.write('RUNNER_STARTED');if(!result.ok){console.log(JSON.stringify(first||{step:'write',code:result.code}));process.exitCode=1;break;}}`;
+  const code = logChildCode();
   const children = await Promise.allSettled([runNode(['--input-type=module', '-e', code], f.env), runNode(['--input-type=module', '-e', code], f.env)]);
   for (const result of children) assert.equal(result.status, 'fulfilled', result.status === 'rejected' ? result.reason.message : '');
   const found = await records(f); assert.equal(found.length, 70); assert.equal(new Set(found.map(x => x.eventId)).size, 70);
@@ -140,9 +165,7 @@ test('mutable log file inspection shares the replacement lock on Windows', async
 });
 test('concurrent processes rotate bounded complete records and release their shared lock', async t => {
   const f = await fixture(t);
-  const module = pathToFileURL(path.join(repo, 'workflow/tools/lib/runtime_logging.mjs')).href;
-  const code = `import {RuntimeLog} from ${JSON.stringify(module)};
-    const log=new RuntimeLog({maxBytes:1024});for(let i=0;i<20;i++){const result=await log.write('RUNNER_STARTED');if(!result.ok){console.log(JSON.stringify({step:'write',code:result.code}));process.exitCode=1;break;}}`;
+  const code = logChildCode(1024);
   const children = await Promise.allSettled([runNode(['--input-type=module', '-e', code], f.env), runNode(['--input-type=module', '-e', code], f.env)]);
   for (const result of children) assert.equal(result.status, 'fulfilled', result.status === 'rejected' ? result.reason.message : '');
   const found = await records(f); assert.ok(found.length > 1 && found.length < 40);

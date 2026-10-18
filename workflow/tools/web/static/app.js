@@ -1102,5 +1102,6 @@ window.addEventListener('pageshow', () => clearCredentialInputs());
 api('/api/session').then(async session => {
   csrf = session.token; setupState = await api('/api/setup');
   if (setupState.needsSetup) history.replaceState(null, '', '#setup');
+  if (setupState.restoreRequired) history.replaceState(null, '', '#system');
   return route();
 }).catch(() => { main.replaceChildren(); empty('无法连接本地服务', '请确认 Control Center 正在运行，然后刷新页面。'); main.setAttribute('aria-busy', 'false'); });
