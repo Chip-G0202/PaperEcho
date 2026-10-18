@@ -36,6 +36,7 @@ export async function selectScheduledDailyRun(resolved, {
   loadLedger = (args) => OperationLedgerStore.load(args, { fsApi }),
 } = {}) {
   const { options, env } = resolved;
+  if (resolved.config?.scheduler?.enabled === false) throw new Error('SCHEDULE_DISABLED');
   if (!["desktop", "web"].includes(options.mode)) throw new Error("SCHEDULE_MODE_UNSUPPORTED");
   if (!["standard", "complete"].includes(options.profile)) throw new Error("SCHEDULE_WEEKLY_MODE_INVALID");
   if (options.resume || options.forceResend || enabled(env.FORCE_review_results_RUN) || enabled(env.review_results_FORCE_RUN)

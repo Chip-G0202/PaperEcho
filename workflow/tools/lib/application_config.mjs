@@ -35,6 +35,11 @@ export function assertNonSecret(value) {
 }
 export function validateApplicationSections(config) {
   assertNonSecret(config);
+  if (config.scheduler !== undefined) {
+    const s = config.scheduler;
+    if (!object(s) || Object.keys(s).some(key => !['schemaVersion', 'enabled', 'time', 'timezone'].includes(key))
+      || s.schemaVersion !== 1 || typeof s.enabled !== 'boolean' || s.time !== '15:00' || s.timezone !== 'Asia/Shanghai') throw new Error('APPLICATION_CONFIG_SCHEDULER_INVALID');
+  }
   for (const section of Object.values(DOMAIN_SECTIONS)) {
     const value = config[section];
     if (value === undefined) continue;

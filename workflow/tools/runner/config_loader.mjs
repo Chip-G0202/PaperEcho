@@ -242,7 +242,7 @@ export function validateRunnerConfigObject(config) {
   if (!isObject(config)) fail("CONFIG_ROOT_INVALID", "PaperEcho config root must be an object");
   if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1, 2, 3, 4, 5 or 6", { schemaVersion: config.schemaVersion ?? null });
   for (const key of Object.keys(config)) {
-    if (!new Set(["schemaVersion", "mode", "profile", "common", "desktop", "web", "local", ...(config.schemaVersion >= 3 ? [...Object.values(DOMAIN_SECTIONS), 'weekly', 'migration'] : [])]).has(key)) fail("CONFIG_FIELD_UNKNOWN", `top-level field ${key} is not supported`, { field: key });
+    if (!new Set(["schemaVersion", "mode", "profile", "common", "desktop", "web", "local", ...(config.schemaVersion >= 6 ? ['scheduler'] : []), ...(config.schemaVersion >= 3 ? [...Object.values(DOMAIN_SECTIONS), 'weekly', 'migration'] : [])]).has(key)) fail("CONFIG_FIELD_UNKNOWN", `top-level field ${key} is not supported`, { field: key });
   }
   optionalString(config.mode, "mode");
   if (config.mode != null && !MODES.has(config.mode)) fail("CONFIG_MODE_INVALID", `mode must be desktop, web, local, or null`, { mode: config.mode });

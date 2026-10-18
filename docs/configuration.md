@@ -2,7 +2,7 @@
 
 ## v2.6 程序与数据路径契约
 
-唯一 root owner 仍是 `workflow/tools/lib/runtime_config.mjs`：`resolveRuntimePaths()` 解析 Application/User Data/Cache/Temporary roots，`prepareRuntimePaths()` 校验边界和目录写权限。部署 layout 与业务 mode（Desktop/Web/Local）独立，不自动切换 backend。下列是新增的 bootstrap 环境参数，必须在启动前提供，不能通过 `.env` 改变自身位置；本轮不增加 CLI 参数或安装器。
+唯一 root owner 仍是 `workflow/tools/lib/runtime_config.mjs`：`resolveRuntimePaths()` 解析 Application/User Data/Cache/Temporary roots，`prepareRuntimePaths()` 校验边界和目录写权限。部署 layout 与业务 mode（Desktop/Web/Local）独立，不自动切换 backend。下列 bootstrap 环境参数必须在启动前提供，不能通过 `.env` 改变自身位置；打包 Headless 的显式参数见 OS Scheduler 小节，不包含安装器。
 
 | 参数 | 契约 |
 |---|---|
@@ -53,6 +53,24 @@ Windows 验证使用中文/空格目录、空 PATH、仓库外 cwd、仅 dummy/m
 
 常规与恢复页面的精确尺寸 smoke 显式使用测试进程参数 `--force-device-scale-factor=1`，逐项验证原生 content DIP、renderer CSS viewport、zoom 和窗口所在工作区，不在原生尺寸校验后叠加 viewport 仿真。报告在分支前初始化 `views`，只在真实页面检查完成后追加记录；失败保留数值 `lastViewport`，不保留页面正文。这是 100% 测试缩放下的矩阵，不能代表所有系统 DPI；产品默认缩放和系统设置不变。首次向导的仿真在独立测试进程执行。
 
+## OS Scheduler 离线契约（Phase 5A）
+
+唯一离线 owner 为 `workflow/tools/lib/os_scheduler.mjs`；不含 OS 执行或注册接口，不在 GET、首次配置或 workflow 中自动启用。schemaVersion 6 的 canonical config 可选增加 `"scheduler": {"schemaVersion":1,"enabled":false,"time":"15:00","timezone":"Asia/Shanghai"}`；无此段的旧配置保持兼容，离线调度预检要求显式配置。`enabled:false` 也由正式 `--scheduled-daily` 判定拒绝，不能靠旧任务继续触发。Local、Dev 和任意其它时间/时区不属于当前业务调度契约，安全拒绝，不为 OS 适配改变业务规则。
+
+schedule spec v1 的任务标识来自规范化数据根 hash，同根重复标识拒绝且不覆盖；参数由正式 Runner parser 验证。Windows 定义使用单独 Command/Arguments/WorkingDirectory，明确启动 `PaperEcho.exe --headless`，无 shell、Node/npm PATH 查找、环境密码或 SYSTEM 身份。任务身份契约为当前用户已登录的 InteractiveToken / LeastPrivilege；未登录执行不在本阶段范围内。程序路径、数据根、缓存根在定义中固定；Portable 移动后必须重新预检和生成定义，不自动寻找旧根。
+
+固定 Asia/Shanghai 15:00 = UTC 07:00，无 DST；不支持有跳时/重复小时的其它业务时区。Windows 定义日历触发、StartWhenAvailable、IgnoreNew、不唤醒机器、不要求网络条件；错过多日只评估当前业务日计划槽，不补跑历史日期，当前槽之前退出。重复触发仍由现有 Stage0 day claim、workflow lease 和 ledger 决定，不能以 OS IgnoreNew 代替业务幂等。macOS 仅生成静态 LaunchAgent plist：StartCalendarInterval、不 RunAtLoad/KeepAlive，要求主机 Shanghai 时区；macOS 平台预检保持 UNKNOWN，尚未实测。
+
+只读 `--schedule-preflight` 与 `--schedule-dry-run` 互斥于 workflow 参数，复用 Runtime Root、ConfigService resolver、SecretService ACL、Doctor 和现有 scheduled selection/recovery owner。预检读取当前程序边界内的固定 executable/resources；Electron 下用 `original-fs` 验证物理 app.asar 为单链接常规文件，不把虚拟 ASAR 目录当成安全检查失败或放宽断言。资源完整性/签名发行要求仍见 Windows unpacked runtime。活动/不明 lease、损坏 claim、待恢复 ledger、Restore transaction 或待审阅恢复历史均阻止就绪；不清锁、改权限、重放通知或调用外部服务。外部托管凭据的非交互注入尚无证明时返回 UNKNOWN，不写入任务定义；本地 `.env` 先通过 SecretService 安全检查再由原 loader 读取。
+
+打包入口：`PaperEcho.exe --headless --runtime-layout installed --user-data-root "<绝对数据根>" --cache-root "<绝对缓存根>" --schedule-preflight`；将末参数换为 `--schedule-dry-run` 得到脱敏 XML 模板。Portable 用 `--runtime-layout portable` 且根必须在程序目录内。入口在 Electron ready 前等待内置 Node 子进程，未创建 BrowserWindow；沿用已核验 RunAsNode fuse，清除 NODE_PATH/NODE_OPTIONS，不增加 renderer 能力。原 `.cmd` 和 `--check` 入口兼容。
+
+两条只读命令均不创建日志、目录、任务或临时定义文件；PASS 退出 0、FAIL 退出 2、UNKNOWN 退出 3（参数错误退出 3）。CLI 只返回安全检查 ID/状态、任务策略和以 `__APPLICATION_ROOT__` / `__USER_DATA_ROOT__` / `__CACHE_ROOT__` 代替实际路径的定义模板；非 PASS 不返回定义。模板不能直接当作已注册任务或真实 OS 验收证据。
+
+验证：`node --test workflow/tests/os_scheduler.test.mjs`，加 scheduled-daily、Runner/config/runtime、Secret、Doctor、claim/ledger/recovery 与 Restore gate 回归。已有离线缓存构建：`npm run package:win --prefix desktop/electron-poc`；`node tests/helpers/packaged_scheduler.mjs` 在独立 dummy 根验证真实 native executable、内置 Node、空 PATH、仓库外 cwd、原生参数引用、只读快照、UNKNOWN/恢复阻塞、fuses 与进程清理。原生 raw argv 测试必须同时正确引用 executable argv[0] 和每个参数。最终使用原样 `npm run check`、`npm test`，不降低并行度。
+
+本阶段的 OS 适配结果是离线/模拟验证，未调用任何真实注册、触发、修改或删除计划任务接口。Phase 5B 的 Windows 注册/身份权限、实际触发、休眠重启、修改卸载及数据保留仍需可信 VM/Sandbox；当前缺少该环境。Phase 3A Installer 保持 Blocked，macOS 未实测，不据此宣称 Phase 5 或双平台发行完成。
+
 ## 首次运行配置向导
 
 GUI 启动读取真实配置与原 `runPreflight` 的本地检查结果：缺少配置或必要条件未满足时进入向导；已配置且本地检查可运行时直接进入 Control Center。可从“设置 → 首次配置向导”再次进入。没有完成布尔标记或第二份配置状态；关闭、部分保存、重复进入均以现有 owner 的持久数据恢复。合法但未选择 mode 的配置仅在 UI bootstrap 中提供临时显示上下文，不回写默认 mode；歧义、错误配置或冲突数据根仍由正式 resolver 拒绝。
@@ -81,7 +99,7 @@ Control Center 的“系统”页提供显式的“检查 / 刷新健康状态�
 
 检查单项默认上限 2.5 秒，凭据检查 20 秒；最多检查 100 个顶层运行条目、100 个反馈条目和当前运行 8 个通知回执，单 JSON 默认 1 MiB，反馈事件 128 KiB。超过限制返回 UNKNOWN，不递归扫描历史、论文或日志。超时只终止诊断等待，不取消或更改业务状态。
 
-验证：`node --test workflow/tests/control_doctor.test.mjs`，加 preflight、runtime、Secret、安全、ledger/recovery、研究反馈和 HTTP/UI 回归；打包 GUI/Headless 使用 `npm run smoke:packaged --prefix desktop/electron-poc`，检查显式刷新、三尺寸、空 PATH 和 Doctor 前后数据快照不变。Windows Installer Phase 3A 仍为 Blocked；Phase 5/6 未实施。
+验证：`node --test workflow/tests/control_doctor.test.mjs`，加 preflight、runtime、Secret、安全、ledger/recovery、研究反馈和 HTTP/UI 回归；打包 GUI/Headless 使用 `npm run smoke:packaged --prefix desktop/electron-poc`，检查显式刷新、三尺寸、空 PATH 和 Doctor 前后数据快照不变。Windows Installer Phase 3A 仍为 Blocked；Phase 5 仅完成上节离线契约，Phase 5B/6 未实施。
 
 ## 用户数据备份与 Verify
 

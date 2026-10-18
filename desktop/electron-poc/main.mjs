@@ -2,6 +2,7 @@ import { app, BrowserWindow, session } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { sandboxWorkspace, acquireServer, allowedDocument, allowedSupportDownload, preferences, failurePage } from './shell.mjs';
 let runtimeLog;
 
@@ -76,6 +77,16 @@ export async function startShell({ root, show = true } = {}) {
   return { window, lease, root };
 }
 if (import.meta.url.startsWith(pathToFileURL(app.getAppPath()).href + '/') || process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  if (app.isPackaged && process.argv[1] === '--headless') {
+    // Native executable entry: no shell, BrowserWindow, UI setup or single-instance
+    // GUI lock. Production children use the already verified RunAsNode fuse.
+    const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+    delete env.NODE_OPTIONS; delete env.NODE_PATH;
+    // Block the browser event loop until the embedded Node entry exits, before
+    // Electron reaches ready. Runner owns workflow timeouts and child cleanup.
+    const child = spawnSync(process.execPath, [path.join(process.resourcesPath, 'core/desktop/electron-poc/headless.mjs'), ...process.argv.slice(2)], { env, shell: false, windowsHide: true, stdio: 'inherit' });
+    app.exit(child.status ?? 2);
+  } else {
   const root = await prepareShell();
   if (app.isPackaged && process.argv.includes('--smoke')) {
     const { smoke } = await import(pathToFileURL(path.join(process.resourcesPath, 'core/tests/helpers/electron_smoke.mjs')).href);
@@ -86,5 +97,6 @@ if (import.meta.url.startsWith(pathToFileURL(app.getAppPath()).href + '/') || pr
   } else {
   // Resolve the ESM entry before waiting for ready; only path setup is top-level awaited.
   startShell({ root }).catch(() => { process.stderr.write('PAPERECHO_POC_START_FAILED\n'); app.exit(1); });
+  }
   }
 }

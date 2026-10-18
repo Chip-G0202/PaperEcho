@@ -4,6 +4,24 @@ import { fileURLToPath } from 'node:url';
 import { resolveRuntimePaths, prepareRuntimePaths } from '../../workflow/tools/lib/runtime_config.mjs';
 import { inspectRestoreTransaction, restoreTransactionRoot } from '../../workflow/tools/recovery/restore_transaction_status.mjs';
 
+// Explicit bootstrap argv is shared by native OS tasks and the console entry.
+// Resolve and validate through Runtime Root before any config, dotenv or writes.
+export function applyHeadlessRuntimeArguments(argv, env = process.env) {
+  const keys = { '--runtime-layout': 'PAPERECHO_LAYOUT', '--user-data-root': 'PAPERECHO_DATA_ROOT', '--cache-root': 'PAPERECHO_CACHE_ROOT' };
+  const next = { ...env }; const seen = new Set(); const remaining = [];
+  for (let i = 0; i < argv.length; i++) {
+    const key = keys[argv[i]];
+    if (!key) { remaining.push(argv[i]); continue; }
+    const value = argv[++i];
+    if (seen.has(key) || typeof value !== 'string' || !value || value.startsWith('--') || /[\u0000-\u001f]/.test(value)) throw new Error('HEADLESS_RUNTIME_ARGUMENT_INVALID');
+    if (key !== 'PAPERECHO_LAYOUT' && !path.isAbsolute(value)) throw new Error('HEADLESS_RUNTIME_ARGUMENT_INVALID');
+    next[key] = value; seen.add(key);
+  }
+  if (seen.size && (!seen.has('PAPERECHO_LAYOUT') || !seen.has('PAPERECHO_DATA_ROOT') || !['portable', 'installed'].includes(next.PAPERECHO_LAYOUT))) throw new Error('HEADLESS_RUNTIME_ARGUMENT_INVALID');
+  for (const key of seen) env[key] = next[key];
+  return remaining;
+}
+
 // This file lives in resources/core, shared by the packaged GUI and console entry.
 export function preparePackagedRuntime({ readOnly = false } = {}) {
   const core = fileURLToPath(new URL('../../', import.meta.url));
