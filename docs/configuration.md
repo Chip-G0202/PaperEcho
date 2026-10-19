@@ -126,6 +126,16 @@ Windows NTFS 同卷发布只接受全新 B；A 保留原字节及旧程序，回
 
 验证命令：`node --test workflow/tests/upgrade_migration.test.mjs workflow/tests/upgrade_migration_security.test.mjs workflow/tests/upgrade_migration_crash.test.mjs`。离线构建后运行 `node tests/helpers/packaged_upgrade_migration.mjs`，为其提供指向已批准 PowerShell 7 可执行文件的绝对 `PWSH_PATH`；脚本验证最终源码、真实内置 Node、空 PATH、仓库外 cwd、Installed/Portable 迁移/回滚及进程终止后的幂等恢复。测试仅用合成数据；不操作 Production、真实 OS 任务或外部服务。最终检查仍使用默认 `npm test` 并行度、`npm run check` 和 diff check。
 
+## Crash Recovery 与启动安全
+
+`recovery/run_recovery.mjs` 只读投影现有 run manifest、ledger、receipt、workflow lease 和当天 schedule claim，返回 `SAFE_TO_CONTINUE`、`RECOVERY_REQUIRED`、`BLOCKED` 或 `UNKNOWN`；不新增恢复数据库，不以日志或 mtime 推断成功。每个 runRoot 最多检查 100 个目录条目、单份元数据最多 1 MiB、累计投影内容最多 8 MiB；达到边界、元数据损坏或链接身份不明均安全阻塞。较新的完成记录不能隐藏较早的未完成运行。正式无操作 skip，以及具备已完成 manifest、必需阶段验证和安全通知终态的无操作成功运行，可以继续启动；空 ledger 本身不是成功证据。
+
+Runner 父进程持有原 `.workflow.lease.json`，覆盖子进程及其后的结果/通知收尾；同主机、同 runId/profile、真实直接子进程及匹配 ownerId 才能借用，子进程不能释放父 lease。只有本地主机已确认终止且过期的 owner 才可接管；使用同一文件系统的 hardlink、不覆盖历史文件及文件身份复核选出一个接管者，接管中断的歧义证据保持阻塞。远程 owner、存活进程、未知 legacy `.runner.operation.lock` 不自动清除。当前 Windows 接管实测范围为 NTFS，macOS 未实测。
+
+普通启动和 `--scheduled-daily` 不自动重跑未确认业务；显式恢复仍走对应固定 launcher 的 `--run --resume <runId>` 和原 ledger/artifact 校验。自动恢复仅在业务阶段及所有非通知操作已验证时进入原恢复 owner；通知操作再由原 receipt 校验决定是否可继续，已 accepted 不重发，unknown 不当作失败重试。Restore/Migration 的事务门禁继续由原 transaction owner 持有。已配置用户遇到启动恢复阻塞进入 System Health，保留配置，不重新初始化；Doctor 只读展示 `workflow.startup`，GUI 不参与 Headless 的准入决策。
+
+定向验证：`node --test workflow/tests/startup_recovery.test.mjs workflow/tests/control_setup.test.mjs workflow/tests/scheduled_daily_integration.test.mjs workflow/tests/operation_ledger.test.mjs`。最终源码离线打包后，`node tests/helpers/packaged_startup.mjs` 验证 Installed/Portable 的真实 GUI 三尺寸、内置 Node、空 PATH、仓库外 cwd、进程终止/恢复、只读 Doctor 和无遗留进程；`--cold-only` 补测干净配置的 GUI/Headless 冷启动。测试核对所有正式打包源码，仅允许刷新外部 smoke helper。Windows GUI 测试使用可启动 Chromium 子进程的正常桌面用户上下文，保持应用 sandbox/contextIsolation/webSecurity；记录 HTTP listen/200、导航和子进程退出，区分服务就绪与 renderer 加载。精确尺寸测试显式使用 100% 测试缩放，不改变系统设置或放宽 CSS/DIP 断言。最终仍运行默认 `npm test`、`npm run check` 和 diff check；单次全绿不消除历史间歇性锁错误的未确认风险。
+
 ## 首次运行配置向导
 
 GUI 启动读取真实配置与原 `runPreflight` 的本地检查结果：缺少配置或必要条件未满足时进入向导；已配置且本地检查可运行时直接进入 Control Center。可从“设置 → 首次配置向导”再次进入。没有完成布尔标记或第二份配置状态；关闭、部分保存、重复进入均以现有 owner 的持久数据恢复。合法但未选择 mode 的配置仅在 UI bootstrap 中提供临时显示上下文，不回写默认 mode；歧义、错误配置或冲突数据根仍由正式 resolver 拒绝。

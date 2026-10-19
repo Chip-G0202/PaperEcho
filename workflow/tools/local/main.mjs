@@ -15,7 +15,7 @@ import { resolveStage5Request, runStage5Notification } from "../stage5/main.mjs"
 import { receiptPathFor, recipientHash } from "../stage5/email_receipt.mjs";
 import { emailDeliveryPolicy } from '../notification/policy.mjs';
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
-import { createRunRecoveryCoordinator, resumeRunFromLedger } from "../recovery/run_recovery.mjs";
+import { createRunRecoveryCoordinator, resumeRunFromLedger, acquireStartupWorkflowLease } from "../recovery/run_recovery.mjs";
 import { buildLocalRecoveryReconcilers } from "../recovery/local_reconciliation.mjs";
 import { hashFile, acquireWorkflowLease, releaseRunLease } from "../recovery/operation_ledger.mjs";
 import {
@@ -67,7 +67,10 @@ function feedbackRows(events, repository) {
 async function withLocalWorkflowLease(options, dependencies, operation) {
   if (dependencies.localWorkflowLeaseHeld || options.help) return operation(dependencies);
   if (!options.outputRoot) throw new Error('LOCAL_OUTPUT_ROOT_REQUIRED');
-  const lease = await acquireWorkflowLease({ runRoot: path.join(path.resolve(options.outputRoot), 'runs'), runId: options.resume || options.runId || process.env.PAPERECHO_RUN_ID || 'local-' + randomUUID(), profile: 'standard' });
+  const acquire = dependencies.startupGate ? acquireStartupWorkflowLease : acquireWorkflowLease;
+  const lease = await acquire({ runRoot: path.join(path.resolve(options.outputRoot), 'runs'), runId: options.resume || options.runId || process.env.PAPERECHO_RUN_ID || 'local-' + randomUUID(),
+    profile: process.env.PAPERECHO_RUN_PROFILE || 'standard', resumeRunId: options.resume,
+    parentOwnerId: dependencies.startupGate ? process.env.PAPERECHO_PARENT_WORKFLOW_LEASE : '', dataRoots: [path.resolve(options.outputRoot)] });
   if (!lease.acquired) throw new Error('LOCAL_WORKFLOW_BUSY');
   try { return await operation({ ...dependencies, localWorkflowLeaseHeld: true, localWorkflowRunId: lease.lease.runId }); }
   finally { await releaseRunLease(lease); }
@@ -365,7 +368,7 @@ async function executeLocalPipeline(options = {}, dependencies = {}) {
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
-  return withLocalWorkflowLease(parseLocalArgs(argv), dependencies, deps => executeLocalMain(argv, deps));
+  return withLocalWorkflowLease(parseLocalArgs(argv), { ...dependencies, startupGate: true }, deps => executeLocalMain(argv, deps));
 }
 async function executeLocalMain(argv = process.argv.slice(2), dependencies = {}) {
   const options = parseLocalArgs(argv);

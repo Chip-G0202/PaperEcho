@@ -33,8 +33,8 @@ import { getDefaultZoteroLibraryIndexPath } from "../lib/zotero_library_index_st
 import { recordRadarNotificationOutcome, selectRadarNotificationCandidates } from "../radar/state.mjs";
 import { claimWeeklyRadarWritebackCandidates } from "../stage1/weekly_merge_step.mjs";
 import { radarNotificationReceiptPath, sendRadarAggregateNotification } from "../stage5/radar_notification.mjs";
-import { createRunRecoveryCoordinator, resumeRunFromLedger, RunRecoveryCoordinator } from "../recovery/run_recovery.mjs";
-import { acquireWorkflowLease, releaseRunLease } from "../recovery/operation_ledger.mjs";
+import { createRunRecoveryCoordinator, resumeRunFromLedger, RunRecoveryCoordinator, acquireStartupWorkflowLease } from "../recovery/run_recovery.mjs";
+import { releaseRunLease } from "../recovery/operation_ledger.mjs";
 import { ResearchEvaluationService } from '../lib/research_evaluation_service.mjs';
 import { buildZoteroRecoveryReconcilers } from "../recovery/zotero_reconciliation.mjs";
 import { dayLabel, monthLabel } from "../lib/report_period_support.mjs";
@@ -898,7 +898,9 @@ async function main() {
     const inputHash = String(process.env.PAPERECHO_INPUT_HASH || canonicalQueryHash({ mode: pipelineMode, profile }));
     const runRoot = path.join(config.reviewRoot, "runs");
     const targetRunId = resumeRunId || String(process.env.PAPERECHO_RUN_ID || `zlf-${Date.now()}-${randomUUID().slice(0, 8)}`);
-    workflowLease = await acquireWorkflowLease({ runRoot, runId: targetRunId, profile });
+    workflowLease = await acquireStartupWorkflowLease({ runRoot, runId: targetRunId, profile, resumeRunId,
+      automatic: process.env.PAPERECHO_SCHEDULED_DAILY === '1', parentOwnerId: process.env.PAPERECHO_PARENT_WORKFLOW_LEASE,
+      researchRoot: config.researchRoot, dataRoots: [config.projectRoot, config.reviewRoot] });
     if (!workflowLease.acquired) {
       report = { runId: targetRunId, run_id: targetRunId, status: "skipped", reason: workflowLease.reason || "active_workflow_lease", profile };
       orchestratorReportWritten = true;

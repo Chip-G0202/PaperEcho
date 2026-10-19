@@ -1,11 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from 'node:crypto';
+import { readBoundedJson, readBoundedBytes, boundedDirectory } from '../lib/atomic_json.mjs';
+import { validateNotificationReceipt } from '../stage5/email_receipt.mjs';
+import { scheduleDayDecisionPath, plannedSlotCalendarDateKey, validateScheduleDayClaim } from '../lib/schedule_support.mjs';
 
 import { getLiteratureIdentityKeys, normalizeTitleForExistingDedupe } from "../lib/literature_identity.mjs";
 import { finishRunGroup, runGroupPath } from "../lib/runtime_housekeeping.mjs";
 import { canonicalQueryHash, writeAtomicJson } from "../stage1/source_state.mjs";
 import {
   acquireRunLease,
+  acquireWorkflowLease,
+  inspectWorkflowLease,
+  validateOperationLedger,
   hashFile,
   OperationLedgerStore,
   releaseRunLease,
@@ -28,6 +35,108 @@ export function inspectRecoveryLedger(ledger) {
     unresolvedOperations: ledger.operations.filter(op => op.status !== 'verified').length,
     conflicts: ledger.operations.filter(op => op.status === 'conflict').length,
   };
+}
+
+// A bounded read-only projection of existing owners, never a recovery journal.
+// Inspect every registered group in the bound: an older unfinished run is not
+// hidden by a newer completed one, and inspection limits stay UNKNOWN.
+export async function inspectStartupRecovery({ runRoot, resumeRunId = '', automatic = false, ownLeaseOwnerId = '', dataRoots = [], researchRoot } = {}, dependencies = {}) {
+  const result = (state, code, extra = {}) => ({ state, code, blocking: state !== 'SAFE_TO_CONTINUE', canResume: false, ...extra });
+  let bytes = 0;
+  const read = async (root, file, maxBytes = 1048576) => {
+    const value = await readBoundedJson(root, file, { maxBytes });
+    bytes += value ? Buffer.byteLength(JSON.stringify(value)) : 0;
+    if (bytes > 8 * 1048576) throw new Error('INSPECTION_LIMIT');
+    return value;
+  };
+  const within = (root, file) => { const r = path.relative(path.resolve(root), path.resolve(file)); return r !== '..' && !r.startsWith('..' + path.sep) && !path.isAbsolute(r); };
+  try {
+    if (!path.isAbsolute(runRoot || '')) throw new Error('STARTUP_ROOT_INVALID');
+    if (resumeRunId) validateRecoveryRunId(resumeRunId);
+    const legacy = await read(runRoot, path.join(runRoot, '.runner.operation.lock'), 8192);
+    if (legacy) return result('UNKNOWN', 'STARTUP_LEGACY_ADMISSION_UNCONFIRMED');
+    const lease = await read(runRoot, path.join(runRoot, '.workflow.lease.json'), 8192);
+    const claim = inspectWorkflowLease(lease, { ...dependencies, now: (dependencies.clock || (() => new Date()))() });
+    if (claim === 'unknown') return result('UNKNOWN', 'STARTUP_LEASE_UNCONFIRMED');
+    if (claim === 'running' && !(lease.ownerId === ownLeaseOwnerId && lease.pid === process.pid)) return result('BLOCKED', 'STARTUP_WORKFLOW_ACTIVE');
+    let dayClaim;
+    if (researchRoot) {
+      const now = (dependencies.clock || (() => new Date()))();
+      dayClaim = await read(researchRoot, scheduleDayDecisionPath(path.join(researchRoot, 'schedule_decisions'), plannedSlotCalendarDateKey(now)), 8192);
+      if (dayClaim) validateScheduleDayClaim(dayClaim, now);
+    }
+    const pending = [], seen = new Set();
+    for (const entry of await boundedDirectory(runRoot)) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      const runId = validateRecoveryRunId(entry.name), directory = path.join(runRoot, runId); seen.add(runId);
+      const manifest = await read(runRoot, path.join(directory, 'run_group.json'));
+      const ledger = await read(runRoot, path.join(directory, 'operation_ledger.json'));
+      if (!manifest || !ledger || manifest.schemaVersion !== 1 || manifest.runId !== runId || !Number.isFinite(Date.parse(manifest.startedAt))) throw new Error('STARTUP_RUN_UNCONFIRMED');
+      validateOperationLedger(ledger, { expectedRunId: runId });
+      const statuses = ['running', 'completed', 'skipped', 'failed', 'incomplete', 'interrupted', 'timed_out'];
+      if (!statuses.includes(ledger.status) || !statuses.includes(manifest.status) || manifest.pipelineMode !== ledger.mode) throw new Error('STARTUP_RUN_UNCONFIRMED');
+      const lock = await read(directory, path.join(directory, 'run.lock'), 8192);
+      if (lock) {
+        if (!Number.isInteger(lock.pid) || lock.pid < 1) throw new Error('STARTUP_RUN_LOCK_UNCONFIRMED');
+        let alive;
+        if (dependencies.processAlive) alive = dependencies.processAlive(lock.pid);
+        else { try { process.kill(lock.pid, 0); alive = true; } catch (error) { if (error.code === 'ESRCH') alive = false; else throw error; } }
+        if (alive) return result('BLOCKED', 'STARTUP_ORIGINAL_RUN_ACTIVE');
+      }
+      let autoResume = true, receiptsComplete = true;
+      for (const operation of ledger.operations) {
+        for (const key of ['path', 'receiptPath']) {
+          const file = operation.target?.[key];
+          if (file && path.isAbsolute(file) && ![runRoot, ...dataRoots].some(root => within(root, file))) throw new Error('STARTUP_OPERATION_SCOPE_UNCONFIRMED');
+        }
+        if (operation.type !== 'notification') {
+          if (operation.status !== 'verified') autoResume = false;
+          continue;
+        }
+        const file = operation.target?.receiptPath || operation.target?.path;
+        if (!file || !path.isAbsolute(file) || !within(directory, file)) throw new Error('STARTUP_RECEIPT_UNCONFIRMED');
+        const receipt = await read(directory, file);
+        if (receipt) {
+          validateNotificationReceipt(receipt);
+          if (receipt.runId !== runId || receipt.ledgerOperationId !== operation.idempotencyKey || (receipt.channel || 'email') !== (operation.intent?.channel || 'email')) throw new Error('STARTUP_RECEIPT_UNCONFIRMED');
+        }
+        if (operation.status === 'verified' && receipt?.status !== 'accepted') throw new Error('STARTUP_RECEIPT_UNCONFIRMED');
+        if (receipt?.status !== 'accepted') { receiptsComplete = false; if (receipt || operation.status !== 'pending') autoResume = false; }
+      }
+      const facts = inspectRecoveryLedger(ledger);
+      const artifact = ledger.artifact?.path;
+      const bound = /^[a-f0-9]{64}$/.test(ledger.artifact?.hash || '') && path.isAbsolute(artifact || '') && within(directory, artifact);
+      // Formal interval/duplicate skips have no planned business effects.
+      if (manifest.status === 'skipped' && ledger.status === 'skipped' && ledger.workflowStatus === 'skipped'
+        && !ledger.operations.length && Object.values(ledger.stages).every(stage => ['pending', 'skipped'].includes(stage.status))) continue;
+      const completedLedger = ledger.status === 'completed' || ledger.status === 'incomplete' && !ledger.operations.length && ledger.workflowStatus === 'completed';
+      if (completedLedger && manifest.status === 'completed' && bound && facts.businessComplete && !facts.unresolvedOperations
+        && ['verified', 'skipped'].includes(ledger.stages?.stage5_notification?.status) && receiptsComplete) continue;
+      if (facts.conflicts || manifest.status === 'completed' && ledger.status !== 'completed') throw new Error('STARTUP_RUN_UNCONFIRMED');
+      pending.push({ runId, canResume: bound, autoResume: autoResume && facts.businessComplete });
+    }
+    if (claim === 'stale' && !seen.has(lease.runId)) return result('UNKNOWN', 'STARTUP_ORPHAN_LEASE_UNCONFIRMED');
+    if (dayClaim?.businessRunId && !seen.has(dayClaim.businessRunId)) return result('UNKNOWN', 'STARTUP_SCHEDULE_RUN_UNCONFIRMED');
+    if (!pending.length) return result('SAFE_TO_CONTINUE', 'STARTUP_SAFE');
+    const one = pending.length === 1 ? pending[0] : null;
+    const canResume = Boolean(one?.canResume && one.runId === resumeRunId && (!automatic || one.autoResume));
+    if (pending.some(run => !run.canResume)) return result('UNKNOWN', 'STARTUP_RUN_UNBOUND', { pendingRuns: pending.length });
+    return result('RECOVERY_REQUIRED', 'STARTUP_RUN_RECOVERY_REQUIRED', { canResume, runId: one?.runId || null, pendingRuns: pending.length, automaticSafe: Boolean(one?.canResume && one.autoResume) });
+  } catch { return result('UNKNOWN', 'STARTUP_STATE_UNCONFIRMED'); }
+}
+
+export async function acquireStartupWorkflowLease(options, dependencies = {}) {
+  if (options.parentOwnerId) return acquireWorkflowLease(options, dependencies);
+  const allowed = state => !state.blocking || state.canResume;
+  const before = await inspectStartupRecovery(options, dependencies);
+  if (!allowed(before)) return { acquired: false, reason: before.code, recovery: before };
+  const lease = await acquireWorkflowLease(options, dependencies);
+  if (!lease.acquired) return lease;
+  try {
+    const after = await inspectStartupRecovery({ ...options, ownLeaseOwnerId: lease.lease.ownerId }, dependencies);
+    if (allowed(after)) return lease;
+    await releaseRunLease(lease); return { acquired: false, reason: after.code, recovery: after };
+  } catch (error) { await releaseRunLease(lease); throw error; }
 }
 
 export async function createRunRecoveryCoordinator({ runRoot, runId, mode, profile, launcherId, configHash, inputHash, artifactPath }, dependencies = {}) {
@@ -389,15 +498,18 @@ export class RunRecoveryCoordinator {
 
 export async function resumeRunFromLedger({ runRoot, runId, mode, profile, configHash, inputHash = "", buildReconcilers, beforeReconcile = null, onBusinessVerified = null, context = {}, notification = {} }, dependencies = {}) {
   const safeRunId = validateRecoveryRunId(runId);
+  // Reject missing/unsafe metadata before creating a resume directory or lease.
+  await OperationLedgerStore.load({ runRoot, runId: safeRunId }, dependencies);
   const lease = await acquireRunLease({ runRoot, runId: safeRunId, ttlMs: dependencies.ttlMs || 60_000 }, dependencies);
   if (!lease.acquired) return { runId: safeRunId, run_id: safeRunId, resume: true, status: "blocked", reason: lease.reason || "active_lease" };
   try {
     const fsApi = dependencies.fsApi || fs;
     const originalLockPath = path.join(path.dirname(runGroupPath(runRoot, safeRunId)), "run.lock");
     try {
-      const originalLock = JSON.parse(await fsApi.readFile(originalLockPath, "utf8"));
+      const originalLock = await readBoundedJson(path.dirname(runGroupPath(runRoot, safeRunId)), originalLockPath, { maxBytes: 8192 });
+      if (originalLock && (!Number.isInteger(originalLock.pid) || originalLock.pid < 1)) throw new Error('RECOVERY_ORIGINAL_RUN_LOCK_INVALID');
       const processAlive = dependencies.processAlive || ((pid) => { try { process.kill(Number(pid), 0); return true; } catch (error) { return error?.code === "EPERM"; } });
-      if (Number(originalLock.pid) !== process.pid && processAlive(originalLock.pid)) throw new Error("RECOVERY_ORIGINAL_RUN_ACTIVE");
+      if (originalLock && Number(originalLock.pid) !== process.pid && processAlive(originalLock.pid)) throw new Error("RECOVERY_ORIGINAL_RUN_ACTIVE");
     } catch (error) {
       if (error?.code === "ENOENT") {
         // Normal failed runs release the original run lock.
@@ -410,10 +522,12 @@ export async function resumeRunFromLedger({ runRoot, runId, mode, profile, confi
     if (store.ledger.mode !== mode || store.ledger.profile !== profile) throw new Error("RECOVERY_MODE_PROFILE_MISMATCH");
     if (store.ledger.configHash !== configHash) throw new Error("RECOVERY_CONFIG_HASH_MISMATCH");
     if (inputHash && store.ledger.inputHash !== inputHash) throw new Error("RECOVERY_INPUT_HASH_MISMATCH");
-    const actualArtifactHash = await hashFile(store.ledger.artifact.path, { fsApi });
+    const artifactBytes = await readBoundedBytes(path.dirname(runGroupPath(runRoot, safeRunId)), store.ledger.artifact.path, { maxBytes: 16 * 1048576 });
+    if (!artifactBytes) throw new Error('RECOVERY_ARTIFACT_MISSING');
+    const actualArtifactHash = createHash('sha256').update(artifactBytes).digest('hex');
     if (actualArtifactHash !== store.ledger.artifact.hash) throw new Error("RECOVERY_ARTIFACT_HASH_MISMATCH");
     if (store.ledger.inputHash !== actualArtifactHash) throw new Error("RECOVERY_INPUT_ARTIFACT_HASH_MISMATCH");
-    let artifact = JSON.parse(await fsApi.readFile(store.ledger.artifact.path, "utf8"));
+    let artifact = JSON.parse(artifactBytes.toString('utf8'));
     const publish = async () => {
       if (!onBusinessVerified) return null;
       try { return await onBusinessVerified({ store }); }

@@ -97,8 +97,11 @@ test('lease evidence distinguishes live, stale, remote and uncertain without mti
 });
 test('ledger recovery, unknown notification and business completion remain separate and read-only', async t => {
   const f = await fixture(t); const directory = path.join(f.context.runRoot, 'dummy');
-  await write(path.join(directory, 'run_group.json'), { schemaVersion: 1, runId: 'dummy', startedAt: '2026-10-16T00:00:00Z', status: 'incomplete' });
-  const ledger = createOperationLedger({ runId: 'dummy', mode: 'local', profile: 'standard', configHash: 'a'.repeat(64), inputHash: 'b'.repeat(64), artifactPath: directory, stages: ['stage1', 'state_persist', 'stage4_exports'] });
+  await write(path.join(directory, 'run_group.json'), { schemaVersion: 1, runId: 'dummy', pipelineMode: 'local', startedAt: '2026-10-16T00:00:00Z', status: 'incomplete' });
+  const artifact = path.join(directory, 'input_artifact.json'); await write(artifact, []);
+  const hash = createHash('sha256').update(await fs.readFile(artifact)).digest('hex');
+  const ledger = createOperationLedger({ runId: 'dummy', mode: 'local', profile: 'standard', configHash: 'a'.repeat(64), inputHash: hash, artifactPath: artifact, stages: ['stage1', 'state_persist', 'stage4_exports'] });
+  ledger.artifact.hash = hash;
   ledger.status = 'incomplete'; for (const stage of Object.values(ledger.stages)) stage.status = 'verified';
   await write(path.join(directory, 'operation_ledger.json'), ledger);
   const before = await snapshot(f.root); const report = await diagnostic(f).status();
@@ -107,10 +110,11 @@ test('ledger recovery, unknown notification and business completion remain separ
   const receiptFile = path.join(directory, 'stage5/email_receipt.json');
   ledger.operations.push({ type: 'notification', inputVersion: 1, idempotencyKey: 'c'.repeat(64), status: 'failed', target: { receiptPath: receiptFile } });
   await write(path.join(directory, 'operation_ledger.json'), ledger);
-  const receipt = createNotificationReceipt({ notificationType: 'run_summary', runId: 'dummy', businessSubject: 'dummy-private-title', eventEpoch: 'dummy', recipient: 'dummy@example.invalid', payload: { subject: 'dummy', text: 'dummy-private-content' } });
+  const receipt = createNotificationReceipt({ notificationType: 'run_summary', runId: 'dummy', businessSubject: 'dummy-private-title', eventEpoch: 'dummy', recipient: 'dummy@example.invalid', ledgerOperationId: 'c'.repeat(64), payload: { subject: 'dummy', text: 'dummy-private-content' } });
   for (const [status, expected] of [['failed', 'WARN'], ['unknown', 'UNKNOWN'], ['accepted', 'PASS']]) {
     await write(receiptFile, { ...receipt, status }); const stable = await snapshot(f.root); const result = await diagnostic(f).status();
-    assert.equal(check(result, 'workflow.receipts').status, expected); assert.equal(result.canRun, true);
+    assert.equal(check(result, 'workflow.receipts').status, expected); assert.equal(result.canRun, false);
+    assert.equal(check(result, 'workflow.startup').status, 'FAIL', 'unfinished recovery blocks launch even after receipt acceptance');
     assert.match(check(result, 'workflow.recovery').summary, /业务阶段已成功/);
     assert.doesNotMatch(JSON.stringify(result), /dummy-private-title|dummy-private-content|dummy@example/); assert.deepEqual(await snapshot(f.root), stable);
   }

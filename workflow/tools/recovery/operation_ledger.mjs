@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { assertRestoreWritable } from './restore_transaction_status.mjs';
+import { readBoundedJson } from '../lib/atomic_json.mjs';
 
 import { canonicalQueryHash, writeAtomicJson } from "../stage1/source_state.mjs";
 
@@ -144,9 +145,9 @@ export class OperationLedgerStore {
   }
 
   static async load({ runRoot, runId }, dependencies = {}) {
-    const fsApi = dependencies.fsApi || fs;
     const filePath = resolveRunStatePath(runRoot, runId);
-    const value = JSON.parse(await fsApi.readFile(filePath, "utf8"));
+    const value = await readBoundedJson(path.resolve(runRoot), filePath);
+    if (!value) throw Object.assign(new Error('OPERATION_LEDGER_MISSING'), { code: 'ENOENT' });
     validateOperationLedger(value, { expectedRunId: runId });
     return new OperationLedgerStore(filePath, value, dependencies);
   }
@@ -250,7 +251,7 @@ function ownerAlive(lease, { hostname, processAlive }) {
   if (lease.hostname !== hostname) return false;
   if (typeof processAlive === "function") return Boolean(processAlive(lease.pid));
   try { process.kill(Number(lease.pid), 0); return true; }
-  catch (error) { return error?.code === "EPERM"; }
+  catch (error) { if (error?.code === 'ESRCH') return false; if (error?.code === 'EPERM') return true; throw new Error('LEASE_OWNER_UNCONFIRMED'); }
 }
 
 // Inspection never takes over a lease. Remote/unverifiable owners remain unknown.
@@ -272,6 +273,32 @@ async function writeNewLease(leasePath, lease, fsApi) {
     catch (error) { await handle.close(); await fsApi.unlink(leasePath); throw error; }
     await handle.writeFile(`${JSON.stringify(lease, null, 2)}\n`, "utf8");
     if (typeof handle.sync === "function") await handle.sync();
+  } finally { await handle.close(); }
+}
+
+// A deterministic, non-overwriting archive elects one stale-lease reclaimer.
+// Interrupted claims remain evidence; never remove an unknown takeover archive.
+async function preserveStaleLease(leasePath, previous, fsApi) {
+  const historyPath = `${leasePath}.takeover.${canonicalQueryHash(previous)}.json`;
+  let handle;
+  try { handle = await fsApi.open(leasePath, 'r'); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  try {
+    const before = await handle.stat();
+    if (before.nlink !== 1) return null;
+    const buffer = Buffer.alloc(8193), { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (!before.isFile() || before.size > 8192 || bytesRead > 8192
+      || JSON.stringify(JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'))) !== JSON.stringify(previous)) throw new Error('LEASE_IDENTITY_UNCONFIRMED');
+    assertRestoreWritable(leasePath);
+    try { await fsApi.link(leasePath, historyPath); }
+    catch (error) { if (['EEXIST', 'ENOENT'].includes(error.code)) return null; throw new Error('LEASE_TAKEOVER_UNAVAILABLE'); }
+    const archive = await fsApi.lstat(historyPath), current = await fsApi.lstat(leasePath);
+    if (!archive.isFile() || !current.isFile() || archive.isSymbolicLink() || current.isSymbolicLink()
+      || current.dev !== before.dev || current.ino !== before.ino || archive.dev !== before.dev || archive.ino !== before.ino
+      || current.nlink !== 2 || archive.nlink !== 2) throw new Error('LEASE_IDENTITY_UNCONFIRMED');
+    assertRestoreWritable(leasePath);
+    await fsApi.unlink(leasePath);
+    return historyPath;
   } finally { await handle.close(); }
 }
 
@@ -302,17 +329,15 @@ export async function acquireRunLease({ runRoot, runId, ttlMs = 60_000, ownerId 
       if (error?.code !== "EEXIST") throw error;
     }
     let previous;
-    try { previous = JSON.parse(await fsApi.readFile(leasePath, "utf8")); }
+    try { previous = await readBoundedJson(path.resolve(runRoot), leasePath, { maxBytes: 8192 }); if (!previous) continue; }
     catch {
       if (attempt < 4) { await new Promise((resolve) => setTimeout(resolve, 5)); continue; }
       throw new Error("RUN_LEASE_UNREADABLE");
     }
     if (previous.schemaVersion !== RUN_LEASE_SCHEMA_VERSION || previous.runId !== runId) throw new Error("RUN_LEASE_INVALID");
-    const expired = Date.parse(previous.expiresAt || 0) <= now.getTime();
-    if (!expired || ownerAlive(previous, { hostname, processAlive })) return { acquired: false, reason: "active_lease", leasePath, lease: previous, takeover: null };
-    const historyPath = `${leasePath}.takeover.${now.toISOString().replace(/[:.]/g, "-")}.${String(previous.ownerId || "unknown").replace(/[^A-Za-z0-9_-]/g, "-")}.json`;
-    try { await fsApi.rename(leasePath, historyPath); }
-    catch (error) { if (error?.code === "ENOENT" || error?.code === "EEXIST") continue; throw error; }
+    if (inspectWorkflowLease(previous, { now, hostname, processAlive }) !== 'stale') return { acquired: false, reason: "active_lease", leasePath, lease: previous, takeover: null };
+    const historyPath = await preserveStaleLease(leasePath, previous, fsApi);
+    if (!historyPath) return { acquired: false, reason: 'lease_race', leasePath, lease: previous, takeover: null };
     try {
       await writeNewLease(leasePath, lease, fsApi);
       return { acquired: true, leasePath, lease, takeover: { previous, historyPath } };
@@ -324,6 +349,7 @@ export async function acquireRunLease({ runRoot, runId, ttlMs = 60_000, ownerId 
 }
 
 export async function releaseRunLease(lease, { fsApi = fs } = {}) {
+  if (lease?.borrowed) return { released: false, reason: 'borrowed_parent' };
   if (!lease?.acquired) return { released: false, reason: "not_owner" };
   let current;
   try { current = JSON.parse(await fsApi.readFile(lease.leasePath, "utf8")); }
@@ -333,13 +359,19 @@ export async function releaseRunLease(lease, { fsApi = fs } = {}) {
   return { released: true };
 }
 
-export async function acquireWorkflowLease({ runRoot, runId, profile, ttlMs = 60_000, ownerId = randomUUID(), allowTakeover = true }, dependencies = {}) {
+export async function acquireWorkflowLease({ runRoot, runId, profile, ttlMs = 60_000, ownerId = randomUUID(), allowTakeover = true, parentOwnerId = '' }, dependencies = {}) {
   const fsApi = dependencies.fsApi || fs;
   const clock = dependencies.clock || (() => new Date());
   const hostname = dependencies.hostname || os.hostname();
   const processAlive = dependencies.processAlive;
   const leasePath = path.join(path.resolve(runRoot), ".workflow.lease.json");
   assertRestoreWritable(leasePath);
+  if (parentOwnerId) {
+    const lease = await readBoundedJson(path.resolve(runRoot), leasePath, { maxBytes: 8192 });
+    if (!lease || lease.ownerId !== parentOwnerId || lease.pid !== process.ppid || lease.runId !== runId || lease.profile !== profile
+      || inspectWorkflowLease(lease, { now: clock(), hostname, processAlive }) !== 'running') return { acquired: false, reason: 'parent_lease_unconfirmed', leasePath };
+    return { acquired: true, borrowed: true, leasePath, lease, takeover: null };
+  }
   await fsApi.mkdir(path.dirname(leasePath), { recursive: true });
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const now = clock();
@@ -361,18 +393,16 @@ export async function acquireWorkflowLease({ runRoot, runId, profile, ttlMs = 60
       if (error?.code !== "EEXIST") throw error;
     }
     let previous;
-    try { previous = JSON.parse(await fsApi.readFile(leasePath, "utf8")); }
+    try { previous = await readBoundedJson(path.resolve(runRoot), leasePath, { maxBytes: 8192 }); if (!previous) continue; }
     catch {
       if (attempt < 4) { await new Promise((resolve) => setTimeout(resolve, 5)); continue; }
       throw new Error("WORKFLOW_LEASE_UNREADABLE");
     }
     if (!allowTakeover) return { acquired: false, reason: 'existing_workflow_lease', leasePath };
     if (previous.schemaVersion !== RUN_LEASE_SCHEMA_VERSION || !previous.runId) throw new Error("WORKFLOW_LEASE_INVALID");
-    const expired = Date.parse(previous.expiresAt || 0) <= now.getTime();
-    if (!expired || ownerAlive(previous, { hostname, processAlive })) return { acquired: false, reason: "active_lease", leasePath, lease: previous, takeover: null };
-    const historyPath = `${leasePath}.takeover.${now.toISOString().replace(/[:.]/g, "-")}.${String(previous.ownerId || "unknown").replace(/[^A-Za-z0-9_-]/g, "-")}.json`;
-    try { await fsApi.rename(leasePath, historyPath); }
-    catch (error) { if (error?.code === "ENOENT" || error?.code === "EEXIST") continue; throw error; }
+    if (inspectWorkflowLease(previous, { now, hostname, processAlive }) !== 'stale') return { acquired: false, reason: "active_lease", leasePath, lease: previous, takeover: null };
+    const historyPath = await preserveStaleLease(leasePath, previous, fsApi);
+    if (!historyPath) return { acquired: false, reason: 'lease_race', leasePath, lease: previous, takeover: null };
     try {
       await writeNewLease(leasePath, lease, fsApi);
       return { acquired: true, leasePath, lease, takeover: { previous, historyPath } };

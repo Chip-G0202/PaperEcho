@@ -11,6 +11,7 @@ import { resolveLlmRuntime } from "../lib/llm_json_support.mjs";
 import { buildRuntimeConfig, resolveRuntimePaths } from "../lib/runtime_config.mjs";
 import { readBoundedJson } from '../lib/atomic_json.mjs';
 import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
+import { inspectStartupRecovery } from '../recovery/run_recovery.mjs';
 import { RUNNER_SCHEMA_VERSION } from "./constants.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
 import { copyEnvironment } from '../lib/credential_registry.mjs';
@@ -276,6 +277,11 @@ export async function runPreflight(options, dependencies = {}) {
   }
 
   if (options.profile === "complete" && !options.requireLlm && !options.resume) warnings.push("complete 仅强制用户明确请求的功能；未隐式要求真实 LLM");
+  const runtime = buildRuntimeConfig({ cwd: repoRoot, env });
+  const startupRecovery = await inspectStartupRecovery({ runRoot: buildExecutionPlan(options, { env, repoRoot, entries }).runRoot,
+    researchRoot: options.mode === 'local' ? undefined : runtime.researchRoot, resumeRunId: options.resume, automatic: Boolean(options.scheduledDaily),
+    dataRoots: [runtime.projectRoot, runtime.reviewRoot, options.outputRoot].filter(Boolean) });
+  if (startupRecovery.blocking && !startupRecovery.canResume) requiredMissing.push(missing('startup recovery', '先前运行的安全终态尚未确认', '查看 System Health 和本次运行登记；不会自动清锁或重放外部操作', 'recovery'));
   const canRun = requiredMissing.length === 0;
   const retry = retryCommand(options);
   const requiredWithRetry = requiredMissing.map((item) => ({ ...item, retryCommand: retry }));
@@ -296,6 +302,7 @@ export async function runPreflight(options, dependencies = {}) {
       return value;
     }),
     canRun,
+    startupRecovery,
     warnings,
     retryCommand: retry,
     configuration: options.configSummary || { schemaVersion: null, path: null, source: "none", modeSource: options.fixedMode ? "fixed_launcher" : "cli", selectedMode: options.mode, profile: options.profile, sectionsChecked: ["common", options.mode], secretStatus: {} },

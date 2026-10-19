@@ -6,7 +6,7 @@ import { assertRestoreWritable } from '../recovery/restore_transaction_status.mj
 const TRANSIENT_RENAME_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
 
 // Bounded read-only inspection; never follow a linked directory or special file.
-export async function readBoundedJson(root, file, { maxBytes = 1048576 } = {}) {
+export async function readBoundedBytes(root, file, { maxBytes = 1048576 } = {}) {
   const relative = path.relative(path.resolve(root), path.resolve(file));
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('INSPECTION_PATH_UNSAFE');
   try {
@@ -22,9 +22,13 @@ export async function readBoundedJson(root, file, { maxBytes = 1048576 } = {}) {
       const buffer = Buffer.alloc(maxBytes + 1);
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
       if (bytesRead > maxBytes) throw new Error('INSPECTION_LIMIT');
-      return JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
+      return buffer.subarray(0, bytesRead);
     } finally { await handle.close(); }
   } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+export async function readBoundedJson(root, file, options) {
+  const bytes = await readBoundedBytes(root, file, options);
+  return bytes === null ? null : JSON.parse(bytes.toString('utf8'));
 }
 export async function boundedDirectory(directory, limit = 100) {
   try {

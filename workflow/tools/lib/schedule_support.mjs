@@ -126,6 +126,14 @@ export function scheduleDayDecisionPath(stateRoot, dateKey) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ""))) throw new Error("SCHEDULE_DATE_KEY_INVALID");
   return path.join(path.resolve(stateRoot), "v1", `${dateKey}.json`);
 }
+export function validateScheduleDayClaim(claim, now) {
+  if (claim?.schemaVersion !== 1 || claim.dateKey !== plannedSlotCalendarDateKey(now)
+    || claim.plannedSlotAt !== resolvePlannedSlotAt(now).toISOString()
+    || !['weekly_takeover', 'radar'].includes(claim.decision) || typeof claim.businessRunId !== 'string'
+    || (claim.businessRunId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(claim.businessRunId))
+    || (!claim.businessRunId && claim.decision !== 'weekly_takeover')) throw new Error('SCHEDULE_DAY_DECISION_INVALID');
+  return claim;
+}
 
 export async function claimScheduleDayDecision({
   stateRoot,
@@ -144,9 +152,7 @@ export async function claimScheduleDayDecision({
     try { existing = JSON.parse(await fsApi.readFile(filePath, "utf8")); }
     catch (error) { if (error?.code !== "ENOENT") throw error; }
     if (existing) {
-      if (existing.schemaVersion !== 1 || existing.dateKey !== dateKey || !new Set(["weekly_takeover", "radar"]).has(existing.decision)) {
-        throw new Error("SCHEDULE_DAY_DECISION_INVALID");
-      }
+      validateScheduleDayClaim(existing, now);
       if (existing.decision === "weekly_takeover" && requestedProfile === "weekly" && !existing.businessRunId) {
         existing.businessRunId = String(runId || "");
         existing.claimedAt = clock().toISOString();

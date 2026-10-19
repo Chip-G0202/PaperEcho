@@ -153,12 +153,13 @@ test("blocked preflight never calls production entry and maps category exit code
   assert.equal(productionCalls, 0);
 });
 
-test("ready --run calls the fixed production entry once and validates once", async () => {
+test("ready --run calls the fixed production entry once and validates once", async t => {
+  const paths = await fixture(); t.after(() => fs.rm(paths.root, { recursive: true, force: true }));
   let productionCalls = 0;
   let validationCalls = 0;
   const code = await runnerMain(["--mode", "local", "--run", "--input", "x", "--output-root", "y"], {
     runPreflightImpl: async () => readyPreflight(),
-    buildExecutionPlanImpl: () => ({ entry: "fake", args: [], childEnv: {}, cwd: ".", runRoot: "runs" }),
+    buildExecutionPlanImpl: () => ({ entry: "fake", args: [], childEnv: {}, cwd: ".", runRoot: path.join(paths.root, 'runs'), runId: 'fixture-run' }),
     runProductionImpl: async () => { productionCalls += 1; return { code: 0, signal: null, stdout: "{}", stderr: "" }; },
     validateProductionResultImpl: async () => { validationCalls += 1; return { ok: true, exitCode: 0 }; },
     stdout: sink(), stderr: sink(),
@@ -168,14 +169,15 @@ test("ready --run calls the fixed production entry once and validates once", asy
   assert.equal(validationCalls, 1);
 });
 
-for (const schemaVersion of ['2', '3', '4']) for (const failed of [false, true]) test(`schema ${schemaVersion} Runner invokes existing ${failed ? 'failure' : 'health'} notifier only with Email enabled`, async () => {
+for (const schemaVersion of ['2', '3', '4']) for (const failed of [false, true]) test(`schema ${schemaVersion} Runner invokes existing ${failed ? 'failure' : 'health'} notifier only with Email enabled`, async t => {
+  const paths = await fixture(); t.after(() => fs.rm(paths.root, { recursive: true, force: true }));
   for (const enabled of [true, false]) {
     let calls = 0;
     const env = { PAPERECHO_CONFIG_SCHEMA_VERSION: schemaVersion, PAPERECHO_EMAIL_ENABLED: String(enabled), PAPERECHO_FAILURE_NOTIFIER_ENABLED: 'true', PAPERECHO_HEALTH_NOTIFIER_ENABLED: 'true', PAPERFLOW_REPORT_TO: 'fixture@example.test' };
     const code = await runnerMain(['--mode', 'local', '--run', '--input', 'x', '--output-root', 'y'], {
       resolveRunnerConfigurationImpl: async (options) => ({ options, env }),
       runPreflightImpl: async () => readyPreflight(),
-      buildExecutionPlanImpl: () => ({ runRoot: 'fixture-unused', runId: 'fixture-run' }),
+      buildExecutionPlanImpl: () => ({ runRoot: path.join(paths.root, 'runs'), runId: 'fixture-run' }),
       runProductionImpl: async () => ({ code: failed ? 1 : 0, stdout: JSON.stringify({ status: failed ? 'failed' : 'completed' }), stderr: '' }),
       notifyRunFailureImpl: async () => { assert.equal(failed, true); calls++; return { status: 'accepted' }; },
       processHealthNotificationsImpl: async () => { assert.equal(failed, false); calls++; return { status: 'accepted' }; },

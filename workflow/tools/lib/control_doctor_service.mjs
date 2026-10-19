@@ -77,6 +77,8 @@ export class DoctorService {
     await inspect('preflight', async () => {
       if (!resolved) { add('preflight', 'UNKNOWN', '配置尚不足以执行本地预检', '先完成基础配置。', true); return; }
       const report = await this.preflight(resolved.options, { env: resolved.env });
+      if (report.startupRecovery) add('workflow.startup', report.startupRecovery.state === 'SAFE_TO_CONTINUE' ? 'PASS' : report.startupRecovery.state === 'UNKNOWN' ? 'UNKNOWN' : 'FAIL',
+        report.startupRecovery.state === 'SAFE_TO_CONTINUE' ? '运行登记处于安全终态' : '先前运行或活动进程尚未完成安全确认', '只读检查运行登记；需要时通过正式恢复入口继续，不能自动重放外部操作。', true);
       add('preflight', report.canRun ? 'PASS' : 'FAIL', report.canRun ? '本地必需运行条件满足；未验证外部服务连接' : '必需运行条件不满足',
         report.canRun ? '' : '在首次配置或设置中检查所选路径的输入、输出、Zotero 依赖及必需凭据。', true);
       add('preflight.optional', report.featureMissing.length + report.optionalMissing.length ? 'WARN' : 'PASS',

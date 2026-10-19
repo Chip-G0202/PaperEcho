@@ -10,12 +10,35 @@ import { prepareShell, startShell } from '../../desktop/electron-poc/main.mjs';
 import { sandboxBase, allowedDocument, failurePage } from '../../desktop/electron-poc/shell.mjs';
 import JSZip from 'jszip';
 import { createHash } from 'node:crypto';
+import http from 'node:http';
 export async function smoke({ root, outputRoot = sandboxBase, prepare = true, startShellImpl = startShell } = {}) {
 const began = performance.now();
 let shell;
 const report = { platform: process.platform, electron: process.versions.electron, node: process.versions.node, pathEmpty: !process.env.PATH, checks: [], views: [], consoleErrors: [], runtimeErrors: [], rendererGone: [] };
+const startup = report.startup = { loads: [], children: [], http: [], finished: false, closed: false };
+const urlKind = value => { try { const u = new URL(value); return { kind: u.hostname === '127.0.0.1' ? 'loopback' : u.protocol.replace(':', ''), ...(u.hostname === '127.0.0.1' ? { port: Number(u.port), root: u.pathname === '/' } : {}) }; } catch { return { kind: 'invalid' }; } };
+const note = (list, value) => { if (list.length < 40) list.push(value); };
+app.on('child-process-gone', (_event, details) => note(startup.children, { type: details.type, reason: details.reason, exitCode: details.exitCode }));
+const originalListen = http.Server.prototype.listen;
+http.Server.prototype.listen = function (...args) {
+  this.once('listening', () => {
+    const address = this.address(); note(startup.http, { step: 'listening', loopback: address?.address === '127.0.0.1', port: address?.port });
+    if (address?.address === '127.0.0.1') {
+      const req = http.get({ host: '127.0.0.1', port: address.port, path: '/', headers: { 'X-PaperEcho-Smoke-Probe': '1' } }, res => { note(startup.http, { step: 'independent-probe', status: res.statusCode }); res.resume(); });
+      req.setTimeout(2500, () => req.destroy(Object.assign(new Error(), { code: 'PROBE_TIMEOUT' })));
+      req.once('error', e => note(startup.http, { step: 'independent-probe', code: /^[A-Z_]+$/.test(e.code || '') ? e.code : 'PROBE_FAILED' }));
+    }
+  });
+  this.on('request', (req, res) => { if (req.url !== '/') return; const probe = req.headers['x-paperecho-smoke-probe'] === '1'; note(startup.http, { step: probe ? 'probe-request' : 'document-request' }); res.once('finish', () => note(startup.http, { step: probe ? 'probe-response' : 'document-response', status: res.statusCode })); });
+  return originalListen.apply(this, args);
+};
+const startupFixture = root && await fs.access(path.join(root, '.startup-smoke-fixture')).then(() => true, () => false);
 let securityProbe = false;
 app.on('web-contents-created', (_event, wc) => {
+  wc.on('did-start-navigation', (_event, url, _inPlace, main) => { if (main) note(startup.loads, { step: 'navigation', ...urlKind(url) }); });
+  wc.on('did-fail-load', (_event, code, description, url, main) => note(startup.loads, { step: 'failed', code, description: /^ERR_[A-Z_]+$/.test(description) ? description : 'LOAD_FAILED', main, ...urlKind(url) }));
+  wc.on('did-finish-load', () => { startup.finished = true; });
+  wc.once('destroyed', () => { startup.closed = true; });
   wc.on('console-message', (_event, level, message, _line, source) => {
     if (level !== 3) return;
     if (report.expectedConfigFailure && /status of 400/.test(message) && /^http:\/\/127\.0\.0\.1:\d+\/api\/settings$/.test(source || '')) { report.expectedConfigFailureMessages = (report.expectedConfigFailureMessages || 0) + 1; return; }
@@ -28,12 +51,24 @@ const write = async (file, value) => { await fs.mkdir(path.dirname(file), { recu
 if (prepare) root = await prepareShell({ workspace: path.join(sandboxBase, 'smoke') });
 await fs.mkdir(outputRoot, { recursive: true });
 try {
+  if (app.isPackaged) startup.resources = { appPathReadable: await fs.stat(app.getAppPath()).then(() => true, () => false), index: await fs.stat(path.join(process.resourcesPath, 'core/workflow/tools/web/static/index.html')).then(s => s.isFile(), () => false) };
   shell = await startShellImpl({ root });
+  http.Server.prototype.listen = originalListen;
   assert.ok(shell?.lease); const { window, lease } = shell; const wc = window.webContents;
   wc.debugger.attach('1.3');
   wc.debugger.on('message', (_event, method, params) => { if (method === 'Runtime.exceptionThrown') report.runtimeErrors.push(params.exceptionDetails.text); });
   await wc.debugger.sendCommand('Runtime.enable');
   report.startupMs = Math.round(performance.now() - began);
+  if (await fs.access(path.join(root, '.startup-cold-smoke-fixture')).then(() => true, () => false)) {
+    for (let attempt = 0; attempt < 100 && !await wc.executeJavaScript("document.querySelector('#content')?.getAttribute('aria-busy') === 'false'"); attempt++) await delay(100);
+    const state = JSON.parse(await wc.executeJavaScript("fetch('/api/setup').then(r=>r.json()).then(s=>JSON.stringify({canRun:s.canRun,needsSetup:s.needsSetup,recoveryRequired:s.recoveryRequired}))"));
+    assert.deepEqual(state, { canRun: true, needsSetup: false, recoveryRequired: false });
+    assert.equal(await wc.executeJavaScript("document.querySelector('#content')?.getAttribute('aria-busy')"), 'false');
+    assert.deepEqual(report.consoleErrors, []); assert.deepEqual(report.runtimeErrors, []);
+    report.checks.push('configured clean GUI cold startup'); report.processes = app.getAppMetrics().map(p => ({ pid: p.pid, type: p.type }));
+    wc.debugger.detach(); app.once('will-quit', () => { report.ownedServerClosed = !lease.server.listening; writeFileSync(path.join(outputRoot, 'smoke-report.json'), JSON.stringify(report)); });
+    window.close(); return;
+  }
   if (await fs.access(path.join(root, '.first-run-smoke.json')).then(() => true, () => false)) {
     const { wizardSmoke } = await import('./first_run_smoke.mjs');
     await wizardSmoke({ window, root, outputRoot, report });
@@ -95,11 +130,13 @@ try {
   const prefs = wc.getLastWebPreferences();
   for (const [key, value] of Object.entries({ nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true })) assert.equal(prefs[key], value);
   assert.ok(!prefs.preload); report.checks.push('renderer isolation/no preload');
+  const documentURL = wc.getURL();
+  assert.equal(allowedDocument(documentURL, new URL(lease.url).origin), true);
   let denied = 0;
   wc.on('did-create-window', () => { throw new Error('UNEXPECTED_WINDOW'); });
   wc.on('will-frame-navigate', event => { if (!allowedDocument(event.url, new URL(lease.url).origin)) { assert.equal(event.defaultPrevented, true); denied++; } });
   await evaluate("window.open('https://example.invalid'); document.querySelector('.brand').insertAdjacentHTML('beforeend', '<a id=nav-test href=https://example.invalid>dummy</a>'); document.querySelector('#nav-test').click()");
-  await delay(300); assert.equal(BrowserWindow.getAllWindows().length, 1); assert.equal(wc.getURL(), lease.url + '/'); assert.equal(denied, 1);
+  await delay(300); assert.equal(BrowserWindow.getAllWindows().length, 1); assert.equal(wc.getURL(), documentURL); assert.equal(denied, 1);
   await evaluate("document.querySelector('#nav-test').remove()"); report.checks.push('external navigation/window.open denied');
   securityProbe = true;
   assert.equal(await evaluate("fetch('file:///dummy').then(()=>false,()=>true)"), true);
@@ -126,6 +163,7 @@ try {
         await until("document.querySelector('.doctor-results')?.getAttribute('aria-busy') === 'false' && document.querySelectorAll('[data-check-id]').length > 0");
         assert.ok(await evaluate("['PASS','WARN','FAIL','UNKNOWN'].includes(document.querySelector('.doctor-results').dataset.doctorStatus)"));
         assert.equal(await evaluate("document.querySelector('.doctor-results').textContent.includes('dummy-external')"), false);
+        if (startupFixture) assert.equal(await evaluate("document.querySelector('[data-check-id=\"workflow.startup\"]')?.textContent.includes('先前运行')"), true, 'blocked startup remains diagnosable in the real GUI');
         report.checks.push(`Doctor explicit read-only diagnostics ${width}`);
         const checkCount = await evaluate("document.querySelectorAll('[data-check-id]').length");
         assert.equal(await evaluate("document.querySelector('[data-support-status]').dataset.supportStatus"), 'idle');
@@ -194,8 +232,9 @@ try {
   });
   window.close();
 } catch (error) {
+  http.Server.prototype.listen = originalListen;
   await shell?.lease?.close();
-  writeFileSync(path.join(outputRoot, 'smoke-failure.json'), JSON.stringify({ code: error.code || error.message, location: error.stack?.match(/electron_smoke\.mjs:\d+:\d+/)?.[0], completedChecks: report.checks, lastView: report.views?.at(-1), lastViewport: report.lastViewport, stack: error.stack?.split('\n').slice(0, 3) }));
+  writeFileSync(path.join(outputRoot, 'smoke-failure.json'), JSON.stringify({ code: error.code || error.message, location: error.stack?.match(/electron_smoke\.mjs:\d+:\d+/)?.[0], completedChecks: report.checks, lastView: report.views?.at(-1), lastViewport: report.lastViewport, startup, stack: error.stack?.split('\n').slice(0, 3) }));
   app.exit(1);
 }
 }

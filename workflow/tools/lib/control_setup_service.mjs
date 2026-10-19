@@ -17,8 +17,9 @@ export class SetupService {
       const cli = parseRunnerArgs(['--check', '--config', this.config.ownerPath('paperecho.config.json')], { allowUnresolvedMode: true, cwd: this.context.userDataRoot });
       const resolved = await resolveRunnerConfiguration(cli, { env: this.env, cwd: this.context.applicationRoot });
       const report = await runPreflight(resolved.options, { env: resolved.env });
+      const recoveryRequired = report.startupRecovery?.blocking === true;
       const summaries = entries => entries.map(({ name, purpose, configure }) => ({ name, purpose, configure }));
-      return { ...base, needsSetup: !report.canRun, canRun: report.canRun, mode: report.mode, status: report.status,
+      return { ...base, needsSetup: !report.canRun && !recoveryRequired, recoveryRequired, canRun: report.canRun, mode: report.mode, status: report.status,
         requiredMissing: summaries(report.requiredMissing), optionalMissing: summaries([...report.featureMissing, ...report.optionalMissing]), readiness: report.readiness };
     } catch (error) {
       // Fixed messages only: configuration/parser exceptions may contain private inputs.

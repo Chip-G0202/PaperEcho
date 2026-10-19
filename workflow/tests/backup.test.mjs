@@ -15,7 +15,7 @@ import { importLocalCandidates } from '../tools/local/local_import.mjs';
 import { main as runnerMain } from '../tools/runner/main.mjs';
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const password = () => Buffer.from('dummy-backup-password-only');
-async function fixture(t, layout = 'installed') {
+async function fixture(t, layout = 'installed', freshRuns = false) {
   const base = path.join(repo, 'tests/runs/backup'); await fs.mkdir(base, { recursive: true });
   const home = await fs.mkdtemp(path.join(base, '备份 安全-')); t.after(() => fs.rm(home, { recursive: true, force: true }));
   const app = path.join(home, 'app'); await fs.mkdir(app);
@@ -30,7 +30,7 @@ async function fixture(t, layout = 'installed') {
     'local/runs/tmp/recovery.json': '{}', 'local/runs/cache/notification_receipt.json': '{}',
     'local/runs/dummy/recovery.json': '{"status":"interrupted"}', 'local/runs/dummy/operation_ledger.json': JSON.stringify(createOperationLedger({ runId: 'dummy', mode: 'local', profile: 'standard', configHash: 'a'.repeat(64), inputHash: 'b'.repeat(64), artifactPath: 'input_artifact.json' })),
     'logs/runtime.jsonl': 'dummy-raw-log-excluded', '.cache/dummy': 'dummy-cache-excluded', 'review_results/translation_cache.json': '{}' };
-  for (const [name, bytes] of Object.entries(seed)) { const file = path.join(p.userDataRoot, name); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, bytes); }
+  for (const [name, bytes] of Object.entries(seed)) { if (freshRuns && name.startsWith('local/runs/')) continue; const file = path.join(p.userDataRoot, name); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, bytes); }
   await secureCredentialFile(p.secretPath);
   const context = await resolveApplicationRuntimeContext({ cwd: app, env, readOnly: true });
   context.backupInputs = [path.join(p.userDataRoot, 'input.json')]; context.backupConfigHash = sha256(await fs.readFile(p.configPath));
@@ -120,12 +120,12 @@ test('concurrent exports are bounded across instances and locks release after re
   assert.equal((await f.make().verify({ input: f.output, password: password() })).status, 'verified');
 });
 test('Runner admission remains held during child completion and blocks backup without interrupting work', async t => {
-  const f = await fixture(t); let completed = false;
+  const f = await fixture(t, 'installed', true); let completed = false;
   const code = await runnerMain(['--run', '--mode', 'local'], { cwd: f.app, env: f.env, stdout: { write() {} }, stderr: { write() {} }, runtimeLog: { write: async () => ({ ok: true }) },
     resolveRunnerConfigurationImpl: async options => ({ options, env: f.env }), runPreflightImpl: async () => ({ canRun: true, status: 'ready', requiredMissing: [] }),
     buildExecutionPlanImpl: () => ({ runRoot: f.context.runRoot, runId: 'dummy' }),
-    runProductionImpl: async () => { await assert.rejects(f.make().create({ output: f.output, password: password() }), /BACKUP_WRITER_BUSY/); completed = true; return { code: 0, stdout: '{}' }; },
-    validateProductionResultImpl: async () => ({ exitCode: 0 }) });
+    runProductionImpl: async () => { await assert.rejects(f.make().create({ output: f.output, password: password() }), /BACKUP_WORKFLOW_BUSY/); completed = true; return { code: 0, stdout: '{}' }; },
+    validateProductionResultImpl: async () => { await assert.rejects(f.make().create({ output: f.output, password: password() }), /BACKUP_WORKFLOW_BUSY/); return { exitCode: 0 }; } });
   assert.equal(code, 0); assert.equal(completed, true); await assert.rejects(fs.access(path.join(f.context.runRoot, '.runner.operation.lock')));
 });
 test('Local lease and real run registration share one run identity and release on failure', async t => {

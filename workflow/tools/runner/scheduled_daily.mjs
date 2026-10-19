@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRuntimeConfig } from "../lib/runtime_config.mjs";
-import { decideScheduledDaily, plannedSlotCalendarDateKey, readScheduledRuntimeState, resolvePlannedSlotAt, scheduleDayDecisionPath } from "../lib/schedule_support.mjs";
+import { decideScheduledDaily, plannedSlotCalendarDateKey, readScheduledRuntimeState, resolvePlannedSlotAt, scheduleDayDecisionPath, validateScheduleDayClaim } from "../lib/schedule_support.mjs";
 import { OperationLedgerStore } from "../recovery/operation_ledger.mjs";
 import { withRunnerProfile } from "./config_loader.mjs";
 
@@ -18,15 +18,7 @@ async function existingClaim({ stateRoot, now, fsApi }) {
     if (error?.code === "ENOENT") return null;
     throw new Error("SCHEDULE_DAY_DECISION_UNREADABLE");
   }
-  if (claim?.schemaVersion !== 1 || claim.dateKey !== dateKey
-    || claim.plannedSlotAt !== resolvePlannedSlotAt(now).toISOString()
-    || !["weekly_takeover", "radar"].includes(claim.decision)
-    || typeof claim.businessRunId !== "string"
-    || (claim.businessRunId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(claim.businessRunId))
-    || (!claim.businessRunId && claim.decision !== "weekly_takeover")) {
-    throw new Error("SCHEDULE_DAY_DECISION_INVALID");
-  }
-  return claim;
+  return validateScheduleDayClaim(claim, now);
 }
 
 export async function selectScheduledDailyRun(resolved, {

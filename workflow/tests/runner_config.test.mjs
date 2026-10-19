@@ -302,7 +302,7 @@ test("ready unified config reaches one selected production mapping", async (t) =
       seenOptions = options;
       return { status: "ready", mode: options.mode, profile: options.profile, requiredMissing: [], canRun: true };
     },
-    buildExecutionPlanImpl: (options, dependencies) => ({ entry: "local-entry", args: [], childEnv: dependencies.env, cwd: paths.root, runRoot: "runs", mode: options.mode }),
+    buildExecutionPlanImpl: (options, dependencies) => ({ ...buildExecutionPlan(options, dependencies), entry: 'local-entry', mode: options.mode }),
     runProductionImpl: async (plan) => { productionCalls += 1; assert.equal(plan.mode, "local"); return { code: 0, stdout: "{}", stderr: "" }; },
     validateProductionResultImpl: async () => ({ ok: true, exitCode: 0 }),
     stdout: sink(), stderr: sink(),

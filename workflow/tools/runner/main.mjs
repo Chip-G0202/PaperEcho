@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { watchProductionChild } from "./child_watchdog.mjs";
-import { writeAtomicJson, withAtomicJsonLock } from "../lib/atomic_json.mjs";
+import { writeAtomicJson } from "../lib/atomic_json.mjs";
 import { terminalWorkflowStatus, workflowLedgerStatus } from "../lib/orchestrator_status.mjs";
 import { finishRunGroup } from "../lib/runtime_housekeeping.mjs";
-import { OperationLedgerStore } from "../recovery/operation_ledger.mjs";
+import { OperationLedgerStore, releaseRunLease } from "../recovery/operation_ledger.mjs";
+import { acquireStartupWorkflowLease, inspectStartupRecovery } from '../recovery/run_recovery.mjs';
 import { pathToFileURL } from "node:url";
 
 import "../lib/env_file_bootstrap.mjs";
@@ -17,8 +18,8 @@ import { extractLastJsonObject, validateProductionResult } from "./result_valida
 import { notifyRunFailure } from "../notification/failure_notifier.mjs";
 import { processHealthNotifications } from "../notification/health_notifier.mjs";
 import { emailDeliveryPolicy } from '../notification/policy.mjs';
-import { redactSecrets, secretValues } from '../lib/credential_registry.mjs';
-import { resolveRuntimePaths } from '../lib/runtime_config.mjs';
+import { redactSecrets, secretValues, copyEnvironment } from '../lib/credential_registry.mjs';
+import { resolveRuntimePaths, buildRuntimeConfig } from '../lib/runtime_config.mjs';
 import { RuntimeLog } from '../lib/runtime_logging.mjs';
 
 export function redactText(text, env = process.env) {
@@ -134,7 +135,7 @@ async function executeMain(argv, dependencies) {
   }
   let resolved;
   try {
-    resolved = await (dependencies.resolveRunnerConfigurationImpl || resolveRunnerConfiguration)(cliOptions, dependencies);
+    resolved = await (dependencies.resolveRunnerConfigurationImpl || resolveRunnerConfiguration)(cliOptions, { ...dependencies, readOnly: true });
   } catch (error) {
     const code = error instanceof RunnerConfigurationError && /^CONFIG_[A-Z0-9_]+$/.test(error.code) ? error.code : 'CONFIG_INVALID';
     stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "invalid_configuration", code, error: '检查配置格式、路径和运行模式。' })}\n`);
@@ -143,6 +144,13 @@ async function executeMain(argv, dependencies) {
   if (cliOptions.scheduledDaily) {
     let selection;
     try {
+      const runtime = buildRuntimeConfig({ cwd: dependencies.repoRoot, env: resolved.env });
+      const admission = await inspectStartupRecovery({ runRoot: runtime.runRoot,
+        researchRoot: runtime.researchRoot, dataRoots: [runtime.projectRoot, runtime.reviewRoot] });
+      if (admission.blocking && !admission.automaticSafe) {
+        stdout.write(`${JSON.stringify({ type: 'schedule', status: 'recovery_required', reason: admission.code })}\n`);
+        return EXIT_CODES.pipeline;
+      }
       selection = await (dependencies.selectScheduledDailyRunImpl || selectScheduledDailyRun)(resolved, {
         now: (dependencies.clock || (() => new Date()))(),
         repoRoot: dependencies.repoRoot,
@@ -169,18 +177,21 @@ async function executeMain(argv, dependencies) {
   if (options.action === "check") return EXIT_CODES.success;
 
   const plan = (dependencies.buildExecutionPlanImpl || buildExecutionPlan)(options, runtimeDependencies);
-  // Parent completion can still write ledger/receipts after the child exits.
-  // Backup takes this admission lock before taking workflow leases.
+  // The parent owns the existing workflow lease through result/receipt writes.
+  let retainLease = false;
   const execute = async () => {
   dependencies.logRunId = plan.runId;
   await dependencies.runtimeLog.write('RUNNER_ADMITTED', { runId: plan.runId });
   let processResult;
   try { processResult = await (dependencies.runProductionImpl || runProduction)(plan, dependencies); }
   catch (error) {
+    retainLease = true; // A failed spawn contract does not prove the child exited.
     stderr.write(`${JSON.stringify({ type: "runner_error", status: "failed", code: 'RUNNER_EXECUTION_FAILED', error: '检查本次运行登记状态。' })}\n`);
     return EXIT_CODES.pipeline;
   }
   const productionReport = extractLastJsonObject(processResult.stdout);
+  retainLease = processResult.childExitConfirmed === false;
+  if (processResult.childExitConfirmed === true && processResult.code !== 0 && !productionReport) processResult.status = 'interrupted';
   if (processResult.stderr) await dependencies.runtimeLog.write('CHILD_STDERR', { runId: plan.runId });
   if (options.scheduledDaily && processResult.code === 0 && productionReport?.status === "skipped"
     && productionReport?.skipReport?.reason === "duplicate_schedule_trigger") {
@@ -229,7 +240,18 @@ async function executeMain(argv, dependencies) {
   stdout.write(`${JSON.stringify({ type: "result", ...validation })}\n`);
   return validation.exitCode;
   };
-  return plan.runRoot ? withAtomicJsonLock(path.join(plan.runRoot, '.runner.operation'), execute, { timeoutMs: 0, staleMs: Infinity, metadata: { owner: 'paperecho-runner' } }) : execute();
+  if (!plan.runRoot) return execute();
+  const runtime = buildRuntimeConfig({ cwd: plan.cwd, env: resolved.env });
+  const lease = await acquireStartupWorkflowLease({ runRoot: plan.runRoot, runId: plan.runId, profile: options.profile,
+    resumeRunId: options.resume, automatic: Boolean(options.scheduledDaily), researchRoot: options.mode === 'local' ? undefined : runtime.researchRoot,
+    dataRoots: [runtime.projectRoot, runtime.reviewRoot, options.outputRoot].filter(Boolean) });
+  if (!lease.acquired) {
+    stdout.write(`${JSON.stringify({ type: 'result', status: 'recovery_required', code: lease.reason })}\n`);
+    return EXIT_CODES.pipeline;
+  }
+  plan.childEnv = copyEnvironment(plan.childEnv, { PAPERECHO_PARENT_WORKFLOW_LEASE: lease.lease.ownerId });
+  try { return await execute(); }
+  finally { if (!retainLease) await releaseRunLease(lease); }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {

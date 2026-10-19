@@ -9,7 +9,26 @@ import { SecretService } from '../tools/lib/control_credentials_service.mjs';
 import { ConfigService } from '../tools/lib/control_config_service.mjs';
 import { SetupService } from '../tools/lib/control_setup_service.mjs';
 import { main as runnerMain } from '../tools/runner/main.mjs';
+import { createRunRecoveryCoordinator } from '../tools/recovery/run_recovery.mjs';
+import { startRunGroup, finishRunGroup } from '../tools/lib/runtime_housekeeping.mjs';
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+
+test('configured recovery and unknown startup facts stay out of initialization without rewriting saved owners', async t => {
+  const f = await fixture(t); await configure(f);
+  const context = await resolveApplicationRuntimeContext({ cwd: f.app, env: f.env, readOnly: true });
+  const runRoot = context.runRoot, runId = 'interrupted-setup';
+  const before = await fs.readFile(f.file);
+  await startRunGroup({ runRoot, runId, pipelineMode: 'local' });
+  const c = await createRunRecoveryCoordinator({ runRoot, runId, mode: 'local', profile: 'standard', configHash: 'a'.repeat(64), inputHash: 'b'.repeat(64), artifactPath: path.join(runRoot, runId, 'input_artifact.json') });
+  await c.persistArtifact([]); await finishRunGroup({ manifestPath: path.join(runRoot, runId, 'run_group.json'), status: 'interrupted' });
+  for (const corrupt of [false, true]) {
+    if (corrupt) await fs.writeFile(c.store.filePath, '{');
+    const status = await f.services.setup.status();
+    assert.equal(status.canRun, false); assert.equal(status.needsSetup, false); assert.equal(status.recoveryRequired, true);
+    assert.ok(before.equals(await fs.readFile(f.file)));
+    if (corrupt) assert.equal(await fs.readFile(c.store.filePath, 'utf8'), '{');
+  }
+});
 async function fixture(t, layout = 'installed') {
   const base = path.join(repo, 'tests/runs/phase4'); await fs.mkdir(base, { recursive: true });
   const root = await fs.mkdtemp(path.join(base, '首次 运行-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
