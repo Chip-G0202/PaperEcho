@@ -12,6 +12,8 @@ import { CONTROL_SECRET_NAMES, redactSecrets } from '../tools/lib/credential_reg
 import { main, runProduction } from '../tools/runner/main.mjs';
 import { EventEmitter } from 'node:events';
 import { Session } from 'node:inspector';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 async function fixture(t, layout = 'installed') {
   const base = path.join(repo, 'tests/runs/logging'); await fs.mkdir(base, { recursive: true });
@@ -118,6 +120,11 @@ function logChildCode(maxBytes = 1048576) {
 }
 test('concurrent instances and processes preserve every acknowledged event without truncation', async t => {
   const f = await fixture(t);
+  const writer = new AsyncLocalStorage(), origin = performance.now(), timeline = [], io = {};
+  const elapsed = () => Math.round(performance.now() - origin);
+  const mark = step => { if (timeline.length < 160) timeline.push({ step, writer: writer.getStore(), atMs: elapsed() }); };
+  const loop = monitorEventLoopDelay({ resolution: 10 }); loop.enable();
+  t.after(() => { loop.disable(); writer.disable(); });
   // A non-pausing, in-process test logpoint captures the cause before the public
   // safety wrapper discards it. No inspector port or production hook is added.
   const causes = []; const session = new Session(); session.connect();
@@ -125,6 +132,7 @@ test('concurrent instances and processes preserve every acknowledged event witho
   const probeKey = '__paperechoRuntimeLogTestCause';
   assert.equal(Object.hasOwn(globalThis, probeKey), false);
   globalThis[probeKey] = error => causes.push({
+    writer: writer.getStore(), atMs: elapsed(),
     reason: error.message === 'ATOMIC_JSON_LOCK_TIMEOUT:runtime.owner.json' ? 'ATOMIC_JSON_LOCK_TIMEOUT'
       : ['LOG_EVENT_INVALID', 'LOG_PATH_UNSAFE', 'LOG_OWNER_INVALID', 'LOG_UNOWNED_FILE', 'LOG_RECORD_TOO_LARGE', 'LOG_FILE_TOO_LARGE', 'INSPECTION_PATH_UNSAFE', 'INSPECTION_FILE_UNSAFE', 'INSPECTION_LIMIT'].includes(error.message) ? error.message : 'UNCLASSIFIED',
     code: ['EPERM', 'EACCES', 'EBUSY', 'ENOSPC', 'ENOENT', 'EEXIST', 'EMFILE', 'ENFILE', 'ENOMEM'].includes(error.code) ? error.code : null,
@@ -146,31 +154,48 @@ test('concurrent instances and processes preserve every acknowledged event witho
   assert.equal((await f.log.write('DIAGNOSTIC_INVALID_EVENT')).ok, false);
   assert.equal(causes.at(-1)?.reason, 'LOG_EVENT_INVALID', 'cause capture must execute before the public wrapper'); causes.length = 0;
   const faults = []; const fsApi = { ...fs };
-  const lockHandles = new Set(); let releasing = 0;
+  const lockHandles = new Set(); let releasing = 0, contentions = 0;
   const state = file => { try { const s = lstatSync(file); return { exists: true, directory: s.isDirectory(), linked: s.isSymbolicLink(), links: s.nlink, identity: `${s.dev}:${s.ino}` }; } catch (e) { return { exists: false, code: e.code }; } };
   let rootIdentity;
   for (const method of ['open', 'rename', 'lstat', 'unlink']) fsApi[method] = async (...args) => {
+    const started = performance.now();
     const lock = path.basename(args[0]) === 'runtime.owner.json.lock';
     if (method === 'unlink' && lock) releasing++;
     try {
       const result = await fs[method](...args);
       if (method === 'open' && lock) {
+        mark('lock.acquired');
         rootIdentity ??= state(f.paths.logsRoot).identity;
         lockHandles.add(result); const close = result.close.bind(result);
-        result.close = async () => { try { return await close(); } finally { lockHandles.delete(result); } };
+        result.close = async () => { try { return await close(); } finally { lockHandles.delete(result); mark('lock.closed'); } };
       }
+      if (method === 'unlink' && lock) mark('lock.released');
       return result;
     }
     catch (error) {
+      if (method === 'open' && lock && error.code === 'EEXIST') contentions++;
       if (['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) faults.push({ step: `${method}.${['runtime.jsonl', 'runtime.previous.jsonl', 'runtime.pending.tmp', 'runtime.owner.json', 'runtime.owner.json.lock'].includes(path.basename(args[0])) ? path.basename(args[0]) : 'directory'}`, code: error.code,
         syscall: error.syscall || method, flags: method === 'open' ? args[1] : undefined, pid: process.pid, stage: method === 'open' && lock ? 'acquire' : method,
         workspace: 'isolated-logging-fixture', lock: state(path.join(f.paths.logsRoot, 'runtime.owner.json.lock')), openLockHandles: lockHandles.size, releasing,
         rootIdentityUnchanged: rootIdentity === state(f.paths.logsRoot).identity, location: error.stack?.match(/(?:atomic_json|runtime_logging)\.mjs:\d+:\d+/g) || [] });
       throw error;
-    } finally { if (method === 'unlink' && lock) releasing--; }
+    } finally {
+      const duration = performance.now() - started, stat = io[method] ||= { count: 0, maxMs: 0 };
+      stat.count++; stat.maxMs = Math.max(stat.maxMs, Math.round(duration));
+      if (method === 'unlink' && lock) releasing--;
+    }
   };
-  const same = await Promise.all(Array.from({ length: 30 }, () => new RuntimeLog({ env: f.env, fsApi }).write('RUNNER_STARTED')));
-  assert.ok(same.every(x => x.ok), JSON.stringify({ step: 'instances.write', failures: same.filter(x => !x.ok).map(x => x.code), faults, causes }));
+  // Match Runner/GUI owner lifetime: each instance queues its concurrent calls.
+  // Two independent owners still compete for the real cross-process file lock.
+  const owners = [new RuntimeLog({ env: f.env, fsApi }), new RuntimeLog({ env: f.env, fsApi })];
+  const same = await Promise.all(Array.from({ length: 30 }, (_, id) => writer.run(id, async () => {
+    mark('write.started'); const result = await owners[id % owners.length].write('RUNNER_STARTED'); mark('write.finished'); return result;
+  })));
+  const timing = { elapsedMs: elapsed(), eventLoopMaxMs: Math.round(loop.max / 1e6), io, timeline };
+  assert.ok(same.every(x => x.ok), JSON.stringify({ step: 'instances.write', failures: same.filter(x => !x.ok).map(x => x.code), faults, causes, timing }));
+  assert.ok(contentions > 0, 'independent owners must actually contend for the file lock');
+  t.diagnostic(JSON.stringify({ step: 'instances.complete', elapsedMs: timing.elapsedMs, eventLoopMaxMs: timing.eventLoopMaxMs,
+    acquired: timeline.filter(x => x.step === 'lock.acquired').length, released: timeline.filter(x => x.step === 'lock.released').length, contentions, io }));
   const code = logChildCode();
   const children = await Promise.allSettled([runNode(['--input-type=module', '-e', code], f.env), runNode(['--input-type=module', '-e', code], f.env)]);
   for (const result of children) assert.equal(result.status, 'fulfilled', result.status === 'rejected' ? result.reason.message : '');

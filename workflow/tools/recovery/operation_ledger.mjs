@@ -281,6 +281,7 @@ export async function acquireRunLease({ runRoot, runId, ttlMs = 60_000, ownerId 
   const hostname = dependencies.hostname || os.hostname();
   const processAlive = dependencies.processAlive;
   const leasePath = resolveRunStatePath(runRoot, runId, "resume.lease.json");
+  assertRestoreWritable(leasePath);
   await fsApi.mkdir(path.dirname(leasePath), { recursive: true });
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const now = clock();
@@ -338,6 +339,7 @@ export async function acquireWorkflowLease({ runRoot, runId, profile, ttlMs = 60
   const hostname = dependencies.hostname || os.hostname();
   const processAlive = dependencies.processAlive;
   const leasePath = path.join(path.resolve(runRoot), ".workflow.lease.json");
+  assertRestoreWritable(leasePath);
   await fsApi.mkdir(path.dirname(leasePath), { recursive: true });
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const now = clock();

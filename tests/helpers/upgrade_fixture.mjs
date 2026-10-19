@@ -17,9 +17,10 @@ export async function upgradeFileHashes(root) {
     if (entry.isDirectory()) await walk(file); else map[path.relative(root, file)] = sha256(await fs.readFile(file));
   } } await walk(root); return map;
 }
-export async function upgradeFixture(t, { legacy = false, schema = 6, layout = legacy ? 'dev' : 'installed', targetLayout = 'installed', applicationRoot, secret = true, externalSecretName = '' } = {}) {
+export async function upgradeFixture(t, { legacy = false, schema = 6, layout = legacy ? 'dev' : 'installed', targetLayout = 'installed', applicationRoot, secret = true, externalSecretName = '', fixtureRoot, makeBackup = true } = {}) {
   const base = path.join(repo, 'tests/runs/upgrade'); await fs.mkdir(base, { recursive: true });
-  const root = await fs.mkdtemp(path.join(base, '兼容 & 只读-')); t?.after(() => fs.rm(root, { recursive: true, force: true }));
+  if (fixtureRoot && (path.dirname(fixtureRoot) !== path.join(repo, 'tests/runs/phase6b') || !/^[a-f0-9-]{36}$/.test(path.basename(fixtureRoot)))) throw new Error('FIXTURE_SCOPE_INVALID');
+  const root = fixtureRoot || await fs.mkdtemp(path.join(base, '兼容 & 只读-')); t?.after(() => fs.rm(root, { recursive: true, force: true }));
   const app = path.join(root, 'old-program'); const targetApp = applicationRoot || path.join(root, 'new-program');
   const data = layout === 'dev' ? app : layout === 'portable' ? path.join(app, 'data') : path.join(root, 'old-data');
   const target = targetLayout === 'portable' ? path.join(targetApp, 'future-data-' + path.basename(root)) : path.join(root, 'new-data');
@@ -46,7 +47,7 @@ export async function upgradeFixture(t, { legacy = false, schema = 6, layout = l
   const context = await resolveApplicationRuntimeContext({ env, readOnly: true });
   context.backupInputs = [path.join(data, 'input.json')]; context.backupConfigHash = sha256(await fs.readFile(context.configPath));
   const backupEnv = externalSecretName ? { ...env, [externalSecretName]: 'dummy-external-backup-metadata-only' } : env;
-  const backup = path.join(root, 'source.pebackup'); await new BackupService({ context, env: backupEnv }).create({ output: backup, password: upgradePassword() });
+  const backup = path.join(root, 'source.pebackup'); if (makeBackup) await new BackupService({ context, env: backupEnv }).create({ output: backup, password: upgradePassword() });
   const hostEnv = { PAPERECHO_APPLICATION_ROOT: targetApp, PAPERECHO_RESOURCE_ROOT: path.join(targetApp, 'resources/core'), PAPERECHO_LAYOUT: 'installed', PAPERECHO_DATA_ROOT: path.join(root, 'host-data'), PAPERECHO_SKIP_DOTENV: '1' };
   const input = { sourceApplicationRoot: app, sourceDataRoot: data, sourceLayout: layout, targetDataRoot: target, targetLayout, backup };
   const make = options => new UpgradePreflightService({ env: hostEnv, volume: async () => ({ filesystem: 'NTFS', freeBytes: 100000000000n }), ...options });

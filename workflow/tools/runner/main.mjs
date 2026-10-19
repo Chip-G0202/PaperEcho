@@ -93,7 +93,7 @@ function notificationSummary(result) {
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
-  if (argv.some(x => ['--upgrade-preflight', '--upgrade-dry-run'].includes(x))) {
+  if (argv.some(x => ['--upgrade-preflight', '--upgrade-dry-run', '--upgrade-execute', '--upgrade-recover', '--upgrade-rollback'].includes(x))) {
     const { upgradeMain } = await import('./upgrade.mjs');
     return upgradeMain(argv, dependencies);
   }

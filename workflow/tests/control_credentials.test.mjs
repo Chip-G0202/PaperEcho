@@ -9,6 +9,7 @@ import { copyEnvironment, mapCredentialReference, redactSecrets } from '../tools
 import { redactText } from '../tools/runner/main.mjs';
 import { secureCredentialFile } from '../tools/lib/credential_file_security.mjs';
 import { execFileSync } from 'node:child_process';
+import { Session } from 'node:inspector';
 const base = fileURLToPath(new URL('../../tests/runs/credentials/', import.meta.url));
 async function fixture(t) {
   await fs.mkdir(base, { recursive: true });
@@ -111,15 +112,34 @@ test('trusted load provenance survives runtime copies; identical injections and 
 
 test('Windows/POSIX credential ACL is enforced on empty temporary files and final rename; concurrent fields survive', async t => {
   const root = await fixture(t); const env = {}; const checked = [];
+  // Test-only, non-pausing cause capture before the public safety wrapper.
+  const causes = [], key = '__paperechoCredentialTestCause', session = new Session(); session.connect();
+  const post = (method, params = {}) => new Promise((resolve, reject) => session.post(method, params, (error, result) => error ? reject(error) : resolve(result)));
+  assert.equal(Object.hasOwn(globalThis, key), false);
+  globalThis[key] = error => causes.push({
+    layer: error.message.startsWith('ATOMIC_JSON_LOCK_TIMEOUT:') ? 'LOCK_TIMEOUT' : /^CREDENTIAL_[A-Z_]+$/.test(error.message) ? error.message : 'OTHER',
+    code: /^[A-Z0-9_]{1,40}$/.test(error.code || '') ? error.code : null,
+    syscall: /^[a-z]{1,20}$/.test(error.syscall || '') ? error.syscall : null,
+  });
+  t.after(() => { delete globalThis[key]; session.disconnect(); });
+  const url = new URL('../tools/lib/control_credentials_service.mjs', import.meta.url);
+  const lineNumber = (await fs.readFile(url, 'utf8')).split(/\r?\n/).findIndex(line => line.includes("const allowed = ['CREDENTIAL_EXTERNALLY_MANAGED'"));
+  assert.ok(lineNumber >= 0); await post('Debugger.enable');
+  await post('Debugger.setBreakpointByUrl', { url: url.href, lineNumber, condition: `(globalThis[${JSON.stringify(key)}](error),false)` });
+  await assert.rejects(new SecretService({ root, env: {}, atomicOptions: { secureFile: async () => { throw new Error('CREDENTIAL_ACL_UNSAFE'); } } }).replace('SMTP_PASS', 'dummy-cause-probe-value'), /CREDENTIAL_ACL_UNSAFE/);
+  assert.equal(causes.at(-1)?.layer, 'CREDENTIAL_ACL_UNSAFE'); causes.length = 0;
   const secureFile = async (file, options) => {
     if (!options.checkOnly) assert.equal((await fs.stat(file)).size, 0, 'secure before writing secret bytes');
     await secureCredentialFile(file, options);
-    await secureCredentialFile(file, { checkOnly: true }); checked.push(path.basename(file));
+    // The native owner reads back the DACL in both modes; do not double its
+    // subprocess work while holding the production credential lock.
+    checked.push(path.basename(file));
   };
   const service = new SecretService({ root, env, atomicOptions: { secureFile } });
   // Await both writers even on failure, so fixture cleanup cannot race a live writer.
   const writes = await Promise.allSettled([service.replace('SMTP_PASS', 'smtp-concurrent-dummy'), service.replace('SEMANTIC_SCHOLAR_API_KEY', 'scholar-concurrent-dummy')]);
-  assert.equal(writes.every(result => result.status === 'fulfilled'), true, 'both bounded concurrent writes must finish successfully');
+  assert.equal(writes.every(result => result.status === 'fulfilled'), true, JSON.stringify({ step: 'bounded-concurrent-credential-writes', causes }));
+  await secureCredentialFile(path.join(root, '.env'), { checkOnly: true });
   const values = parseEnvFile(await fs.readFile(path.join(root, '.env'), 'utf8'));
   assert.equal(values.SMTP_PASS, 'smtp-concurrent-dummy'); assert.equal(values.SEMANTIC_SCHOLAR_API_KEY, 'scholar-concurrent-dummy');
   assert.ok(checked.includes('.env')); assert.ok(checked.some(file => file.endsWith('.tmp')));

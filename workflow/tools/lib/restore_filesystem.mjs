@@ -3,6 +3,16 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 
 export const restoreError = code => Object.assign(new Error(code), { code });
+const liveGuards = new WeakSet();
+export function isRestoreStagingGuard(guard, target) {
+  return liveGuards.has(guard) && path.dirname(target) === guard.root && path.basename(target) === 'new'
+    && /^\.paperecho-restore-tx-[a-f0-9]{24}$/.test(path.basename(guard.root));
+}
+export function isRestoreStagingPath(guard, file) {
+  if (!liveGuards.has(guard)) return false;
+  const stage = path.join(guard.root, 'new'), relative = path.relative(stage, path.resolve(file));
+  return isRestoreStagingGuard(guard, stage) && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
+}
 export async function inspectRestoreVolume(directory) {
   if (process.platform !== 'win32') throw restoreError('RESTORE_PLATFORM_UNVERIFIED');
   const env = Object.fromEntries(['SystemRoot', 'PATH', 'TEMP', 'TMP', 'USERPROFILE'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
@@ -74,9 +84,11 @@ public static class RestoreNative {
     $created = $true
   } finally { if ($descriptor -ne [IntPtr]::Zero) { [void][RestoreNative]::LocalFree($descriptor) } }
   }
-  if ($env:PAPERECHO_RESTORE_EXCLUSIVE -eq '1') {
+  if ($env:PAPERECHO_RESTORE_EXISTING -eq '1' -or $env:PAPERECHO_RESTORE_EXCLUSIVE -eq '1') {
     $directory = [RestoreNative]::CreateFileW($env:PAPERECHO_RESTORE_STAGE,1,3,[IntPtr]::Zero,3,0x02200000,[IntPtr]::Zero)
     if ($directory.IsInvalid) { $directory.Dispose(); throw 'directory' }; $handles.Add($directory)
+  }
+  if ($env:PAPERECHO_RESTORE_EXCLUSIVE -eq '1') {
     $lock = [RestoreNative]::CreateFileW([IO.Path]::Combine($env:PAPERECHO_RESTORE_STAGE,'operation.lock'),3221225472,0,[IntPtr]::Zero,4,0x00200000,[IntPtr]::Zero)
     if ($lock.IsInvalid) { $lock.Dispose(); throw 'busy' }
     $handles.Add($lock)
@@ -108,11 +120,14 @@ export async function holdRestoreParent(stage, { existing = false, exclusive = f
       });
     });
   } catch (error) { child.kill(); await completion; throw error; }
-  return {
+  const guard = {
+    root: stage,
+    pid: child.pid,
     assertHeld() { if (closed || !ready) throw restoreError('RESTORE_GUARD_LOST'); },
     async release() {
       child.stdin.end('\n'); const timer = setTimeout(() => child.kill(), 5000);
-      try { if (await completion !== 0) throw restoreError('RESTORE_GUARD_RELEASE_FAILED'); } finally { clearTimeout(timer); }
+      try { if (await completion !== 0) throw restoreError('RESTORE_GUARD_RELEASE_FAILED'); } finally { clearTimeout(timer); liveGuards.delete(guard); }
     },
   };
+  Object.freeze(guard); liveGuards.add(guard); return guard;
 }

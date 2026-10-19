@@ -71,8 +71,9 @@ export async function writeAtomicText(filePath, value, {
   renameBackoffMs = 10,
   validateTemporary = async () => {},
   temporaryPath = '',
+  stagingGuard,
 } = {}) {
-  assertRestoreWritable(filePath);
+  assertRestoreWritable(filePath, { stagingGuard });
   await fsApi.mkdir(path.dirname(filePath), { recursive: true });
   if (temporaryPath && (path.dirname(temporaryPath) !== path.dirname(filePath) || temporaryPath === filePath)) throw new Error('ATOMIC_TEMPORARY_PATH_INVALID');
   const temporary = temporaryPath || `${filePath}.${process.pid}.${randomUUID()}.tmp`;
@@ -84,7 +85,7 @@ export async function writeAtomicText(filePath, value, {
     await handle.close();
     handle = null;
     await validateTemporary(temporary);
-    assertRestoreWritable(filePath);
+    assertRestoreWritable(filePath, { stagingGuard });
     await renameWithTransientRetry(temporary, filePath, {
       renameImpl,
       sleep,
@@ -105,8 +106,9 @@ export async function withAtomicJsonLock(filePath, operation, {
   clock = () => new Date(),
   metadata = {},
   canBreakStaleLock = async () => true,
+  stagingGuard,
 } = {}) {
-  assertRestoreWritable(filePath);
+  assertRestoreWritable(filePath, { stagingGuard });
   const lockPath = `${filePath}.lock`;
   const deadline = clock().getTime() + timeoutMs;
   await fsApi.mkdir(path.dirname(filePath), { recursive: true });
@@ -115,7 +117,7 @@ export async function withAtomicJsonLock(filePath, operation, {
     try {
       handle = await fsApi.open(lockPath, "wx");
       try {
-        assertRestoreWritable(filePath);
+        assertRestoreWritable(filePath, { stagingGuard });
         await handle.writeFile(JSON.stringify({ ...metadata, pid: process.pid, createdAt: clock().toISOString() }));
         return await operation();
       } finally {

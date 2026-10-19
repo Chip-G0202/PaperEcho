@@ -103,7 +103,28 @@ PaperEcho.exe --headless --runtime-layout installed --user-data-root "<host data
 
 验证：`node --test workflow/tests/upgrade_preflight.test.mjs`，配合 Config、Runtime、Secret、Backup/Verify、Restore transaction、Stage0/ledger/recovery、Scheduler 和 Doctor 回归。`tests/helpers/upgrade-v2.5-runtime-contract.txt` 是上述 tag 的公开源文件 fixture，不作为代码执行。离线缓存构建 `npm run package:win --prefix desktop/electron-poc` 后，`node tests/helpers/packaged_upgrade.mjs` 核对最终源码、真实 native executable/内置 Node、空 PATH、仓库外 cwd、Portable/Installed、源文件 hash 不变、目标不存在与进程退出。最终运行默认 `npm test`、`npm run check` 和 diff check，不降低并行度。所有测试数据虚构，不访问 Production。
 
-Phase 6B 的实际隔离迁移/回滚、Phase 6C 的真实安装升级尚未实现；Phase 3A Installer 仍 Blocked，Phase 5B 真实 OS 注册仍待可信 VM，macOS 未实测。契约识别不替代完整安装资产完整性、签名或发行 Gate。
+Phase 6B 的合成工作区执行见下一节；Phase 6C 的真实安装升级尚未实现。Phase 3A Installer 仍 Blocked，Phase 5B 真实 OS 注册仍待可信 VM，macOS 未实测。契约识别不替代完整安装资产完整性、签名或发行 Gate。
+
+### 隔离迁移执行（Phase 6B）
+
+`upgrade_migration_service.mjs` 在上述只读计划上编排执行，不另建配置、备份或恢复状态。入口仅接受 `tests/runs/phase6b/<UUID>` 下由测试 fixture 创建的私有合成工作区；打包程序必须位于其 `new-program`，源、目标、备份及计划均按固定边界解析。普通数据根不能借此入口迁移。marker 是测试范围标识，不是任意数据真实性或发行签名证明。
+
+| 条件 | 执行兼容性 |
+|---|---|
+| schema 3/4/5，源证据及认证备份全部 PASS | SUPPORTED：在私有 staging 中调用现有 `migrateApplicationConfig`，真实执行到 schema 6；不修改源根 |
+| schema 6，预检全部 PASS | 配置转换 NO_OP，保留配置原字节；数据仍经过认证恢复、检查和全新根发布 |
+| UNKNOWN 证据、外部凭据需重新配置、保留的历史调度 claim 需审阅 | PREVIEW_ONLY：只读报告，不允许执行，不自动删改或激活历史状态 |
+| schema 1/2、不支持的 schema、活动 lease/事务、路径或完整性错误 | BLOCKED；不合成旧领域配置、不绕过安全门禁 |
+
+执行要求明确确认 Plan ID，重新验证完整计划、源目录身份与文件清单，以及源绑定的 AES-GCM/manifest/SHA256 备份。九类数据 owner 复用 Backup 清单；除正式配置转换外，备份条目逐项核对字节。ledger、receipt、反馈、审核和结果保持原内容，恢复历史 receipt 继续禁止自动运行；Doctor 的关键配置、Secret、资源检查必须 PASS，`canRun:false` 不被包装成正式 workflow Ready。旧 `.env` 只在私有 staging 恢复并复查 ACL，外部管理值不复制，Scheduler 配置不触发注册。
+
+发布与恢复复用 `RestoreTransaction` 的单一 journal，`kind:upgrade-new-root` 绑定源身份、源快照、Plan 和备份摘要。源根只保留指向该 journal 的门禁引用；源和目标的活动 writer 均被拒绝。lease admission 在 `mkdir` 前检查，创建 lease 时仍复检，避免被拒绝的竞争者先改变源目录。私有 staging 的配置写入需要真实、存活且不可伪造的 NTFS guard capability，普通 writer 不能绕过事务状态。
+
+Windows NTFS 同卷发布只接受全新 B；A 保留原字节及旧程序，回滚撤回 B 到私有事务目录，不覆盖或删除 A。未完成事务显式恢复时保守回滚，已提交响应丢失时返回同一操作；未知身份、源变化或损坏证据保持 `RECOVERY_REQUIRED`，不强行清锁。保留原程序、A、备份及事务目录供回滚，不能把这里的验证等同于真实旧二进制启动或安装器升级。
+
+执行参数为 `--upgrade-execute --isolated-workspace "<fixture absolute root>" --confirm-plan <plan.id> --password-stdin`；恢复和回滚分别使用 `--upgrade-recover`、`--upgrade-rollback` 加同样的 workspace/Plan 确认，不需要密码。源码调用 `node workflow/tools/runner/main.mjs`，测试须显式绑定 fixture 的 Application/Resource/User Data roots；打包调用 `PaperEcho.exe --headless --runtime-layout installed --user-data-root "<fixture host data>" --cache-root "<fixture host cache>"` 加上述参数。目标 Installed/Portable 类型来自已确认的计划，host cache 不得位于切换中的 A/B。
+
+验证命令：`node --test workflow/tests/upgrade_migration.test.mjs workflow/tests/upgrade_migration_security.test.mjs workflow/tests/upgrade_migration_crash.test.mjs`。离线构建后运行 `node tests/helpers/packaged_upgrade_migration.mjs`，为其提供指向已批准 PowerShell 7 可执行文件的绝对 `PWSH_PATH`；脚本验证最终源码、真实内置 Node、空 PATH、仓库外 cwd、Installed/Portable 迁移/回滚及进程终止后的幂等恢复。测试仅用合成数据；不操作 Production、真实 OS 任务或外部服务。最终检查仍使用默认 `npm test` 并行度、`npm run check` 和 diff check。
 
 ## 首次运行配置向导
 
@@ -198,6 +219,8 @@ schema v1 固定四个 UTF-8 JSON：`manifest.json`、`doctor-summary.json`、`r
 验证：`node --test workflow/tests/runtime_logging.test.mjs workflow/tests/control_doctor.test.mjs`，覆盖跨进程成功事件完整性、容量轮转、故障释放/恢复、正文脱敏、业务文件保护和只读诊断；再运行相关 Runner/Secret/runtime/workspace 回归、`npm run check`、`npm test`。`npm run smoke:packaged --prefix desktop/electron-poc` 检查真实三尺寸 GUI、Headless、四个隔离日志根、只读程序目录、无残留锁及 Doctor 前后快照。Packaged smoke 必须复用已初始化的 ASAR shell 入口，避免测试加载另一份模块实例。macOS 未实测；Phase 3A 仍为 Blocked。
 
 RuntimeLog 并发定向检查可运行 `node --test --test-name-pattern="concurrent instances and processes|concurrent processes rotate bounded" workflow/tests/runtime_logging.test.mjs`。测试等待所有子进程的 `close` 后才清理独立 fixture；安全诊断区分同进程实例与子进程阶段，仅记录操作、flags、PID 和锁资源状态。单项或全量通过不能证明历史 Windows EPERM 根因已经修复。
+
+同进程正例复用两个持久 owner 的正式实例队列，并发提交 30 次写入，要求实际发生文件锁竞争；随后两个真实子进程各写入 20 条，验证全部 70 条记录完整且无重复。fixture 不为每条消息创建独立 owner，不调整正式等锁预算或默认文件并行度；独立 live-lock 负例继续验证超时明确失败、不丢失旧记录且不接管存活锁。
 
 ## 用户实际需要处理的文件
 

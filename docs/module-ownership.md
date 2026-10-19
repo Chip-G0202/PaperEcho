@@ -23,6 +23,8 @@ Restore：`workflow/tools/lib/restore_service.mjs` 复用 BackupService 的认�
 
 Upgrade planning：`workflow/tools/lib/upgrade_preflight_service.mjs` 只编排兼容性证据、只读预检和版本化迁移计划，`runner/upgrade.mjs` 持有显式 CLI。复用 Config 纯迁移预览、BackupService 的源选择/清单与认证 Verify、Runtime Root、SecretService、恢复状态及文件系统检查；不调用迁移/Restore 执行器、不持有新状态。契约与验证见 [离线升级预检](configuration.md#离线升级兼容性预检phase-6a)。
 
+Isolated upgrade execution：`workflow/tools/lib/upgrade_migration_service.mjs` 仅编排合成测试工作区的执行、源绑定复核与正式配置转换；发布、回滚和崩溃恢复仍归 `RestoreTransaction` 的同一 journal，源门禁引用不另存进度。普通数据根拒绝执行，schema 1/2 不迁移，历史不自动激活；见 [隔离迁移契约](configuration.md#隔离迁移执行phase-6b)。
+
 Control Center application boundary：
 
 - `control_support_bundle_service.mjs`：用户主动导出的只读诊断投影与内存 ZIP owner；复用 Doctor、RuntimeLog 固定事件、SecretService 和 Runtime Root。受保护 POST 返回下载，不保存诊断副本、不上传、不创建平行状态或日志系统；schema/限制见 [配置指南](configuration.md#support-bundle)。

@@ -8,7 +8,7 @@ import { secureCredentialFile } from './credential_file_security.mjs';
 import { createControlServices } from './control_application_services.mjs';
 import { resolveRunnerConfiguration } from '../runner/config_loader.mjs';
 import { parseRunnerArgs } from '../runner/args.mjs';
-import { holdRestoreParent, restoreError } from './restore_filesystem.mjs';
+import { holdRestoreParent, restoreError, isRestoreStagingGuard } from './restore_filesystem.mjs';
 
 const receiptName = '.paperecho-restore.json';
 const inside = (root, file) => { const r = path.relative(root, file); return !path.isAbsolute(r) && r !== '..' && !r.startsWith('..' + path.sep); };
@@ -16,7 +16,7 @@ const absent = async (file, api = fs) => { try { await api.lstat(file); return f
 const identity = s => `${s.dev}:${s.ino}`;
 // Restore owns the transaction, not configuration, secrets or business history.
 export class RestoreService {
-  constructor({ applicationRoot, env = process.env, fsApi = fs, hook = async () => {} } = {}) { Object.assign(this, { applicationRoot, env, fsApi, hook }); this.active = false; }
+  constructor({ applicationRoot, env = process.env, fsApi = fs, hook = async () => {}, stagingGuard, stagingLayout } = {}) { Object.assign(this, { applicationRoot, env, fsApi, hook, stagingGuard, stagingLayout }); this.active = false; }
   async restore({ input, target, password, signal } = {}) {
     if (this.active) throw restoreError('RESTORE_BUSY'); this.active = true;
     let stage; let stageId; let guard; let published = false;
@@ -24,9 +24,11 @@ export class RestoreService {
       if (!path.isAbsolute(target || '') || path.resolve(target) !== path.normalize(target)) throw restoreError('RESTORE_TARGET_UNSAFE');
       target = path.resolve(target);
       const base = resolveRuntimePaths({ ...(this.applicationRoot ? { applicationRoot: this.applicationRoot } : {}), env: this.env });
-      for (const protectedRoot of [base.applicationRoot, base.userDataRoot]) if (inside(protectedRoot, target) || inside(target, protectedRoot)) throw restoreError('RESTORE_TARGET_UNSAFE');
+      const privateStaging = this.stagingGuard && isRestoreStagingGuard(this.stagingGuard, target);
+      if (privateStaging) this.stagingGuard.assertHeld();
+      for (const protectedRoot of [base.applicationRoot, base.userDataRoot]) if ((inside(protectedRoot, target) || inside(target, protectedRoot)) && !privateStaging) throw restoreError('RESTORE_TARGET_UNSAFE');
       if (!path.isAbsolute(input || '') || inside(target, input)) throw restoreError('RESTORE_TARGET_UNSAFE');
-      const envFor = root => ({ PAPERECHO_LAYOUT: 'installed', PAPERECHO_APPLICATION_ROOT: base.applicationRoot, PAPERECHO_RESOURCE_ROOT: base.resourceRoot, PAPERECHO_DATA_ROOT: root, PAPERECHO_SKIP_DOTENV: '1' });
+      const envFor = root => ({ PAPERECHO_LAYOUT: privateStaging && this.stagingLayout === 'portable' ? 'portable' : 'installed', PAPERECHO_APPLICATION_ROOT: base.applicationRoot, PAPERECHO_RESOURCE_ROOT: base.resourceRoot, PAPERECHO_DATA_ROOT: root, PAPERECHO_CACHE_ROOT: path.join(root, '.cache'), PAPERECHO_SKIP_DOTENV: '1' });
       const paths = prepareRuntimePaths(resolveRuntimePaths({ env: envFor(target) }), { readOnly: true });
       await backupSafePath(target, this.fsApi);
       if (!await absent(target, this.fsApi)) throw restoreError('RESTORE_TARGET_EXISTS');

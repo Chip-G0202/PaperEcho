@@ -55,7 +55,7 @@ export async function migrateApplicationConfig({ root, env = {}, configPath, ato
       const backup = `${target}.v${old.schemaVersion}-backup`;
       const existing = await read(backup);
       if (existing && JSON.stringify(existing) !== JSON.stringify(old)) throw new Error('CONFIG_MIGRATION_BACKUP_CONFLICT');
-      if (!existing) await writeAtomicJson(backup, old);
+      if (!existing) await writeAtomicJson(backup, old, { stagingGuard: atomicOptions.stagingGuard });
       await writeAtomicJson(target, candidate, { ...atomicOptions, validateTemporary: async (temporary) => {
         const reloaded = await read(temporary);
         validateRunnerConfigObject(reloaded);
@@ -143,5 +143,5 @@ export async function migrateApplicationConfig({ root, env = {}, configPath, ato
       await atomicOptions.validateTemporary?.(temporary);
     } });
     return { migrated: true, schemaVersion: 6, metadata: candidate.migration };
-  });
+  }, { stagingGuard: atomicOptions.stagingGuard });
 }

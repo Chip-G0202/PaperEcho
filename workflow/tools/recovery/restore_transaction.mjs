@@ -10,16 +10,16 @@ import { resolveRuntimePaths, resolveApplicationRuntimeContext } from '../lib/ru
 import { writeAtomicJson, readBoundedJson } from '../lib/atomic_json.mjs';
 import { validateOperationLedger } from './operation_ledger.mjs';
 import { createControlServices } from '../lib/control_application_services.mjs';
-import { restoreIdentity, restoreTargetKey, restoreTransactionRoot, inspectRestoreTransaction } from './restore_transaction_status.mjs';
+import { restoreIdentity, restoreTargetKey, restoreTransactionRoot, inspectRestoreTransaction, upgradeSourcePointer } from './restore_transaction_status.mjs';
 
 const inside = (root, value) => { const r = path.relative(root, value); return !path.isAbsolute(r) && r !== '..' && !r.startsWith('..' + path.sep); };
 const present = async file => { try { return await fs.lstat(file); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
 const digest = value => sha256(Buffer.from(JSON.stringify(value)));
-const environment = (base, root) => ({ PAPERECHO_LAYOUT: 'installed', PAPERECHO_APPLICATION_ROOT: base.applicationRoot, PAPERECHO_RESOURCE_ROOT: base.resourceRoot, PAPERECHO_DATA_ROOT: root, PAPERECHO_SKIP_DOTENV: '1' });
+const environment = (base, root, layout = 'installed') => ({ PAPERECHO_LAYOUT: layout, PAPERECHO_APPLICATION_ROOT: base.applicationRoot, PAPERECHO_RESOURCE_ROOT: base.resourceRoot, PAPERECHO_DATA_ROOT: root, PAPERECHO_CACHE_ROOT: path.join(root, '.cache'), PAPERECHO_SKIP_DOTENV: '1' });
 
 // Inventory covers the entire old directory, including unknown user files. Its
 // private, bounded record is evidence for rollback, never a second business store.
-async function inventory(root, { quiescent = false, base, operationId } = {}) {
+export async function inspectRestoreInventory(root, { quiescent = false, base, operationId } = {}) {
   const entries = []; let bytes = 0, count = 0, metadataBytes = 0;
   const add = entry => { if ((metadataBytes += Buffer.byteLength(JSON.stringify(entry))) > BACKUP_LIMITS.manifestBytes) throw restoreError('RESTORE_LIMIT_EXCEEDED'); entries.push(entry); };
   const visit = async file => {
@@ -32,6 +32,11 @@ async function inventory(root, { quiescent = false, base, operationId } = {}) {
       if (s.size > BACKUP_LIMITS.fileBytes || (bytes += s.size) > BACKUP_LIMITS.totalBytes) throw restoreError('RESTORE_LIMIT_EXCEEDED');
       const data = await readBackupFile(file, BACKUP_LIMITS.fileBytes);
       try {
+        if (operationId && name === upgradeSourcePointer) {
+          const pointer = JSON.parse(data);
+          if (pointer.owner === 'paperecho-restore' && pointer.role === 'upgrade-source' && pointer.operationId === operationId) return;
+          throw restoreError('RESTORE_RECOVERY_REQUIRED');
+        }
         if (operationId && name.endsWith('.lock')) {
           let lock; try { lock = JSON.parse(data); } catch {}
           if (lock?.owner === 'paperecho-restore' && lock.operationId === operationId) return;
@@ -53,16 +58,18 @@ async function inventory(root, { quiescent = false, base, operationId } = {}) {
   };
   await visit(root); return entries;
 }
+const inventory = inspectRestoreInventory;
 
 export class RestoreTransaction {
   constructor({ applicationRoot, env = process.env, fsApi = fs, hook = async () => {} } = {}) { Object.assign(this, { applicationRoot, env, fsApi, hook }); }
-  async target(target) {
+  async target(target, { portable = false } = {}) {
     if (process.platform !== 'win32') throw restoreError('RESTORE_PLATFORM_UNVERIFIED');
     if (!path.isAbsolute(target || '') || path.resolve(target) !== path.normalize(target)) throw restoreError('RESTORE_TARGET_UNSAFE');
     const base = resolveRuntimePaths({ applicationRoot: this.applicationRoot, env: this.env });
     target = path.resolve(target);
     if (target.split(path.sep).some(part => /^\.paperecho-restore-tx-/i.test(part))) throw restoreError('RESTORE_TARGET_UNSAFE');
-    if (inside(base.applicationRoot, target) || inside(target, base.applicationRoot) || target === path.parse(target).root) throw restoreError('RESTORE_TARGET_UNSAFE');
+    if (inside(target, base.applicationRoot) || target === path.parse(target).root || inside(base.applicationRoot, target) && !portable) throw restoreError('RESTORE_TARGET_UNSAFE');
+    if (portable && resolveRuntimePaths({ env: { ...environment(base, target), PAPERECHO_LAYOUT: 'portable' } }).userDataRoot !== target) throw restoreError('RESTORE_TARGET_UNSAFE');
     if (target !== base.userDataRoot && (inside(base.userDataRoot, target) || inside(target, base.userDataRoot))) throw restoreError('RESTORE_TARGET_UNSAFE');
     const temporaryRoots = [base.tempRoot, ...['TEMP', 'TMP', 'TMPDIR'].flatMap(key => [this.env[key], process.env[key]])].filter(value => typeof value === 'string' && path.isAbsolute(value));
     if (temporaryRoots.some(root => inside(target, path.resolve(root)) || inside(path.resolve(root), target))) throw restoreError('RESTORE_TEMP_CONFLICT');
@@ -103,6 +110,83 @@ export class RestoreTransaction {
     await writeAtomicJson(path.join(root, 'status.json'), next, { fsApi: this.fsApi });
     Object.assign(record, next);
     await this.hook(state, { root, target: record.target });
+  }
+  // Upgrade into an absent root uses this same journal, NTFS guard, publication,
+  // Doctor validation and conservative rollback. The original source is retained.
+  async publishNew({ input, target, password, upgrade, sourcePaths, sourceContext, transform, confirm, signal } = {}) {
+    if (typeof confirm !== 'function' || await confirm({ action: 'isolated-upgrade', planId: upgrade?.planId }) !== true) throw restoreError('RESTORE_CONFIRMATION_REQUIRED');
+    const { base } = await this.target(target, { portable: upgrade.targetLayout === 'portable' });
+    if (await present(target) || inspectRestoreTransaction(target).state !== 'ABSENT') throw restoreError('RESTORE_TRANSACTION_RETAINED');
+    const source = upgrade.sourceRoot;
+    if (source !== sourcePaths.userDataRoot || source !== sourceContext.userDataRoot || inside(source, target) || inside(target, source)) throw restoreError('RESTORE_TARGET_UNSAFE');
+    await secureCredentialFile(source, { checkOnly: true });
+    const sourceGuard = await holdRestoreParent(source, { existing: true }); let guard; const handles = [];
+    const root = restoreTransactionRoot(target);
+    let record;
+    try {
+      const before = await inventory(source, { quiescent: true, base });
+      if (digest(before) !== upgrade.expectedSourceSnapshotDigest) throw restoreError('RESTORE_SOURCE_CHANGED');
+      guard = await holdRestoreParent(root, { exclusive: true });
+      await this.hook('UPGRADE_GUARDS_HELD', { guardPids: [sourceGuard.pid, guard.pid] });
+      record = { schemaVersion: 1, owner: 'paperecho-restore', kind: 'upgrade-new-root', operationId: randomUUID(), targetKey: restoreTargetKey(target), target,
+        state: 'PREPARING', sequence: -1, oldIdentity: null, newIdentity: null,
+        upgrade: { ...upgrade, sourceIdentity: before[0].identity, sourceSnapshotDigest: digest(before), startedAt: new Date().toISOString(), completedSteps: [] } };
+      await writeAtomicJson(path.join(root, 'source-inventory.json'), before, { fsApi: this.fsApi });
+      await this.checkpoint(root, record, 'PREPARING');
+      record.upgrade.locks = (await backupWriterLockTargets(sourcePaths, sourceContext, [sourceContext.runRoot])).map(file => {
+        if (!inside(source, file)) throw restoreError('RESTORE_TARGET_UNSAFE'); return path.relative(source, file);
+      });
+      await this.checkpoint(root, record, 'PREPARING');
+      for (const relative of record.upgrade.locks) {
+        const file = path.join(source, relative); if (!await present(path.dirname(file))) continue;
+        await backupSafePath(file); const handle = await this.fsApi.open(file + '.lock', 'wx', 0o600); handles.push(handle);
+        await handle.writeFile(JSON.stringify({ owner: 'paperecho-restore', operationId: record.operationId, pid: process.pid })); await handle.sync();
+      }
+      const pointer = await this.fsApi.open(path.join(source, upgradeSourcePointer), 'wx', 0o600);
+      try { await pointer.writeFile(JSON.stringify({ schemaVersion: 1, owner: 'paperecho-restore', role: 'upgrade-source', operationId: record.operationId, sourceKey: restoreTargetKey(source), targetLayout: upgrade.targetLayout })); await pointer.sync(); }
+      finally { await pointer.close(); }
+      await this.verifyUpgradeSource(root, record); sourceGuard.assertHeld();
+      const result = await new RestoreService({ applicationRoot: base.applicationRoot, env: this.env, fsApi: this.fsApi, stagingGuard: guard, stagingLayout: upgrade.targetLayout,
+        hook: (step, context) => this.hook('STAGING_' + step, { ...context, root, target }) }).restore({ input, target: path.join(root, 'new'), password, signal });
+      await transform(path.join(root, 'new'), record, guard);
+      record.newIdentity = restoreIdentity(await fs.lstat(path.join(root, 'new')));
+      const newPaths = resolveRuntimePaths({ env: environment(base, path.join(root, 'new'), upgrade.targetLayout) });
+      await fs.mkdir(newPaths.tempRoot, { recursive: true, mode: 0o700 });
+      record.newDigest = digest(await inventory(path.join(root, 'new')));
+      await this.verifyPublished(base, { ...record, target: path.join(root, 'new') });
+      await this.checkpoint(root, record, 'PREPARED');
+      await this.verifyUpgradeSource(root, record); sourceGuard.assertHeld(); guard.assertHeld(); signal?.throwIfAborted();
+      await this.checkpoint(root, record, 'PUBLISHING');
+      await this.fsApi.rename(path.join(root, 'new'), target);
+      await this.checkpoint(root, record, 'NEW_PUBLISHED');
+      const doctor = await this.verifyPublished(base, record); await this.verifyUpgradeSource(root, record);
+      await this.checkpoint(root, record, 'VERIFIED');
+      for (const handle of handles.splice(0)) await handle.close();
+      await this.releaseLocks(root, record);
+      await this.checkpoint(root, record, 'COMMITTED');
+      await this.releaseUpgradePointer(record);
+      return { ...result, userDataRoot: target, status: 'committed', operationId: record.operationId, rollbackRetained: true, conversion: record.upgrade.completedSteps,
+        doctor: { status: doctor.status, canRun: doctor.canRun, checks: doctor.checks.map(({ checkId, status, severity }) => ({ checkId, status, severity })) } };
+    } catch (error) {
+      for (const handle of handles.splice(0)) await handle.close();
+      if (record) {
+        try { await this.releaseLocks(root, record); await this.rollback(base, root, record); await this.releaseUpgradePointer(record); }
+        catch { await this.checkpoint(root, record, 'RECOVERY_REQUIRED').catch(() => {}); throw restoreError('RESTORE_RECOVERY_REQUIRED'); }
+      }
+      throw error;
+    } finally { for (const handle of handles) await handle.close(); await guard?.release(); await sourceGuard.release(); }
+  }
+  async verifyUpgradeSource(root, record) {
+    const expected = await readBoundedJson(root, path.join(root, 'source-inventory.json'), { maxBytes: BACKUP_LIMITS.manifestBytes });
+    if (!expected || digest(expected) !== record.upgrade.sourceSnapshotDigest
+      || digest(await inventory(record.upgrade.sourceRoot, { quiescent: true, operationId: record.operationId })) !== record.upgrade.sourceSnapshotDigest) throw restoreError('RESTORE_SOURCE_CHANGED');
+  }
+  async releaseUpgradePointer(record) {
+    const source = record.upgrade.sourceRoot, file = path.join(source, upgradeSourcePointer);
+    if (!await present(file)) return;
+    await backupSafePath(file); const pointer = await readBoundedJson(source, file, { maxBytes: 1024 });
+    if (pointer?.owner !== 'paperecho-restore' || pointer.operationId !== record.operationId || pointer.role !== 'upgrade-source') throw restoreError('RESTORE_RECOVERY_REQUIRED');
+    await fs.unlink(file);
   }
   async replace({ input, target, password, confirm, signal } = {}) {
     const preview = await this.preflight({ input, target, password, signal });
@@ -165,6 +249,18 @@ export class RestoreTransaction {
     } finally { for (const handle of handles) await handle.close(); await guard.release(); }
   }
   async releaseLocks(root, record) {
+    if (record.kind === 'upgrade-new-root') {
+      const source = record.upgrade.sourceRoot;
+      if (restoreIdentity(await fs.lstat(source)) !== record.upgrade.sourceIdentity) throw restoreError('RESTORE_SOURCE_CHANGED');
+      for (const relative of record.upgrade.locks || []) {
+        if (!relative || path.isAbsolute(relative) || relative.split(/[\\/]/).includes('..')) throw restoreError('RESTORE_RECOVERY_REQUIRED');
+        const file = path.join(source, relative + '.lock'); if (!await present(file)) continue;
+        await backupSafePath(file); const value = await readBoundedJson(source, file, { maxBytes: 1024 });
+        if (value?.owner !== 'paperecho-restore' || value.operationId !== record.operationId) throw restoreError('RESTORE_RECOVERY_REQUIRED');
+        await fs.unlink(file);
+      }
+      return;
+    }
     for (const candidate of [record.target, path.join(root, 'old')]) {
       const stat = await present(candidate); if (!stat || restoreIdentity(stat) !== record.oldIdentity) continue;
       for (const relative of record.locks || []) {
@@ -180,15 +276,26 @@ export class RestoreTransaction {
     if (digest(await inventory(record.target)) !== record.newDigest) throw restoreError('RESTORE_HASH_MISMATCH');
     await secureCredentialFile(record.target, { checkOnly: true });
     if (await present(path.join(record.target, '.env'))) await secureCredentialFile(path.join(record.target, '.env'), { checkOnly: true });
-    const env = environment(base, record.target), context = await resolveApplicationRuntimeContext({ env, readOnly: true });
+    const env = environment(base, record.target, record.upgrade?.targetLayout || 'installed'), context = await resolveApplicationRuntimeContext({ env, readOnly: true });
     const report = await createControlServices({ root: base.applicationRoot, context, env }).doctor.status();
     // Historical execution is intentionally blocked; resource/config/Secret
     // failures must still cause rollback, not be hidden by that expected block.
     if (['configuration', 'secrets', 'runtime.resources'].some(id => report.checks.find(c => c.checkId === id)?.status !== 'PASS')) throw restoreError('RESTORE_DOCTOR_BLOCKED');
     if (digest(await inventory(record.target)) !== record.newDigest) throw restoreError('RESTORE_HASH_MISMATCH');
+    return report;
   }
   async rollback(base, root, record) {
     await this.checkpoint(root, record, 'ROLLBACK');
+    if (record.kind === 'upgrade-new-root') {
+      await this.verifyUpgradeSource(root, record);
+      const current = await present(record.target);
+      if (current) {
+        if (!record.newIdentity || restoreIdentity(current) !== record.newIdentity || digest(await inventory(record.target)) !== record.newDigest || await present(path.join(root, 'rejected'))) throw restoreError('RESTORE_TARGET_CHANGED');
+        await this.fsApi.rename(record.target, path.join(root, 'rejected'));
+        await this.hook('ROLLBACK_NEW_PRESERVED', { root, target: record.target });
+      }
+      await this.checkpoint(root, record, 'ROLLED_BACK'); return;
+    }
     const current = await present(record.target), old = await present(path.join(root, 'old'));
     if (old) {
       if (restoreIdentity(old) !== record.oldIdentity || digest(await inventory(path.join(root, 'old'))) !== record.oldDigest) throw restoreError('RESTORE_OLD_CHANGED');
@@ -207,35 +314,42 @@ export class RestoreTransaction {
     if (await present(path.join(record.target, '.env'))) await secureCredentialFile(path.join(record.target, '.env'), { checkOnly: true });
     await this.checkpoint(root, record, 'ROLLED_BACK');
   }
-  async recover({ target, rollback = false, confirm } = {}) {
-    const { base, target: selected } = await this.target(target); target = selected;
+  async recover({ target, rollback = false, confirm, upgrade } = {}) {
+    const { base, target: selected } = await this.target(target, { portable: upgrade?.targetLayout === 'portable' }); target = selected;
     const root = restoreTransactionRoot(target);
     await secureCredentialFile(root, { checkOnly: true });
     const guard = await holdRestoreParent(root, { existing: true, exclusive: true });
     try {
       const record = await readBoundedJson(root, path.join(root, 'status.json'), { maxBytes: 8192 });
       if (!record || record.owner !== 'paperecho-restore' || record.target !== target || record.targetKey !== restoreTargetKey(target) || !/^[a-f0-9-]{36}$/.test(record.operationId)) throw restoreError('RESTORE_RECOVERY_REQUIRED');
+      if (record.kind === 'upgrade-new-root') {
+        if (!upgrade || Object.entries(upgrade).some(([key, value]) => record.upgrade[key] !== value)) throw restoreError('RESTORE_RECOVERY_REQUIRED');
+        await this.verifyUpgradeSource(root, record);
+      } else if (upgrade) throw restoreError('RESTORE_RECOVERY_REQUIRED');
       if (!/^[a-f0-9-]{36}\.json$/.test(record.evidenceFile || '')) throw restoreError('RESTORE_RECOVERY_REQUIRED');
       const evidence = await readBoundedJson(root, path.join(root, record.evidenceFile), { maxBytes: 8192 });
       if (JSON.stringify(evidence) !== JSON.stringify(record)) throw restoreError('RESTORE_RECOVERY_REQUIRED');
       if (record.state === 'ROLLED_BACK') {
         if (inspectRestoreTransaction(target).blocking) throw restoreError('RESTORE_RECOVERY_REQUIRED');
+        if (record.kind === 'upgrade-new-root') await this.releaseUpgradePointer(record);
         return { status: 'rolled-back', operationId: record.operationId };
       }
       if (record.state === 'COMMITTED' && !rollback) {
         if (inspectRestoreTransaction(target).blocking) throw restoreError('RESTORE_RECOVERY_REQUIRED');
+        if (record.kind === 'upgrade-new-root') await this.verifyPublished(base, record);
+        if (record.kind === 'upgrade-new-root') await this.releaseUpgradePointer(record);
         return { status: 'committed', operationId: record.operationId, rollbackRetained: true };
       }
       if (record.state === 'COMMITTED' && (typeof confirm !== 'function' || await confirm({ target, operationId: record.operationId, action: 'rollback' }) !== true)) throw restoreError('RESTORE_CONFIRMATION_REQUIRED');
       if (record.state === 'COMMITTED') {
-        await this.validateOld(base, target);
+        if (record.kind !== 'upgrade-new-root') await this.validateOld(base, target);
         await this.checkpoint(root, record, 'ROLLBACK');
-        await this.validateOld(base, target);
+        if (record.kind !== 'upgrade-new-root') await this.validateOld(base, target);
       }
       if (record.state !== 'COMMITTED' && (typeof confirm !== 'function' || await confirm({ target, operationId: record.operationId, action: 'recover-and-rollback' }) !== true)) throw restoreError('RESTORE_CONFIRMATION_REQUIRED');
       // Recovery conservatively rolls back incomplete work. Physical identities
       // distinguish either side of a rename even when its checkpoint was lost.
-      try { await this.releaseLocks(root, record); await this.rollback(base, root, record); }
+      try { await this.releaseLocks(root, record); await this.rollback(base, root, record); if (record.kind === 'upgrade-new-root') await this.releaseUpgradePointer(record); }
       catch { await this.checkpoint(root, record, 'RECOVERY_REQUIRED').catch(() => {}); throw restoreError('RESTORE_RECOVERY_REQUIRED'); }
       return { status: 'rolled-back', operationId: record.operationId };
     } finally { await guard.release(); }
