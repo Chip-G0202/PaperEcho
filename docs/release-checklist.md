@@ -1,5 +1,26 @@
 # Public Release Checklist
 
+## Phase 11 离线发行准备
+
+现有 Electron Packager 是唯一 builder。`npm run package:win --prefix desktop/electron-poc` 在 fuses 修改和 ASAR 校验后生成 `release-manifest.json`（schema v1）：真实 UTC 构建时间、应用版本、输入 Git commit/dirty、Windows x64/unpacked、Electron/Packager/fuses 版本、构建 package 版本、入口、Runtime Root owner、源文件/production module 清单，以及每个产物文件的字节数和 SHA256。应用版本 2.6.0 与私有构建工程版本 0.0.0 分别记录。manifest 不自哈希；artifactId 是除 artifactId 外清单内容的 SHA256。清单及普通 SHA256 都不证明发行者身份；源码 dirty 的产物只能供测试，commit 本身不能追溯证明未提交输入。
+
+清单只包含相对路径。验证器限定显式 artifact parent，拒绝路径越界、链接/多硬链接、意外文件、Secret/用户配置/日志/备份、缺失资源、哈希/版本/commit 不符；完整枚举包括 production dependencies，最多 20,000 文件、2 GiB 总量、8 MiB manifest。ASAR 只允许 Shell 三文件，核对 EXE 内嵌 ASAR header hash、PE x64、实际版本资源、官方 Electron version、所有实际 fuses。`resources/core` 由逐文件哈希覆盖，仍须保护程序目录写权限；没有第二套 Runtime Root 或迁移逻辑。RunAsNode 保持启用，供内置 Headless/Node 子进程使用，任意 Node 代码执行能力仍然存在，不以新 Gate 掩盖此取舍。
+
+```powershell
+node --test tests/helpers/release_readiness.test.mjs tests/helpers/packaging.test.mjs tests/helpers/electron_poc.test.mjs
+npm run release:preflight --prefix desktop/electron-poc
+```
+
+`release:preflight` 只读 latest-build 指向的工作区构建，也接受 `-- --artifact <绝对路径>`（必须在工作区 `tests/runs/phase2b` 内）；构建 commit 必须匹配当前 HEAD，因此提交后旧 dirty 构建会被拒绝，正式候选必须从已提交输入重建。退出码 3 表示发行 BLOCKED；2 表示校验失败。输出只含安全状态/版本/哈希，不含绝对路径、凭据或证书身份；不生成配置或更改产物。构建清单变动后应重新运行；未来真实签名改变二进制，必须在验证签名后重算最终清单，不能拿签名前哈希验证签名后产物。不得通过编辑清单绕过验证；能同时改 payload 和 manifest 的攻击者不在哈希真实性保障内，必须由可信签名及发行渠道解决。
+
+Windows Signing Preflight 检查产物身份/架构、PE 证书表和 signtool 可用性；证书表非空仅为 UNVERIFIED，绝不推断签名有效。不申请/读取私钥、不执行签名或联网证书验证。默认缺少可信证书返回 SIGNING_BLOCKED，Authenticode 明确为 NOT_EXECUTED_REQUIRED_BEFORE_RELEASE。配置接口只接受 Windows store thumbprint 引用及无凭据/query 的 HTTPS RFC3161 endpoint，不接受 PFX/password；配置存在也不证明证书可信。必须另行授权、核实当前用户证书具备代码签名 EKU/私钥/有效期，并使用 `signtool verify /pa /all /v <artifact>` 验证所有签名及时间戳。顺序为构建→fuses→ASAR→应用签名/验证→Installer 构建→Installer 独立签名/验证→最终清单。真实 Authenticode 验证尚未完成，不能把 unsigned 或 MOCK 当成有效签名。
+
+macOS 目前只有静态命令/要求契约：Developer ID Application、Hardened Runtime、按内到外签嵌套代码、按 Electron/架构审阅 allow-jit/allow-unsigned-executable-memory entitlements（不默认放宽 library validation）、notarytool Accepted、stapler staple/validate、codesign strict 验证、spctl/Gatekeeper 与 x64/arm64 实机。命令参数为数组和占位符，不执行、不读取 Apple 凭据；Windows 下始终 BLOCKED，不声称完成 Apple 签名或公证。
+
+Release Gate 分别报告 development、offlinePackaging、releasePreflight、windowsSigning、installer、scheduler、upgradeRollback、macos、publication。READY_FOR_TEST 只证明相应离线条件；未知测试证据 UNKNOWN、实际错误 FAILED、缺少发行条件 BLOCKED。当前实现没有真实平台验收的授权入口或可传入的 PASS 开关，永远不会仅凭合成/模拟证据产生 RELEASE_READY。开发与 packaged 测试结果须另附本次真实报告，不能从旧报告自动推导。Phase 3A 安装/卸载/重装与数据保留、Phase 5B OS 注册/触发/禁用/卸载、Phase 6C 真实版本替换/迁移/回滚及 macOS 实测均仍阻断正式发布。Phase 11 离线准备完成不代表 v2.6 已发布。
+
+Windows packaged Gate 复用 `node tests/helpers/packaged_startup.mjs`：逐字节对照当前业务源码，Installed/Portable 真实 GUI 三尺寸、空 PATH/仓库外 cwd、内置 Headless、Doctor 只读、真实进程中断、恢复状态阻塞、accepted 不重放及子进程退出。GUI 必须运行于能够实际加载 Electron/GPU 子进程的普通用户环境；产品 sandbox/contextIsolation/webSecurity 不变。额外安装/调度/升级实机 Gate 不能由此替代。
+
 - [ ] 全仓库无真实 API key
 - [ ] Git 历史无泄露密钥，或已清理并 rotate
 - [ ] `.env` 未被提交
