@@ -69,7 +69,28 @@ schedule spec v1 的任务标识来自规范化数据根 hash，同根重复标�
 
 验证：`node --test workflow/tests/os_scheduler.test.mjs`，加 scheduled-daily、Runner/config/runtime、Secret、Doctor、claim/ledger/recovery 与 Restore gate 回归。已有离线缓存构建：`npm run package:win --prefix desktop/electron-poc`；`node tests/helpers/packaged_scheduler.mjs` 在独立 dummy 根验证真实 native executable、内置 Node、空 PATH、仓库外 cwd、原生参数引用、只读快照、UNKNOWN/恢复阻塞、fuses 与进程清理。原生 raw argv 测试必须同时正确引用 executable argv[0] 和每个参数。最终使用原样 `npm run check`、`npm test`，不降低并行度。
 
-本阶段的 OS 适配结果是离线/模拟验证，未调用任何真实注册、触发、修改或删除计划任务接口。Phase 5B 的 Windows 注册/身份权限、实际触发、休眠重启、修改卸载及数据保留仍需可信 VM/Sandbox；当前缺少该环境。Phase 3A Installer 保持 Blocked，macOS 未实测，不据此宣称 Phase 5 或双平台发行完成。
+Phase 5A 的结果仅为离线/模拟验证，不代表真实 OS 注册通过。Windows 的 Phase 5B 验证范围见下节；休眠重启、未登录运行和 macOS 实机行为仍未验证。
+
+## Windows Scheduler 显式管理与 Sandbox 验收（Phase 5B）
+
+packaged Headless 提供七个独立命令：`--schedule-register`、`--schedule-query`、`--schedule-enable`、`--schedule-disable`、`--schedule-update`、`--schedule-run`、`--schedule-delete`，沿用上节绝对 Runtime Root 参数，不与 workflow 参数混用。需明确的 PowerShell 7 `PWSH_PATH`。普通 GET、preflight、dry-run 和启动不会注册任务。register/update/enable/run 必须通过正式预检；query/disable/delete 在仍能识别合法 spec 时可用于安全清理。启用/运行还要求 canonical scheduler.enabled=true。
+
+薄原生 owner 通过固定 PowerShell 脚本及 UTF-8 JSON stdin 调用 Task Scheduler COM；COM XmlText 使用 UTF-16 BSTR 声明，下载模板仍是 UTF-8。任务只属于当前 SID，InteractiveToken / LeastPrivilege；Create 和 Update 分离，拒绝重复注册与接管。动作、参数、工作目录、触发器和并发策略来自现有 canonical spec，执行与启用前核对原任务定义，不接受任意 XML 或 shell 命令。
+
+正式 Runner 在 scheduled selection 的安全跳过之前检查 Restore transaction owner；Restore/Migration PREPARED 返回既有 pipeline 退出码 5 与 `RESTORE_RECOVERY_REQUIRED`，不改事务、claim、receipt 或研究数据。正常的 before-slot/已完成空跑仍允许退出 0。日志目录被事务门禁保护时，用正式 schedule 响应证明拒绝，不强行写日志。
+
+自动验收需要当前用户可用的 wsb CLI 和可信 packaged 产物；有既存沙盒时安全拒绝，不关闭或接管用户会话。在 PowerShell 7 中执行：
+
+```powershell
+$env:PWSH_PATH = Join-Path $PSHOME 'pwsh.exe'
+$env:WSB_PATH = (Get-Command wsb.exe -ErrorAction Stop).Source
+node tests/helpers/sandbox_scheduler.mjs --prepared
+node tests/helpers/sandbox_scheduler.mjs --run
+```
+
+每轮唯一 runId，先验证产物源码、输入 SHA256 与客体身份，再通过 wsb + ExistingLogin 自动执行。网络关闭，仅共享只读公共输入和专用可丢弃输出；Runtime 复制到客体本地。终态报告要求实际 Runner PID/退出事件与新的 RuntimeLog 完成事件对应，不仅依据 LastTaskResult。临近自动触发只存在于 TEST ONLY 客体定义；禁用不触发、重新启用、更新、并发/恢复拒绝、只读 Doctor、任务删除和进程清理均有真实断言。宿主不调用任何任务修改接口，不执行真实研究或外部服务。测试日期从 JSON 的 DateTime 转为 DateTimeOffset 时保留 UTC Kind，不能先转字符串丢失时区。
+
+已验证范围是隔离 Sandbox 中当前已登录用户、packaged Runtime、空 PATH 与仓库外 cwd；长期重启/休眠、未登录身份、安装器整合仍未验证。Phase 3A、Phase 6C、Signing、macOS 和正式 Release Gate 继续 Blocked，不把此结果当作发行通过。
 
 ## 离线升级兼容性预检（Phase 6A）
 

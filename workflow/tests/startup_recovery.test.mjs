@@ -9,6 +9,8 @@ import { inspectStartupRecovery, acquireStartupWorkflowLease, createRunRecoveryC
 import { startRunGroup, finishRunGroup } from '../tools/lib/runtime_housekeeping.mjs';
 import { main as runner } from '../tools/runner/main.mjs';
 import { buildRuntimeConfig } from '../tools/lib/runtime_config.mjs';
+import { restoreTransactionRoot, restoreTargetKey, inspectRestoreTransaction } from '../tools/recovery/restore_transaction_status.mjs';
+import { EXIT_CODES } from '../tools/runner/constants.mjs';
 import { workflowLedgerStatus } from '../tools/lib/orchestrator_status.mjs';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
@@ -178,4 +180,28 @@ test('only a real direct child with matching parent identity borrows without rel
   const child = f.launch('borrow', 'workflow', lease.lease.ownerId), result = await child.next('borrowed');
   assert.equal(result.acquired, true); assert.equal(result.borrowed, true); assert.equal(result.released, false);
   assert.equal(JSON.parse(await fs.readFile(lease.leasePath)).ownerId, lease.lease.ownerId); await releaseRunLease(lease);
+});
+
+test('scheduled skips cannot bypass PREPARED restore or migration transactions', async t => {
+  const f=await fixture(t), data=path.join(f.root,'data');
+  const env={PAPERECHO_LAYOUT:'installed',PAPERECHO_APPLICATION_ROOT:path.join(f.root,'app'),PAPERECHO_DATA_ROOT:data,PAPERECHO_CACHE_ROOT:path.join(f.root,'cache'),PAPERECHO_SKIP_DOTENV:'1'};
+  await fs.mkdir(buildRuntimeConfig({env}).runRoot,{recursive:true});
+  const tx=restoreTransactionRoot(data), file=path.join(tx,'status.json');
+  let selections=0, productions=0, text='';
+  const dependencies={env,stdout:{write:v=>{text+=v;}},stderr:{write(){}},runtimeLog:{write:async()=>({ok:true})},
+    resolveRunnerConfigurationImpl:async options=>({options,env}),
+    selectScheduledDailyRunImpl:async()=>{selections++;return {status:'before_scheduled_slot',decision:{reason:'before_scheduled_slot'}};},
+    runProductionImpl:async()=>{productions++;assert.fail('no external business');}};
+  for(const kind of ['restore-existing','upgrade-new-root']){
+    await fs.mkdir(tx);
+    await fs.writeFile(file,JSON.stringify({schemaVersion:1,owner:'paperecho-restore',operationId:'00000000-0000-4000-8000-000000000001',targetKey:restoreTargetKey(data),kind,state:'PREPARED'}));
+    const before=await fs.readFile(file);text='';
+    assert.equal(inspectRestoreTransaction(data).state,'PREPARED');
+    assert.equal(await runner(['--run','--scheduled-daily','--mode','desktop'],dependencies),EXIT_CODES.pipeline);
+    assert.deepEqual(JSON.parse(text.trim()),{type:'schedule',status:'recovery_required',reason:'RESTORE_RECOVERY_REQUIRED'});
+    assert.deepEqual(await fs.readFile(file),before);assert.equal(selections,0);assert.equal(productions,0);
+    await fs.rm(tx,{recursive:true});
+  }
+  assert.equal(await runner(['--run','--scheduled-daily','--mode','desktop'],dependencies),EXIT_CODES.success);
+  assert.equal(selections,1);assert.equal(productions,0);
 });

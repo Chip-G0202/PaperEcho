@@ -21,6 +21,7 @@ import { emailDeliveryPolicy } from '../notification/policy.mjs';
 import { redactSecrets, secretValues, copyEnvironment } from '../lib/credential_registry.mjs';
 import { resolveRuntimePaths, buildRuntimeConfig } from '../lib/runtime_config.mjs';
 import { RuntimeLog } from '../lib/runtime_logging.mjs';
+import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
 
 export function redactText(text, env = process.env) {
   return redactSecrets(text, secretValues(env));
@@ -98,7 +99,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     const { upgradeMain } = await import('./upgrade.mjs');
     return upgradeMain(argv, dependencies);
   }
-  if (argv.some(x => ['--schedule-preflight', '--schedule-dry-run'].includes(x))) {
+  if (argv.some(x => ['--schedule-preflight', '--schedule-dry-run', '--schedule-register', '--schedule-query', '--schedule-enable', '--schedule-disable', '--schedule-update', '--schedule-run', '--schedule-delete'].includes(x))) {
     const { schedulerMain } = await import('./os_scheduler.mjs');
     return schedulerMain(argv, dependencies);
   }
@@ -144,6 +145,10 @@ async function executeMain(argv, dependencies) {
   if (cliOptions.scheduledDaily) {
     let selection;
     try {
+      if (inspectRestoreTransaction(resolveRuntimePaths({ env: resolved.env }).userDataRoot).blocking) {
+        stdout.write(JSON.stringify({ type: 'schedule', status: 'recovery_required', reason: 'RESTORE_RECOVERY_REQUIRED' }) + '\n');
+        return EXIT_CODES.pipeline;
+      }
       const runtime = buildRuntimeConfig({ cwd: dependencies.repoRoot, env: resolved.env });
       const admission = await inspectStartupRecovery({ runRoot: runtime.runRoot,
         researchRoot: runtime.researchRoot, dataRoots: [runtime.projectRoot, runtime.reviewRoot] });

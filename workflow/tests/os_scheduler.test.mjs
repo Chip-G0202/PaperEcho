@@ -76,7 +76,7 @@ test('readonly preflight and repeated dry-run PASS with no writes or OS adapter 
     assert.equal(result.status, layout === 'dev' ? 'FAIL' : 'PASS', JSON.stringify(result.checks)); assert.equal(result.osMutation, false);
     let text = ''; const stdout = { write: x => { text += x; } };
     for (let i = 0; i < 2; i++) {
-      text = ''; const code = await main(['--schedule-dry-run'], { env: f.env, stdout, runProductionImpl: () => assert.fail('workflow forbidden'), runtimeLog: { write: () => assert.fail('no logging') } });
+      text = ''; const code = await main(['--schedule-dry-run'], { env: f.env, stdout, runProductionImpl: () => assert.fail('workflow forbidden'), runtimeLog: { write: () => assert.fail('no logging') }, schedulerAdapter: { execute: () => assert.fail('readonly command must not call OS') } });
       assert.equal(code, layout === 'dev' ? 2 : 0); assert.ok(!text.includes(f.root));
       if (layout !== 'dev') { const report = JSON.parse(text); assert.match(report.definition.content, /__USER_DATA_ROOT__/); assert.match(report.definition.content, /__APPLICATION_ROOT__/); }
     }
@@ -111,8 +111,8 @@ test('external Secret is UNKNOWN and never embedded in summaries; native bootstr
   assert.deepEqual(applyHeadlessRuntimeArguments(argv, env), ['--schedule-preflight']); assert.equal(env.PAPERECHO_DATA_ROOT, f.data);
   for (const args of [['--user-data-root', f.data], ['--runtime-layout', 'dev', '--user-data-root', f.data], [...argv, '--user-data-root', f.data], ['--runtime-layout', 'installed', '--user-data-root', 'relative']]) assert.throws(() => applyHeadlessRuntimeArguments(args, {}));
 });
-test('offline adapters contain no process execution or OS registration capability', async () => {
-  for (const name of ['workflow/tools/lib/os_scheduler.mjs', 'workflow/tools/runner/os_scheduler.mjs']) {
+test('offline definition owner contains no native process or registration implementation', async () => {
+  for (const name of ['workflow/tools/lib/os_scheduler.mjs']) {
     const code = await fs.readFile(path.join(repo, name), 'utf8');
     assert.doesNotMatch(code, /child_process|execFile|spawn\(|Register-ScheduledTask|schtasks|launchctl/);
   }

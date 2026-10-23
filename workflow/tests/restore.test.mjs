@@ -188,11 +188,26 @@ test('concurrent services publish only one complete root and reject same-instanc
   const f = await fixture(t); let release, entered;
   const gate = new Promise(r => { release = r; }), waiting = new Promise(r => { entered = r; });
   const service = f.make({ hook: async step => { if (step === 'staging-created') { entered(); await gate; } } });
-  const first = service.restore({ input: f.input, target: f.target, password: password() });
+  const events = [], started = Date.now();
+  const mark = phase => events.push({ phase, order: events.length, elapsedMs: Date.now() - started });
+  const observe = (name, promise) => promise.then(value => { mark(name + '-fulfilled'); return value; }, error => { mark(name + '-rejected'); throw error; });
+  mark('first-start');
+  const first = observe('first', service.restore({ input: f.input, target: f.target, password: password() }));
+  const firstSettled = Promise.allSettled([first]);
+  let firstOutcome, secondOutcome, activeWhileGated;
   try {
-    await waiting; await assert.rejects(service.restore({ input: f.input, target: f.target, password: password() }), /RESTORE_BUSY/);
-    const second = await f.restore(); assert.equal(second.status, 'restored');
-  } finally { release(); await assert.rejects(first, /RESTORE_TARGET_EXISTS/); }
+    await waiting; mark('first-gated'); activeWhileGated = service.active;
+    await assert.rejects(service.restore({ input: f.input, target: f.target, password: password() }), /RESTORE_BUSY/);
+    mark('second-start'); [secondOutcome] = await Promise.allSettled([observe('second', f.restore())]);
+  } finally { mark('gate-release'); release(); [firstOutcome] = await firstSettled; }
+  const summary = outcome => outcome.status === 'fulfilled' ? { status: outcome.status, result: outcome.value.status, byteIdentical: outcome.value.byteIdentical }
+    : { status: outcome.status, code: /^[A-Z][A-Z0-9_]+$/.test(outcome.reason.code || outcome.reason.message) ? outcome.reason.code || outcome.reason.message : 'UNKNOWN_ERROR' };
+  t.diagnostic(JSON.stringify({ first: summary(firstOutcome), second: summary(secondOutcome), activeWhileGated, activeAfterCompletion: service.active, events }));
+  // Assert the second operation first: cleanup must not mask its primary failure.
+  assert.equal(secondOutcome.status, 'fulfilled', JSON.stringify(summary(secondOutcome)));
+  assert.equal(secondOutcome.value.status, 'restored');
+  await assert.rejects(first, /RESTORE_TARGET_EXISTS/);
+  assert.equal(activeWhileGated, true); assert.equal(service.active, false);
   await f.noStaging(); await f.unchanged();
 });
 

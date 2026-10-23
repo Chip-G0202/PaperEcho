@@ -58,6 +58,7 @@ Control Center application boundary：
 | runtime config | `workflow/tools/lib/runtime_config.mjs` | 无 | 独立 lib 模块 |
 | schedule / interval gate | `workflow/tools/lib/schedule_support.mjs` | 无 | 独立 lib 模块 |
 | OS schedule definition / readonly inspection | `workflow/tools/lib/os_scheduler.mjs` | `runner/os_scheduler.mjs`、packaged `--headless` | 只生成 XML/plist 和脱敏 dry-run；无 OS 注册接口。业务判定继续归 `runner/scheduled_daily.mjs`、Stage0 claim 与 workflow lease |
+| OS schedule management / native boundary | `workflow/tools/lib/os_scheduler_management.mjs`、`workflow/tools/lib/windows_task_scheduler.mjs` | `runner/os_scheduler.mjs`、packaged `--headless` | 显式管理命令；复用只读预检及 canonical spec。Windows COM 当前用户 / InteractiveToken / LeastPrivilege；拒绝任务接管、任意 XML/命令与跨根参数。真实系统验收仅在受控 Sandbox |
 | notification content | `workflow/tools/stage5/notification_content.mjs` | 无 | 从现有 Radar/Weekly 业务结果构建内容，不检索、不重新评级 |
 | email rendering | `stage5/radar_report.mjs`、`stage5/report_summary.mjs`、`stage5/test_notification_report.mjs` | 无 | 共用 `stage5/email_layout.mjs` 的品牌布局与 HTML escaping；HTML/text 使用同一内容模型 |
 | QQ rendering / transport | `notification/qq_renderer.mjs`、`notification/qq_transport.mjs` | 无 | 同一 summary-only content 的有界原生 Markdown（msg_type=2、markdown.content，无模板）；官方单聊/群聊主动发送，内存 token，无 inbound；5000 UTF-8 字节为产品预算，provider 硬上限未验证 |
