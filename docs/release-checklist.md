@@ -1,5 +1,21 @@
 # Public Release Checklist
 
+## Windows TEST ONLY MSI验收（Phase 3A）
+
+用户级 MSI 已在断网、已真实验证检查点回滚的独立 Hyper-V Windows Guest 中验收；这是 unsigned TEST ONLY 产物，不是正式发行。构建复用匹配当前源码的 Windows packaged runtime，逐文件核对源与 payload；安装目录为用户级 `LocalAppData/Programs/PaperEcho`，数据与 Cache 继续由 Runtime Root owner 解析。
+
+```powershell
+$env:PWSH_PATH = Join-Path $PSHOME 'pwsh.exe'
+node desktop/electron-poc/installer-win.mjs
+node --test tests/helpers/installer.test.mjs tests/helpers/sandbox_lab.test.mjs
+```
+
+真实验收先核对 VM/BIOS 身份、当前普通用户 SID、只读输入及 MSI SHA256。管理会话使用 PowerShell Direct；Guest helper 使用已登录普通用户的 InteractiveToken / LeastPrivilege，一次性任务无定时触发器且测试后删除，不将密码写入任务。UI 观察完成后用 `tests/helpers/hyperv_ui_signal.ps1 -Directory <本轮工作区目录> -Step <当前步骤> [-Action <观察动作>]` 发布信号；先关闭临时文件的独占句柄再原子移动，禁止把仍在写入的目标文件当作 ready。步骤、runId、路径边界与重复信号均校验，不能用旧信号放行新一轮。
+
+已验证：机器级请求明确命中用户级安装约束并返回 1603；普通用户真实安装、全部 payload 哈希、真实 GUI/Wizard、空 PATH 内置 Headless、Secret ACL、Doctor 只读、卸载数据保留、重装字节保持及最终卸载。每次 MSI 子进程预算仍为 120 秒，退出码必须与拒绝/成功证据对应；报告缺失或超时不算成功。任务、安装注册和应用进程清理后正常关闭 Guest，不在宿主执行 MSI。
+
+本节补充早期各阶段 Gate 未覆盖的 Installer 实测。真实 v2.5→v2.6 安装升级（Phase 6C）仍需要可信旧版可安装基线；Windows Signing、macOS 与正式 Release Gate 不由本次 TEST ONLY MSI 验收放行。
+
 ## Phase 11 离线发行准备
 
 现有 Electron Packager 是唯一 builder。`npm run package:win --prefix desktop/electron-poc` 在 fuses 修改和 ASAR 校验后生成 `release-manifest.json`（schema v1）：真实 UTC 构建时间、应用版本、输入 Git commit/dirty、Windows x64/unpacked、Electron/Packager/fuses 版本、构建 package 版本、入口、Runtime Root owner、源文件/production module 清单，以及每个产物文件的字节数和 SHA256。应用版本 2.6.0 与私有构建工程版本 0.0.0 分别记录。manifest 不自哈希；artifactId 是除 artifactId 外清单内容的 SHA256。清单及普通 SHA256 都不证明发行者身份；源码 dirty 的产物只能供测试，commit 本身不能追溯证明未提交输入。
@@ -17,7 +33,7 @@ Windows Signing Preflight 检查产物身份/架构、PE 证书表和 signtool �
 
 macOS 目前只有静态命令/要求契约：Developer ID Application、Hardened Runtime、按内到外签嵌套代码、按 Electron/架构审阅 allow-jit/allow-unsigned-executable-memory entitlements（不默认放宽 library validation）、notarytool Accepted、stapler staple/validate、codesign strict 验证、spctl/Gatekeeper 与 x64/arm64 实机。命令参数为数组和占位符，不执行、不读取 Apple 凭据；Windows 下始终 BLOCKED，不声称完成 Apple 签名或公证。
 
-Release Gate 分别报告 development、offlinePackaging、releasePreflight、windowsSigning、installer、scheduler、upgradeRollback、macos、publication。READY_FOR_TEST 只证明相应离线条件；未知测试证据 UNKNOWN、实际错误 FAILED、缺少发行条件 BLOCKED。当前实现没有真实平台验收的授权入口或可传入的 PASS 开关，永远不会仅凭合成/模拟证据产生 RELEASE_READY。开发与 packaged 测试结果须另附本次真实报告，不能从旧报告自动推导。Phase 3A 安装/卸载/重装与数据保留、Phase 5B OS 注册/触发/禁用/卸载、Phase 6C 真实版本替换/迁移/回滚及 macOS 实测均仍阻断正式发布。Phase 11 离线准备完成不代表 v2.6 已发布。
+Release Gate 分别报告 development、offlinePackaging、releasePreflight、windowsSigning、installer、scheduler、upgradeRollback、macos、publication。READY_FOR_TEST 只证明相应离线条件；未知测试证据 UNKNOWN、实际错误 FAILED、缺少发行条件 BLOCKED。当前实现没有真实平台验收的授权入口或可传入的 PASS 开关，永远不会仅凭合成/模拟证据产生 RELEASE_READY。开发与 packaged 测试结果须另附本次真实报告，不能从旧报告自动推导。Phase 3A TEST ONLY MSI 与 Phase 5B Sandbox 功能验收已有真实证据；它们不替代签名发行安装器、Scheduler 重启/休眠及未登录身份、Phase 6C 真实版本替换/迁移/回滚和 macOS 实测，正式发布仍受这些条件阻断。Phase 11 离线准备完成不代表 v2.6 已发布。
 
 Windows packaged Gate 复用 `node tests/helpers/packaged_startup.mjs`：逐字节对照当前业务源码，Installed/Portable 真实 GUI 三尺寸、空 PATH/仓库外 cwd、内置 Headless、Doctor 只读、真实进程中断、恢复状态阻塞、accepted 不重放及子进程退出。GUI 必须运行于能够实际加载 Electron/GPU 子进程的普通用户环境；产品 sandbox/contextIsolation/webSecurity 不变。额外安装/调度/升级实机 Gate 不能由此替代。
 

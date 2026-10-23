@@ -15,6 +15,8 @@ Deployment paths：`workflow/tools/lib/runtime_config.mjs` 独占 `resolveRuntim
 
 Packaged runtime：`desktop/electron-poc/package-win.mjs` 负责构建 allowlist、官方 ZIP 校验、ASAR 和 fuses；`runtime.mjs` 仅固定程序/资源位置并调用统一路径 owner。Shell 复用现有 Control Center；`headless.mjs` 调 Shared Runner，无独立业务后端或 SecretStore。测试 `packaged_probe.mjs` 用真实路径包含判断校验包内模块，不接受 Dev/Production 或链接越界来源。
 
+Windows TEST ONLY Installer：`installer-win.mjs` 与 `installer-database.ps1` 仅构建用户级 MSI，安装、卸载与安装事务由 Windows Installer 标准动作持有。只交付已验证的程序文件，不拥有用户数据、Secret、迁移或 Scheduler。`sandbox_installer.ps1` 持有真实隔离 Guest 验收；Hyper-V 管理身份与普通安装身份分离，UI 观察信号由 `hyperv_ui_signal.ps1` 关闭写句柄后原子发布。验收与发行边界见 [Windows MSI Gate](release-checklist.md#windows-test-only-msi验收phase-3a)。
+
 Release readiness：`desktop/electron-poc/package-policy.mjs` 持有 builder 与 verifier 共用的版本、源文件白名单和 fuses；`release.mjs` 仅编排发行清单、只读完整性检查与签名/公证前置 Gate，不拥有安装、迁移、Scheduler 或用户数据。哈希不等于签名，缺少真实平台证据时不能产生 RELEASE_READY；见 [发行清单](release-checklist.md#phase-11-离线发行准备)。
 
 Runtime logging：`workflow/tools/lib/runtime_logging.mjs` 独占固定运行事件、日志 ownership、跨进程写入与 1 MiB × 2 轮转；复用 `runtime_config.mjs` 的 `logsRoot`、`atomic_json.mjs` 和 `credential_registry.mjs`。Runner/GUI/Headless 只提交安全事件，Doctor 只读检查健康状态；业务 ledger、receipt、feedback、研究结果仍由原 owner 管理，不受日志轮转影响。契约与测试命令见 [配置指南](configuration.md#runtimelog-与日志轮转)。

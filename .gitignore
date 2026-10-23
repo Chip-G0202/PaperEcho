@@ -129,6 +129,7 @@ review_results/文献评价/screening_standards.backup.docx
 /logs/
 .hermes/
 .planning/
+/.sandbox-lab/
 output/
 workflow/tests/.control-test-tmp/
 docs/paperecho-architecture*
