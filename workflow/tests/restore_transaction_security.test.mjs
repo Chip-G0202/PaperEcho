@@ -13,6 +13,7 @@ import { createControlServices } from '../tools/lib/control_application_services
 import { acquireWorkflowLease } from '../tools/recovery/operation_ledger.mjs';
 import { RuntimeLog } from '../tools/lib/runtime_logging.mjs';
 import { startControlCenter } from '../tools/web/server.mjs';
+import { secureCredentialFile } from '../tools/lib/credential_file_security.mjs';
 
 test('explicit CLI confirmation is independent of password; readonly preflight and concurrent admission preserve data', async t => {
   const f = await transactionFixture(t), before = await fileHashes(f.target); let output = '';
@@ -41,6 +42,7 @@ test('unsafe real DACL, unknown schedule claim, tampered backup and occupied fil
   await fs.writeFile(path.join(decisions, '2026-10-17.json'), '{"schemaVersion":1}');
   await assert.rejects(f.replace(), /RESTORE_CLAIM_UNKNOWN/); await fs.unlink(path.join(decisions, '2026-10-17.json'));
   const bytes = await fs.readFile(f.input); bytes[48] ^= 1; const altered = path.join(f.home, 'tampered.pebackup'); await fs.writeFile(altered, bytes);
+  await secureCredentialFile(altered, { source: f.input });
   await assert.rejects(f.replace({ input: altered }), /BACKUP_AUTH_FAILED/);
   assert.equal(inspectRestoreTransaction(f.target).state, 'ABSENT');
   const script = `$ErrorActionPreference='Stop';$file=[IO.FileInfo]::new($env:TEST_FILE);$acl=[IO.FileSystemAclExtensions]::GetAccessControl($file,[Security.AccessControl.AccessControlSections]::Access);$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-1-0'),'Read','Allow'));[IO.FileSystemAclExtensions]::SetAccessControl($file,$acl);$again=[IO.FileSystemAclExtensions]::GetAccessControl($file,[Security.AccessControl.AccessControlSections]::Access);if (@($again.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|Where-Object{$_.IdentityReference.Value -eq 'S-1-1-0' -and $_.AccessControlType -eq 'Allow'}).Count -lt 1) {throw 'FIXTURE_INVALID'}`;

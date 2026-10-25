@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
+import { execFileSync } from 'node:child_process';
 import { BackupService, validateBackupManifest } from '../tools/lib/backup_service.mjs';
 import { BACKUP_LIMITS, sha256, openBackup, sealBackup } from '../tools/lib/backup_format.mjs';
 import { resolveRuntimePaths, resolveApplicationRuntimeContext } from '../tools/lib/runtime_config.mjs';
@@ -46,6 +47,76 @@ async function decoded(file) {
   const contents = new Map(); const manifest = await openBackup(await fs.readFile(file), password(), validateBackupManifest, (entry, bytes) => contents.set(entry.path, Buffer.from(bytes)));
   return { manifest, contents };
 }
+
+test('new backup uses the vetted source credential DACL and unsafe source credentials remain blocked', async t => {
+  const f = await fixture(t); const destination = path.join(f.home, 'private-exports');
+  await fs.mkdir(destination); await secureCredentialFile(destination);
+  const output = path.join(destination, 'encrypted.pebackup');
+  const pwsh = process.env.PWSH_PATH; assert.ok(pwsh && path.isAbsolute(pwsh));
+  const addAce = (file, sid) => execFileSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command',
+    "$ErrorActionPreference='Stop';$f=[IO.FileInfo]::new($env:ACL_TEST_FILE);$a=[IO.FileSystemAclExtensions]::GetAccessControl($f,[Security.AccessControl.AccessControlSections]::Access);$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($env:ACL_TEST_SID),'ReadAndExecute','Allow'));[IO.FileSystemAclExtensions]::SetAccessControl($f,$a)"],
+  { env: { SystemRoot: process.env.SystemRoot, PATH: process.env.PATH, ACL_TEST_FILE: file, ACL_TEST_SID: sid }, timeout: 15000, stdio: 'pipe' });
+  const aclState = file => JSON.parse(execFileSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command',
+    "$a=Get-Acl -LiteralPath $env:ACL_TEST_FILE;$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;@{ownerCurrent=($a.GetOwner([Security.Principal.SecurityIdentifier]).Value -eq $sid);protected=$a.AreAccessRulesProtected;rules=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|ForEach-Object{@{currentUser=($_.IdentityReference.Value -eq $sid);system=($_.IdentityReference.Value -eq 'S-1-5-18');family=(($_.IdentityReference.Value -split '-')[0..3] -join '-');type=[string]$_.AccessControlType;inherited=$_.IsInherited;rights=[string]$_.FileSystemRights}})}|ConvertTo-Json -Depth 5 -Compress"],
+  { env: { SystemRoot: process.env.SystemRoot, PATH: process.env.PATH, ACL_TEST_FILE: file }, timeout: 15000, encoding: 'utf8' }));
+  let reproduced = 0; const states = {};
+  const fsApi = { ...fs, open: async (...args) => {
+    if (args[1] === 'r') states.beforeVerifyOpen = aclState(args[0]);
+    const handle = await fs.open(...args);
+    try {
+      if (args[1] === 'wx' && path.basename(args[0]).startsWith('.paperecho-backup-') && args[0].endsWith('.partial')) {
+        assert.equal(reproduced, 0); addAce(args[0], 'S-1-5-5-4294967294-4294967294');
+        await assert.rejects(secureCredentialFile(args[0]), /CREDENTIAL_ACL_UNSAFE/); reproduced++;
+      }
+      if (args[1] === 'r') {
+        states.afterVerifyOpen = aclState(args[0]);
+        const close = handle.close.bind(handle);
+        handle.close = async () => { await close(); states.afterVerifyRead = aclState(args[0]); };
+      }
+      return handle;
+    } catch (error) { await handle.close(); throw error; }
+  } };
+  assert.equal((await f.make({ fsApi }).create({ output, password: password() })).status, 'created');
+  assert.equal(reproduced, 1); await secureCredentialFile(output, { checkOnly: true });
+  assert.equal(states.beforeVerifyOpen.ownerCurrent, true); assert.equal(states.beforeVerifyOpen.protected, true);
+  assert.deepEqual(states.beforeVerifyOpen, states.afterVerifyOpen); assert.deepEqual(states.beforeVerifyOpen, states.afterVerifyRead);
+  t.diagnostic('ACL_STATES=' + JSON.stringify(states));
+  assert.equal((await f.make().verify({ input: output, password: password() })).status, 'verified');
+  const tamper = { ...fs, open: async (...args) => {
+    const handle = await fs.open(...args);
+    try { if (args[1] === 'r') addAce(args[0], 'S-1-1-0'); return handle; }
+    catch (error) { await handle.close(); throw error; }
+  } };
+  const originalAcl = execFileSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command',
+    "[IO.FileSystemAclExtensions]::GetAccessControl([IO.FileInfo]::new($env:ACL_TEST_FILE),[Security.AccessControl.AccessControlSections]::Access).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)"],
+  { env: { SystemRoot: process.env.SystemRoot, PATH: process.env.PATH, ACL_TEST_FILE: output }, timeout: 15000, encoding: 'utf8' }).trim();
+  const originalState = aclState(output); let used = false; let validationError; let cleanupError;
+  try {
+    await assert.rejects(f.make({ fsApi: tamper }).withVerifiedContents({ input: output, password: password() }, () => { used = true; }), /CREDENTIAL_ACL_UNSAFE/);
+    assert.equal(used, false);
+    assert.ok(aclState(output).rules.some(rule => rule.family === 'S-1-1-0'));
+  } catch (error) { validationError = error; }
+  finally {
+    try {
+      assert.equal(await fs.realpath(output), output); assert.equal((await fs.lstat(output)).nlink, 1);
+      execFileSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command',
+        "$ErrorActionPreference='Stop';$a=[Security.AccessControl.FileSecurity]::new();$a.SetSecurityDescriptorSddlForm($env:ACL_TEST_DACL,[Security.AccessControl.AccessControlSections]::Access);[IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($env:ACL_TEST_FILE),$a)"],
+      { env: { SystemRoot: process.env.SystemRoot, PATH: process.env.PATH, ACL_TEST_FILE: output, ACL_TEST_DACL: originalAcl }, timeout: 15000, stdio: 'pipe' });
+      assert.deepEqual(aclState(output), originalState); await secureCredentialFile(output, { checkOnly: true });
+    } catch (error) { cleanupError = error; }
+  }
+  t.diagnostic(`ACL_NEGATIVE validation=${validationError ? 'failed' : 'rejected-as-expected'} cleanup=${cleanupError ? 'failed' : 'restored'} callbackUsed=${used}`);
+  const errors = [validationError, cleanupError].filter(Boolean); if (errors.length) throw new AggregateError(errors, 'ACL_NEGATIVE_OR_CLEANUP_FAILED');
+  assert.equal((await f.make().verify({ input: output, password: password() })).status, 'verified');
+  const tamperedOutput = path.join(destination, 'tampered-must-not-publish.pebackup');
+  await assert.rejects(f.make({ fsApi: tamper }).create({ output: tamperedOutput, password: password() }), /CREDENTIAL_ACL_UNSAFE/);
+  await assert.rejects(fs.access(tamperedOutput), error => error.code === 'ENOENT');
+  addAce(f.p.secretPath, 'S-1-1-0');
+  await assert.rejects(secureCredentialFile(f.p.secretPath, { checkOnly: true }), /CREDENTIAL_ACL_UNSAFE/);
+  const rejected = path.join(destination, 'must-not-publish.pebackup');
+  await assert.rejects(f.make().create({ output: rejected, password: password() }), /CREDENTIAL_ACL_UNSAFE/);
+  await assert.rejects(fs.access(rejected), error => error.code === 'ENOENT');
+});
 test('Dev/Portable/Installed real encrypted backup preserves all formal owners and source bytes; offline Verify is read-only', async t => {
   for (const layout of ['dev', 'portable', 'installed']) {
     const f = await fixture(t, layout); const before = await snapshot(f.p.userDataRoot);
@@ -78,16 +149,16 @@ test('workspace mismatch and external owners fail before any snapshot is publish
 test('wrong password, tampering, truncation and unsupported format refuse authenticated results', async t => {
   const f = await fixture(t); await f.make().create({ output: f.output, password: password() }); const bytes = await fs.readFile(f.output);
   await assert.rejects(f.make().verify({ input: f.output, password: Buffer.from('dummy-wrong-password') }), /BACKUP_AUTH_FAILED/);
-  for (const transform of [b => { b[8] ^= 1; return b; }, b => { b[45] ^= 1; return b; }, b => b.subarray(0, b.length - 9), b => { b[7] = 50; return b; }]) {
-    const file = path.join(f.home, 'corrupt.pebackup'); await fs.writeFile(file, transform(Buffer.from(bytes))); await assert.rejects(f.make().verify({ input: file, password: password() }), /BACKUP_(AUTH_FAILED|FORMAT_UNSUPPORTED)/);
+  for (const [index, transform] of [b => { b[8] ^= 1; return b; }, b => { b[45] ^= 1; return b; }, b => b.subarray(0, b.length - 9), b => { b[7] = 50; return b; }].entries()) {
+    const file = path.join(f.home, `corrupt-${index}.pebackup`); await fs.writeFile(file, transform(Buffer.from(bytes)), { flag: 'wx' }); await secureCredentialFile(file, { source: f.output }); await assert.rejects(f.make().verify({ input: file, password: password() }), /BACKUP_(AUTH_FAILED|FORMAT_UNSUPPORTED)/);
   }
 });
 test('authenticated malformed manifest, duplicate/traversal/missing owners, hashes and compatibility are rejected', async t => {
   const f = await fixture(t); await f.make().create({ output: f.output, password: password() }); const { manifest, contents } = await decoded(f.output);
   const malformed = [m => { m.schemaVersion = 99; }, m => { m.files[0].path = '../escape'; }, m => { m.files[1].path = m.files[0].path; }, m => { m.files[0].size = BACKUP_LIMITS.fileBytes + 1; }, m => { m.files[0].sha256 = '0'.repeat(64); }, m => { m.configEntry = 'other.json'; }, m => { m.ownerInventory.config++; }, m => { m.restorePolicy.reactivateClaims = true; }, m => { m.encryption.N = 1; }];
-  for (const mutate of malformed) {
+  for (const [index, mutate] of malformed.entries()) {
     const m = structuredClone(manifest); mutate(m); const bytes = await sealBackup(m, manifest.files.map(file => contents.get(file.path)), password());
-    const file = path.join(f.home, 'malformed.pebackup'); await fs.writeFile(file, bytes); await assert.rejects(f.make().verify({ input: file, password: password() }), /BACKUP_/);
+    const file = path.join(f.home, `malformed-${index}.pebackup`); await fs.writeFile(file, bytes, { flag: 'wx' }); await secureCredentialFile(file, { source: f.output }); await assert.rejects(f.make().verify({ input: file, password: password() }), /BACKUP_/);
   }
 });
 test('source links, hardlinks, unsafe target paths and existing outputs never overwrite protected data', async t => {

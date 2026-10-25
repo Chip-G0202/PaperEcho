@@ -85,7 +85,8 @@ test('real Backup Verify Restore preserves every owner/hash and Doctor is read-o
 test('wrong password, tampering and truncation never create a destination or plaintext staging', async t => {
   const f = await fixture(t);
   await assert.rejects(f.restore({ password: Buffer.from('dummy-wrong-password') }), /BACKUP_AUTH_FAILED/);
-  const bytes = await fs.readFile(f.input); bytes[48] ^= 1; const altered = path.join(f.home, 'altered.pebackup'); await fs.writeFile(altered, bytes);
+  const bytes = await fs.readFile(f.input); bytes[48] ^= 1; const altered = path.join(f.home, 'altered.pebackup'); await fs.writeFile(altered, bytes, { flag: 'wx' });
+  await secureCredentialFile(altered, { source: f.input });
   await assert.rejects(f.restore({ input: altered }), /BACKUP_AUTH_FAILED/); await fs.writeFile(altered, bytes.subarray(0, 40)); await assert.rejects(f.restore({ input: altered }));
   await assert.rejects(fs.access(f.target)); await f.noStaging(); await f.unchanged();
 });
@@ -125,7 +126,8 @@ test('absolute legacy configuration is refused rather than changing bytes or rea
   const f = await fixture(t), m = structuredClone(f.manifest);
   const config = JSON.parse(f.contents.get(m.configEntry)); config.common.projectRoot = f.data;
   const changed = Buffer.from(JSON.stringify(config)); const entry = m.files.find(x => x.path === m.configEntry); m.totalBytes += changed.length - entry.size; entry.size = changed.length; entry.sha256 = sha256(changed);
-  const input = path.join(f.home, 'absolute.pebackup'); await fs.writeFile(input, await sealBackup(m, m.files.map(x => x.path === m.configEntry ? changed : f.contents.get(x.path)), password()));
+  const input = path.join(f.home, 'absolute.pebackup'); await fs.writeFile(input, await sealBackup(m, m.files.map(x => x.path === m.configEntry ? changed : f.contents.get(x.path)), password()), { flag: 'wx' });
+  await secureCredentialFile(input, { source: f.input });
   await assert.rejects(f.restore({ input }), /RESTORE_PATH_MAPPING_REQUIRED/); await assert.rejects(fs.access(f.target)); await f.noStaging(); await f.unchanged();
 });
 

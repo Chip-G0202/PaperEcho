@@ -119,7 +119,10 @@ export class BackupService {
       signal?.throwIfAborted(); await backupSafePath(input, this.fsApi);
       const s = await this.fsApi.lstat(input);
       if (!s.isFile() || s.size > BACKUP_LIMITS.totalBytes + BACKUP_LIMITS.manifestBytes + 56) throw backupError('BACKUP_LIMIT_EXCEEDED');
-      bytes = await readBackupFile(input, BACKUP_LIMITS.totalBytes + BACKUP_LIMITS.manifestBytes + 56, this.fsApi); const m = await openBackup(bytes, password, validateBackupManifest, (file, bytes) => {
+      await secureCredentialFile(input, { checkOnly: true });
+      bytes = await readBackupFile(input, BACKUP_LIMITS.totalBytes + BACKUP_LIMITS.manifestBytes + 56, this.fsApi);
+      await secureCredentialFile(input, { checkOnly: true });
+      const m = await openBackup(bytes, password, validateBackupManifest, (file, bytes) => {
         try {
           if (file.path === 'config/paperecho.config.json') validateRunnerConfigObject(JSON.parse(bytes.toString('utf8')));
           if (path.posix.basename(file.path) === 'operation_ledger.json') validateOperationLedger(JSON.parse(bytes.toString('utf8')));
@@ -237,7 +240,10 @@ export class BackupService {
           await backupSafePath(path.dirname(output));
           const handle = await this.fsApi.open(temporary, 'wx', 0o600);
           try { await handle.writeFile(encrypted); await handle.sync(); } finally { await handle.close(); encrypted.fill(0); }
-          await secureCredentialFile(temporary); await this.verify({ input: temporary, password, signal }); await this.hook('before-publish');
+          // This exclusive new file can carry the launch token's default logon ACE.
+          // Reuse the validated, locked source credential DACL, never an arbitrary
+          // export directory's inherited principals or the transient logon ACE.
+          await secureCredentialFile(temporary, { source: await absent(p.secretPath) ? '' : p.secretPath }); await this.verify({ input: temporary, password, signal }); await this.hook('before-publish');
           if (JSON.stringify(before) !== JSON.stringify(await collect(false))) throw backupError('BACKUP_SOURCE_CHANGED');
           await backupSafePath(output);
           try { await this.fsApi.link(temporary, output); }
