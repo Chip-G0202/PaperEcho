@@ -89,6 +89,8 @@ Cadence defaults:
 
 - PowerShell gate requires `pwsh >= 7.0.0` (exact pinning like `7.6.1` is not allowed unless explicitly required by a future task).
 - Never use Windows PowerShell 5.1.
+- All controlled Windows Host/Guest/remote scripts and subprocesses must explicitly use `pwsh.exe -NoLogo -NoProfile` (add `-NonInteractive` only for non-interactive work), not `.ps1` file associations. Verify PSVersion Major >= 7 and PSEdition Core in each actual execution environment.
+- Do not use `-UseWindowsPowerShell`, `WinPSCompatSession`, or implicit 5.1 fallback. Stop and report missing PS7 or native incompatibility; do not change global ExecutionPolicy, system PATH, default Shell registration, Windows security policy or built-in PowerShell to work around it.
 - Never directly edit `<YOUR_ZOTERO_DATA_DIR>\zotero.sqlite`.
 - PubMed/PMC only for database retrieval.
 - Do not use Google Scholar/CNKI/IEEE/ACM in this workflow.
