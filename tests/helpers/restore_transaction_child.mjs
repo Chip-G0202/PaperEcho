@@ -2,8 +2,8 @@ import { RestoreTransaction } from '../../workflow/tools/recovery/restore_transa
 const [action, encoded, step, rollbackFault] = process.argv.slice(2);
 const options = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
 const service = new RestoreTransaction({ env: options.env, hook: async phase => {
+  process.send({ phase });
   if (phase === step) {
-    process.send({ phase });
     await new Promise(() => { setInterval(() => {}, 1000); });
   }
   if (phase === rollbackFault) throw new Error('DUMMY_ROLLBACK_INJECTION');

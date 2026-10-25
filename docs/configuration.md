@@ -147,6 +147,18 @@ Windows NTFS 同卷发布只接受全新 B；A 保留原字节及旧程序，回
 
 验证命令：`node --test workflow/tests/upgrade_migration.test.mjs workflow/tests/upgrade_migration_security.test.mjs workflow/tests/upgrade_migration_crash.test.mjs`。离线构建后运行 `node tests/helpers/packaged_upgrade_migration.mjs`，为其提供指向已批准 PowerShell 7 可执行文件的绝对 `PWSH_PATH`；脚本验证最终源码、真实内置 Node、空 PATH、仓库外 cwd、Installed/Portable 迁移/回滚及进程终止后的幂等恢复。测试仅用合成数据；不操作 Production、真实 OS 任务或外部服务。最终检查仍使用默认 `npm test` 并行度、`npm run check` 和 diff check。
 
+### v2.5 数据接续与恢复验收（Phase 6C-A）
+
+数据验收与程序/MSI 升级独立。v2.5 来源使用固定 tag 的 Runtime Root 指纹识别；已落盘 canonical schema 6 的配置保持原字节，不虚构 schema 5→6 转换。旧 tag 的示例模板仍为 schema 2，不应把模板版本误当成已落盘配置的 canonical 版本。
+
+`v25_data_recovery.test.mjs` 通过正式 owner 构造隔离合成反馈、建议、研究历史及九类数据，验证认证 Backup/Verify、Installed/Portable 全新目标根、Secret ACL、completed ledger、accepted receipt、期刊元数据和逐文件 hash。文章反馈 owner 与固定 v2.5 tag 一致；样本中的 v2.6 结构化研究 inbox 只验证附加状态保留，不冒充旧版原生输出。既有有效目标拒绝覆盖，源程序、原数据根、备份及事务证据保留。Doctor 只读；恢复历史继续阻止自动 workflow，不能将数据恢复成功解释为允许重发研究或通知。
+
+中断验收实际终止独立 Node 迁移进程，待其及 Guard 退出后，在另一个进程读取正式 journal 恢复；覆盖 PREPARED、NEW_PUBLISHED、COMMITTED 响应丢失及重复恢复。HTTP/TCP/TLS 测试入口拒绝外部调用，拒绝动作本身也有负例验证。验证命令：`node --test workflow/tests/v25_data_recovery.test.mjs`；与上述 UpgradePreflight/Migration 安全回归及默认全量测试联合验收。
+
+Restore 中断测试的子进程通过同一 IPC 通道报告真实 hook/checkpoint 进度，父进程在监听建立后等待准确的目标阶段。60 秒约束用于无进展等待，有限且顺序递增的阶段才可重新计时，重复阶段不能续期；总等待仍受阶段数量限制。这不是整个 Backup/ACL/Restore 操作的性能 SLA。PRESERVING/OLD_PRESERVED 还需核对持久 journal、旧目录身份及 rename 两侧事实，随后真实终止进程并验证恢复和哈希，不能以收到任意消息代替安全断言。
+
+执行器仍只接受上述隔离工作区，不开放普通用户根自动迁移。此数据子阶段不替代 Guest/OS 重启、程序替换、MSI 失败回滚或发行验收；Phase 6C-B 及 Signing/macOS/Notarization/Release Gate 继续受各自未完成条件阻断。
+
 ## Crash Recovery 与启动安全
 
 `recovery/run_recovery.mjs` 只读投影现有 run manifest、ledger、receipt、workflow lease 和当天 schedule claim，返回 `SAFE_TO_CONTINUE`、`RECOVERY_REQUIRED`、`BLOCKED` 或 `UNKNOWN`；不新增恢复数据库，不以日志或 mtime 推断成功。每个 runRoot 最多检查 100 个目录条目、单份元数据最多 1 MiB、累计投影内容最多 8 MiB；达到边界、元数据损坏或链接身份不明均安全阻塞。较新的完成记录不能隐藏较早的未完成运行。正式无操作 skip，以及具备已完成 manifest、必需阶段验证和安全通知终态的无操作成功运行，可以继续启动；空 ledger 本身不是成功证据。

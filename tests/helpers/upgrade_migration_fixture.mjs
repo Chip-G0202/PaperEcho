@@ -9,6 +9,9 @@ import { BackupService } from '../../workflow/tools/lib/backup_service.mjs';
 import { sha256 } from '../../workflow/tools/lib/backup_format.mjs';
 import { OperationLedgerStore } from '../../workflow/tools/recovery/operation_ledger.mjs';
 import { createNotificationReceipt, validateNotificationReceipt } from '../../workflow/tools/stage5/email_receipt.mjs';
+import { ResearchEvaluationService } from '../../workflow/tools/lib/research_evaluation_service.mjs';
+import { generateUnifiedPendingRuleSuggestions } from '../../workflow/tools/lib/unified_pending_rule_suggestions.mjs';
+import { FeedbackService } from '../../workflow/tools/lib/control_feedback_service.mjs';
 const repo = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));
 export async function migrationFixture(t, options = {}) {
   const parent = path.join(repo, 'tests/runs/phase6b'); await fs.mkdir(parent, { recursive: true });
@@ -29,9 +32,21 @@ export async function migrationFixture(t, options = {}) {
   await writeUpgradeFixture(path.join(f.data, 'review_results/文献评价/standards_rule_suggestions_log.json'), { suggestions: [] });
   await writeUpgradeFixture(path.join(f.data, 'review_results/文献评价/测试 & 导出.xlsx'), 'dummy-private-export-bytes');
   if (options.history) {
+    f.config.web = { enabled: false, apiKeyEnv: 'ZOTERO_API_KEY', userId: '1000000' };
+    await writeUpgradeFixture(f.context.configPath, f.config); f.context.backupConfigHash = sha256(await fs.readFile(f.context.configPath));
+    const reviewRoot = path.join(f.data, 'review_results/文献评价');
+    await writeUpgradeFixture(path.join(reviewRoot, 'paper_feedback.json'), { schemaVersion: 1, history: [] });
+    await new FeedbackService({ reviewRoot }).submit({ kind: 'paper_feedback', requestId: 'dummy-paper-feedback', value: 'highly_relevant',
+      paper: { doi: '10.1234/dummy-upgrade', title: 'dummy-private-upgrade-title', final_grade: 'B' } });
+    // Optional v2.6 inbox state exercises forward preservation; it is not v2.5 output.
+    await new ResearchEvaluationService({ root: f.data, reviewRoot, env: f.env }).submit({ requestId: 'dummy-direction', text: '仅用于合成测试的研究方向反馈。' });
+    const suggestions = generateUnifiedPendingRuleSuggestions({ llmPreferenceCandidates: [{ source: 'llm_preference_learning', target: 'screening_standards.md', change_type: 'add_rule', rule_text: '优先关注合成测试中的机制研究。', confidence: 'low' }], generatedAt: '2026-01-01T00:00:00.000Z' });
+    if (suggestions.log.suggestions.length !== 1) throw new Error('FIXTURE_SUGGESTION_REQUIRED');
+    await writeUpgradeFixture(path.join(reviewRoot, 'standards_rule_suggestions_log.json'), suggestions.log);
     const runRoot = path.join(f.data, 'review_results/pipeline'), runId = 'dummy-history';
     const artifactPath = path.join(runRoot, runId, 'run_report.json');
     await writeUpgradeFixture(artifactPath, { schemaVersion: 1, status: 'completed', fixture: true });
+    await writeUpgradeFixture(path.join(runRoot, runId, 'triaged_items.json'), [{ title: 'dummy-history-title', journal: '合成测试期刊', source_type: 'RSS' }]);
     const store = await OperationLedgerStore.create({ runRoot, runId, mode: 'desktop', profile: 'standard',
       configHash: f.context.backupConfigHash, inputHash: sha256('dummy-history-input'), artifactPath });
     await store.bindArtifact(); await store.setRunStatus('completed', 'completed');
