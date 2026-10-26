@@ -181,7 +181,7 @@ export function parseRssItems(xml, sourceUrl, source = {}) {
     const identityText = [abstract, xmlText(rssField(entry,'identifier')), xmlText(rssField(entry,'id')), link].join(" ");
     const doi = (identityText.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i) || [])[0]?.replace(/[.,;)]+$/, "") || "";
     const journal = rssField(entry,'journal');
-    const publicationTitle = [rssField(entry,'publicationName'), rssField(journal,'title') || journal, rssPublicationSource(entry,root,feed), source.publicationTitle, rssField(feed,'publicationName'), channelTitle]
+    const publicationTitle = [rssField(entry,'publicationName'), rssField(journal,'title') || journal, rssPublicationSource(entry,root,feed), source.publicationTitle, rssField(feed,'publicationName')]
       .map(xmlText).filter(value => !/^https?:\/\//i.test(value)).map(cleanJournalName).find(Boolean) || inferJournalFromUrlSync(link) || "";
     return [{
       source_channel: "rss",

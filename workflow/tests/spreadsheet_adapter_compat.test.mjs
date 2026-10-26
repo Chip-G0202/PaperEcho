@@ -114,12 +114,14 @@ describe("spreadsheet_adapter llm_review_grade compatibility", () => {
   it('keeps RSS venue and safe source fallback consistent across both XLSX sheets and Control Center', async () => {
     const rss=(channel,source={})=>parseRssItems(`<rss><channel><title>${channel}</title><item><title>Synthetic venue paper</title></item></channel></rss>`,'https://example.org/feed',source)[0];
     const cases=[
-      [rss('AAAS: Science Advances: Table of Contents'),'Science Advances'],
+      [rss('AAAS: Science Advances: Table of Contents',{publicationTitle:'Science Advances'}),'Science Advances'],
       [rss('Latest Results',{name:'Canonical source label',publicationTitle:'Journal of Neuroinflammation'}),'Journal of Neuroinflammation'],
       [rss('Latest Results',{name:'Neuroscience RSS'}),'RSS'],
+      [rss('Neuroscience Research Roundup',{name:'Latest Results'}),'RSS'],
       [{...rss('Latest Results'),source_title:'AAAS Feed'},'RSS'],
       [{...rss('Latest Results'),'container-title':'Synthetic Container Journal'},'Synthetic Container Journal'],
       [{source_platform:'pubmed',journal:'Synthetic PubMed Journal'},'Synthetic PubMed Journal'],
+      [{source_platform:'pmc',publicationTitle:'Synthetic PMC Journal'},'Synthetic PMC Journal'],
       [{source_platform:'openalex',publicationTitle:'Synthetic OpenAlex Journal'},'Synthetic OpenAlex Journal'],
     ];
     const items=cases.flatMap(([metadata],index)=>[

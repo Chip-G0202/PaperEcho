@@ -11,7 +11,7 @@ const manual = extra => ({title:'Synthetic English paper',doi:'10.1234/display',
 
 test('RSS publication metadata is distinct from feed provenance and follows declared precedence', () => {
   const source = {name:'Canonical feed display',publicationTitle:'Configured Journal'};
-  const [item] = parseRssItems(feed('AAAS: Science Advances: Table of Contents'), 'https://example.org/rss');
+  const [item] = parseRssItems(feed('AAAS: Science Advances: Table of Contents'), 'https://example.org/rss', {publicationTitle:'Science Advances'});
   assert.equal(item.journal,'Science Advances'); assert.equal(item.publicationTitle,'Science Advances');
   assert.equal(item.feed_title,'AAAS: Science Advances: Table of Contents'); assert.equal(item.feed_url,'https://example.org/rss');
   assert.equal(getReviewDisplayMetadata(item).source,'RSS');
@@ -26,7 +26,7 @@ test('RSS publication metadata is distinct from feed provenance and follows decl
 });
 
 test('generic feeds never become journals; real metadata wins and non-RSS venues are preserved', () => {
-  for (const label of ['Latest Results','Recent Articles','Current Issue','Table of Contents','RSS']) {
+  for (const label of ['Latest Results','Recent Articles','Current Issue','Table of Contents','RSS','Neuroscience Research Roundup','AAAS: Science Advances: Table of Contents']) {
     const [item] = parseRssItems(feed(label),'fixture');
     assert.equal(item.journal,''); assert.equal(item.feed_title,label);
     assert.equal(getReviewDisplayMetadata(item).journal,''); assert.equal(getReviewDisplayMetadata(item).source,'RSS');

@@ -85,9 +85,9 @@ test("Stage1 retrieval writes normalized candidates atomically before source sta
 });
 
 test("RSS parser handles RSS 2.0, Atom, namespaces, CDATA, entities, and singleton entries", async () => {
-  const rss = parseRssItems(await fixture("rss2-single.xml"), "https://feed.example/rss");
+  const rss = parseRssItems(await fixture("rss2-single.xml"), "https://feed.example/rss", { publicationTitle: "Research & Health Journal" });
   const atom = parseRssItems(await fixture("atom-single.xml"), "https://feed.example/atom");
-  const namespaced = parseRssItems(await fixture("rdf-namespaced.xml"), "https://feed.example/rdf");
+  const namespaced = parseRssItems(await fixture("rdf-namespaced.xml"), "https://feed.example/rdf", { publicationTitle: "Namespaced Journal" });
   assert.equal(rss.length, 1);
   assert.equal(rss[0].title, "Microplastics & neuroinflammation");
   assert.equal(rss[0].journal, "Research & Health Journal");
