@@ -112,6 +112,34 @@ export class BackupService {
     return this.withVerifiedContents({ input, password, signal }, m => ({ schemaVersion: 1, status: 'verified', encrypted: true, authenticated: true, files: m.files.length, bytes: m.totalBytes, restoreContract: 1,
       restoreReady: false, requiresRestorePlanning: true, externalSecretCount: m.externalSecrets.length }), false);
   }
+  async verifyData({ input, password, signal } = {}) {
+    if (!this.context) throw backupError('BACKUP_CONTEXT_REQUIRED');
+    const p = prepareRuntimePaths(resolveRuntimePaths({ applicationRoot: this.context.applicationRoot, env: this.env }), { readOnly: true });
+    if (typeof this.context.userDataRoot !== 'string' || !path.isAbsolute(this.context.userDataRoot)
+      || path.resolve(this.context.userDataRoot) !== p.userDataRoot) throw backupError('BACKUP_TARGET_UNSAFE');
+    const selection = backupSourceSelection(p, this.context);
+    if ([...selection.roots, ...selection.files].some(file => !inside(p.userDataRoot, file))) throw backupError('BACKUP_EXTERNAL_OWNER');
+    const relative = value => path.relative(p.userDataRoot, value).split(path.sep).join('/') || '.';
+    return this.withVerifiedContents({ input, password, signal }, async manifest => {
+      if (manifest.roots.research !== relative(this.context.researchRoot) || manifest.roots.review !== relative(this.context.reviewRoot)
+        || !manifest.roots.runRoots.includes(relative(this.context.runRoot))) throw backupError('BACKUP_ROOT_MISMATCH');
+      await backupSafePath(p.userDataRoot); const identity = await fs.lstat(p.userDataRoot);
+      if (!await absent(p.secretPath)) await secureCredentialFile(p.secretPath, { checkOnly: true });
+      const before = await inspectBackupSources(p, this.context); signal?.throwIfAborted();
+      if (JSON.stringify(before.files) !== JSON.stringify(manifest.files) || before.totalBytes !== manifest.totalBytes
+        || JSON.stringify(before.ownerInventory) !== JSON.stringify(manifest.ownerInventory)) throw backupError('BACKUP_DATA_MISMATCH');
+      const after = await inspectBackupSources(p, this.context);
+      if (JSON.stringify(before) !== JSON.stringify(after)) throw backupError('BACKUP_SOURCE_CHANGED');
+      if (!await absent(p.secretPath)) await secureCredentialFile(p.secretPath, { checkOnly: true });
+      await backupSafePath(p.userDataRoot); const finalIdentity = await fs.lstat(p.userDataRoot);
+      if (identity.dev !== finalIdentity.dev || identity.ino !== finalIdentity.ino) throw backupError('BACKUP_SOURCE_CHANGED');
+      signal?.throwIfAborted();
+      // A byte/ACL audit is not permission to uninstall, resume workflow or restore.
+      return { schemaVersion: 1, status: 'data-preserved', authenticated: true, readOnly: true, files: manifest.files.length,
+        bytes: manifest.totalBytes, ownerInventory: manifest.ownerInventory, externalSecretCount: manifest.externalSecrets.length,
+        restoreReady: false, installerAuthorization: false, osMutation: false };
+    }, false);
+  }
   async withVerifiedContents({ input, password, signal } = {}, operation, capture = true) {
     const contents = new Map();
     let bytes;

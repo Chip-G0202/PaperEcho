@@ -65,11 +65,11 @@ export async function backupMain(argv, { env = process.env, cwd, stdout = proces
       const result = await new RestoreService({ ...(cwd ? { applicationRoot: cwd } : {}), env }).restore({ input: argv[1], target: argv[3], password });
       stdout.write(JSON.stringify(result) + '\n'); return 0;
     }
-    if (!['--backup', '--verify-backup'].includes(action) || !argv[1] || argv[1].startsWith('--') || argv.slice(2).some(x => x !== '--password-stdin') || argv.length > 3) throw backupError('BACKUP_ARGUMENT_INVALID');
+    if (!['--backup', '--verify-backup', '--verify-backup-data'].includes(action) || !argv[1] || argv[1].startsWith('--') || argv.slice(2).some(x => x !== '--password-stdin') || argv.length > 3) throw backupError('BACKUP_ARGUMENT_INVALID');
     if (!path.isAbsolute(argv[1])) throw backupError('BACKUP_PATH_ABSOLUTE_REQUIRED');
     password = await readBackupPassword(stdin, stderr, argv.includes('--password-stdin'));
     let context;
-    if (action === '--backup') {
+    if (action !== '--verify-backup') {
       const paths = resolveRuntimePaths({ ...(cwd ? { applicationRoot: cwd } : {}), env });
       await backupSafePath(paths.configPath);
       const backupConfigHash = sha256(await readBackupFile(paths.configPath, 1048576));
@@ -88,7 +88,8 @@ export async function backupMain(argv, { env = process.env, cwd, stdout = proces
       if (sha256(await readBackupFile(paths.configPath, 1048576)) !== backupConfigHash) throw backupError('BACKUP_CONFIG_CHANGED');
     }
     const service = new BackupService({ context, env });
-    const result = action === '--backup' ? await service.create({ output: argv[1], password }) : await service.verify({ input: argv[1], password });
+    const result = action === '--backup' ? await service.create({ output: argv[1], password })
+      : action === '--verify-backup-data' ? await service.verifyData({ input: argv[1], password }) : await service.verify({ input: argv[1], password });
     stdout.write(JSON.stringify(result) + '\n'); return 0;
   } catch (error) {
     const code = /^(?:BACKUP|RESTORE)_[A-Z_]+$/.test(error?.code) ? error.code : ['ENOSPC', 'EACCES', 'EPERM'].includes(error?.code) ? `BACKUP_${error.code}` : 'BACKUP_FAILED';

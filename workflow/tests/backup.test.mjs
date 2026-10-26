@@ -113,6 +113,7 @@ test('new backup uses the vetted source credential DACL and unsafe source creden
   await assert.rejects(fs.access(tamperedOutput), error => error.code === 'ENOENT');
   addAce(f.p.secretPath, 'S-1-1-0');
   await assert.rejects(secureCredentialFile(f.p.secretPath, { checkOnly: true }), /CREDENTIAL_ACL_UNSAFE/);
+  await assert.rejects(f.make().verifyData({ input: output, password: password() }), /CREDENTIAL_ACL_UNSAFE/);
   const rejected = path.join(destination, 'must-not-publish.pebackup');
   await assert.rejects(f.make().create({ output: rejected, password: password() }), /CREDENTIAL_ACL_UNSAFE/);
   await assert.rejects(fs.access(rejected), error => error.code === 'ENOENT');
@@ -224,12 +225,39 @@ test('source mutation, limits, interrupted creation and disk-full leave no valid
   assert.ok(!(await fs.readdir(f.home)).some(x => x.endsWith('.partial') || x.endsWith('.pebackup')));
 });
 test('password channels and exclusive CLI Backup/Verify never echo secrets or run workflow/Doctor', async t => {
-  const f = await fixture(t); const invoke = async args => { const stdin = new PassThrough(); let text = ''; const task = backupMain(args, { env: f.env, cwd: f.app, stdin, stdout: { write: x => text += x }, stderr: { write() {} } }); stdin.end(Buffer.concat([password(), Buffer.from('\n')])); const code = await task; assert.ok(!text.includes(password().toString()) && !text.includes('dummy-private') && !text.includes('SMTP_PASS')); return { code, result: JSON.parse(text) }; };
+  const f = await fixture(t); const invoke = async args => { const stdin = new PassThrough(); let text = ''; const entry = args[0] === '--verify-backup-data' ? runnerMain : backupMain; const task = entry(args, { env: f.env, cwd: f.app, stdin, stdout: { write: x => text += x }, stderr: { write() {} } }); stdin.end(Buffer.concat([password(), Buffer.from('\n')])); const code = await task; assert.ok(!text.includes(password().toString()) && !text.includes('dummy-private') && !text.includes('SMTP_PASS')); return { code, result: JSON.parse(text) }; };
   assert.equal((await invoke(['--backup', f.output, '--password-stdin'])).code, 0);
   const before = await snapshot(f.p.userDataRoot); assert.equal((await invoke(['--verify-backup', f.output, '--password-stdin'])).result.authenticated, true); assert.deepEqual(await snapshot(f.p.userDataRoot), before);
+  const audit = await invoke(['--verify-backup-data', f.output, '--password-stdin']);
+  assert.equal(audit.code, 0); assert.equal(audit.result.status, 'data-preserved'); assert.equal(audit.result.installerAuthorization, false);
+  assert.deepEqual(await snapshot(f.p.userDataRoot), before);
   assert.equal((await invoke(['--backup', f.output, '--run'])).result.code, 'BACKUP_ARGUMENT_INVALID');
   await assert.rejects(readBackupPassword(new PassThrough(), { write() {} }), /BACKUP_PASSWORD_CHANNEL_REQUIRED/);
   const terminal = new PassThrough(); terminal.isTTY = true; const modes = []; terminal.setRawMode = x => modes.push(x);
   const entered = readBackupPassword(terminal, { write() {} }); terminal.end(Buffer.concat([Buffer.from('dummy-密'), Buffer.from([127]), Buffer.from('password\n')]));
   assert.equal((await entered).toString(), 'dummy-password'); assert.deepEqual(modes, [true, false]);
+});
+
+test('authenticated backup data audit detects changed, missing and extra owner bytes without repairing user data', async t => {
+  const f = await fixture(t, 'installed', true); await f.make().create({ output: f.output, password: password() });
+  const before = await snapshot(f.p.userDataRoot), archive = await fs.readFile(f.output);
+  const audit = await f.make().verifyData({ input: f.output, password: password() });
+  assert.equal(audit.status, 'data-preserved'); assert.equal(audit.readOnly, true); assert.equal(audit.restoreReady, false);
+  assert.ok(Object.values(audit.ownerInventory).every(count => count > 0));
+  assert.deepEqual(await snapshot(f.p.userDataRoot), before);
+  await assert.rejects(f.make().verifyData({ input: f.output, password: Buffer.from('dummy-wrong-password') }), /BACKUP_AUTH_FAILED/);
+  await assert.rejects(new BackupService({ env: f.env }).verifyData({ input: f.output, password: password() }), /BACKUP_CONTEXT_REQUIRED/);
+  await assert.rejects(new BackupService({ env: f.env, context: { ...f.context, userDataRoot: f.home } }).verifyData({ input: f.output, password: password() }), /BACKUP_TARGET_UNSAFE/);
+  await assert.rejects(new BackupService({ env: f.env, context: { ...f.context, backupInputs: [path.join(f.home, 'outside-input.json')] } }).verifyData({ input: f.output, password: password() }), /BACKUP_EXTERNAL_OWNER/);
+  const file = path.join(f.p.userDataRoot, 'input.json'), saved = await fs.readFile(file);
+  await fs.writeFile(file, 'dummy-user-edit');
+  await assert.rejects(f.make().verifyData({ input: f.output, password: password() }), /BACKUP_DATA_MISMATCH/);
+  assert.equal(await fs.readFile(file, 'utf8'), 'dummy-user-edit');
+  await fs.unlink(file); await assert.rejects(f.make().verifyData({ input: f.output, password: password() }), /BACKUP_DATA_MISMATCH/);
+  await fs.writeFile(file, saved);
+  const extra = path.join(f.p.userDataRoot, 'local/state/new-owner.json'); await fs.writeFile(extra, '{}');
+  await assert.rejects(f.make().verifyData({ input: f.output, password: password() }), /BACKUP_DATA_MISMATCH/);
+  assert.equal(await fs.readFile(extra, 'utf8'), '{}'); await fs.unlink(extra);
+  assert.equal((await f.make().verifyData({ input: f.output, password: password() })).status, 'data-preserved');
+  assert.deepEqual(await fs.readFile(f.output), archive);
 });

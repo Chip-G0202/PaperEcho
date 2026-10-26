@@ -213,6 +213,8 @@ Control Center 的“系统”页提供显式的“检查 / 刷新健康状态�
 
 Verify 不解析现有数据根、不加载 `.env`、不创建目录或解密副本；先验证 AEAD，再验证 manifest、路径、文件大小/SHA256、Config/Secret/ledger 格式与兼容约束。错误密码、篡改、缺失内容或不兼容均拒绝。成功仍为 `restoreReady:false`、`requiresRestorePlanning:true`，不能冒充已完成恢复演练；Restore 仍须验证路径映射、Secret ACL 和兼容性，不能重新激活 claim/lease。Verify 本身不执行 Restore。
 
+`PaperEcho-headless.cmd --verify-backup-data <绝对备份路径>` 复用安全密码输入，认证备份后只读核对当前 Runtime Root 的 owner 文件清单、逐文件 SHA256、根映射与本地 Secret ACL；额外、缺失或被修改的 owner 文件返回 `BACKUP_DATA_MISMATCH`，不修复数据。两次正式源清单检查拒绝观察期间的变化，外部 owner 在访问前拒绝。此数据审计保持 `restoreReady:false`、`installerAuthorization:false`，不能代替旧包来源核验、运行状态检查、用户卸载确认、Doctor 或完整方案 B 的真实 Guest Gate。
+
 验证：`node --test workflow/tests/backup.test.mjs`，配合 Local、Secret、Runtime Root、Runner 与 ledger/recovery 回归。Local fixture 必须符合真实 Import 的“标题 + 稳定身份”契约，标题单独存在仍应被拒绝。Windows 使用已校验的本地 Electron ZIP 执行 `npm run package:win --prefix desktop/electron-poc`，随后 `npm run smoke:packaged --prefix desktop/electron-poc`，验证空 PATH、仓库外 cwd 下的真实 packaged Backup/Verify、源数据快照和独立 Headless。macOS 未实测；Phase 3A 仍为 Blocked。
 
 ## 恢复到全新 User Data Root
