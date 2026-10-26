@@ -217,6 +217,42 @@ test('credential HTTP replace/clear and high-risk decisions apply only validated
   assert.equal(low.json.application_status, 'applied');
 });
 
+test('credential update receipts preserve fixed status after rename retry without exposing secret payloads', async t => {
+  const app = await setup(t), id = 'TITLE_TRANSLATION_API_KEY';
+  const { SecretService } = await import('../tools/lib/control_credentials_service.mjs');
+  let attempts = 0, fail = false;
+  const secrets = new SecretService({ root: app.root, env: {}, atomicOptions: { renameImpl: async (from, to) => {
+    attempts++;
+    if (fail || attempts === 1) throw Object.assign(new Error('synthetic-write-failure'), { code: fail ? 'ENOSPC' : 'EACCES' });
+    await fs.rename(from, to);
+  } } });
+  const replace = secrets.replace.bind(secrets);
+  secrets.replace = async (...args) => ({ ...await replace(...args), diagnostic: `${args[1]} ${args[1].slice(0, 8)} ${args[1].slice(-8)}` });
+  app.services.secrets = secrets;
+  const value = 'fixture-secret-tail-replaced';
+  const reply = await app.post('/api/credentials', { id, action: 'replace', value });
+  assert.ok(attempts > 1, 'real atomic rename retry must execute');
+  assert.equal(reply.status, 200); assert.equal(reply.json.status, 'replaced');
+  assert.equal(reply.json.savedToFile, true); assert.equal(reply.json.currentServiceUpdated, true);
+  assert.equal(reply.json.diagnostic, '[REDACTED] [REDACTED] [REDACTED]');
+  assert.equal(reply.text.includes(value), false); assert.equal(reply.text.includes(value.slice(0, 8)), false);
+  const file = path.join(app.root, '.env'), before = await fs.readFile(file);
+  assert.equal(await secrets.withCredential(id, actual => actual === value), true);
+  fail = true;
+  const rejected = await app.post('/api/credentials', { id, action: 'replace', value: 'fixture-other-sensitive' });
+  assert.equal(rejected.status, 400); assert.equal(rejected.json.error, 'CREDENTIAL_WRITE_FAILED');
+  assert.equal(before.equals(await fs.readFile(file)), true);
+  assert.equal(await secrets.withCredential(id, actual => actual === value), true);
+  for (const response of [reply, rejected, await app.get('/api/credentials')]) {
+    assert.equal(response.text.includes(value), false); assert.equal(response.text.includes('fixture-other-sensitive'), false);
+  }
+  for (const receipt of [{ status: value, savedToFile: true }, { status: 'replaced', savedToFile: false }]) {
+    secrets.replace = async () => ({ id, currentServiceUpdated: true, ...receipt });
+    const unsafe = await app.post('/api/credentials', { id, action: 'replace', value: 'ignored-fixture' });
+    assert.equal(unsafe.json.status, '[REDACTED]', 'unknown or unconfirmed status must not bypass filtering');
+  }
+});
+
 test('credential HTTP rejects invalid session, origin, CSRF, fields and empty writes without changing saved values', async t => {
   const app = await setup(t); const id = 'TITLE_TRANSLATION_API_KEY';
   const saved = await app.post('/api/credentials', { id, action: 'replace', value: 'dummy-http-retained' });

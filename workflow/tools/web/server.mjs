@@ -59,9 +59,14 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
-    const send = (status, value) => {
+    const send = (status, value, credentialReceipt = false) => {
+      // Only fixed, confirmed credential outcome metadata is independent of secret fingerprints.
+      const safeStatus = credentialReceipt && value?.savedToFile === true && value.currentServiceUpdated === true
+        && ['replaced', 'cleared'].includes(value.status) ? value.status : null;
+      const filtered = services.secrets.redact(JSON.stringify(safeStatus ? { ...value, status: undefined } : value));
+      const text = safeStatus ? JSON.stringify({ ...JSON.parse(filtered), status: safeStatus }) : filtered;
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(services.secrets.redact(JSON.stringify(value)));
+      res.end(text);
     };
     try {
       const actualPort = server.address().port;
@@ -128,8 +133,8 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
         return send(202, { status: 'stopping' });
       }
       if (decoded === '/api/credentials') {
-        if (input.action === 'replace') return send(200, await services.secrets.replace(input.id, input.value));
-        if (input.action === 'clear') return send(200, await services.secrets.clear(input.id));
+        if (input.action === 'replace') return send(200, await services.secrets.replace(input.id, input.value), true);
+        if (input.action === 'clear') return send(200, await services.secrets.clear(input.id), true);
         return send(400, { error: 'CREDENTIAL_ACTION_NOT_SUPPORTED' });
       }
       if (decoded === '/api/feedback') {
