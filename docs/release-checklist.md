@@ -1,5 +1,7 @@
 # Public Release Checklist
 
+MSI 安装前拒绝的已验证范围：保留 UpgradeCode，FindRelatedProducts 只检测、不移除旧产品；AppSearch 与 LaunchConditions 在 InstallInitialize 前执行，同 ProductCode 的不同 PackageCode 拒绝，原包修复和完整卸载保留。标准 Signature 空表与应用自有 HKCU 包标识属于同一 authoring 契约，不修改 Windows Installer 私有注册。既有 2.6.0/2.6.1 TEST ONLY 包的 SHA256、CAB、PackageCode、生成表及实际控制表已与当前源码对应；Guest 首装、Major Upgrade 静默/基本 UI 拒绝、同 ProductCode 替换拒绝、原包修复及手动卸载有真实证据。完整安装 GUI 和 MSP 技术路径未验证，MSP_PATH_UNVERIFIED、历史原子回滚 5/-1 → 1/5、失败恢复及 Signing/macOS/Notarization/Release 仍 BLOCKED，不代表全部升级入口安全。
+
 方案 B 的正常受控手动重装组件已有 unsigned TEST ONLY Guest 证据：预检与模拟确认/取消、未授权和过期计划拒绝通过；手动卸载、新装均退出 0，2.6.1 安装后旧/新 ProductState 为 -1/5，九类 owner、数据与备份哈希、Secret ACL、Doctor、Scheduler 的独立只读 audit 通过。正式 CLI 只返回需用户执行的手动计划，不自动卸载或安装。完整安装 GUI、失败恢复、MSP_PATH_UNVERIFIED、历史 MSI 原子回滚及 Signing/macOS/Notarization/Release 继续 BLOCKED；此记录不表示完整方案 B 或 Release 已通过。
 
 ## Windows TEST ONLY MSI验收（Phase 3A）
