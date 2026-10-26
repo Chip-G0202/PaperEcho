@@ -28,7 +28,7 @@ async function snapshot(root) {
   }
   await visit(root); return result;
 }
-async function fixture(t, layout = 'installed') {
+async function fixture(t, layout = 'installed', mode = 'local') {
   const base = path.join(repo, 'tests/runs/doctor'); await fs.mkdir(base, { recursive: true });
   const root = await fs.mkdtemp(path.join(base, '健康 检查-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
   const app = path.join(root, 'app'); const data = layout === 'portable' ? path.join(app, 'data') : layout === 'dev' ? app : path.join(root, 'data');
@@ -36,7 +36,7 @@ async function fixture(t, layout = 'installed') {
     await fs.mkdir(path.dirname(path.join(app, file)), { recursive: true }); await fs.copyFile(path.join(repo, file), path.join(app, file));
   }
   await write(path.join(data, 'input.json'), []);
-  await write(path.join(data, 'config/paperecho.config.json'), { schemaVersion: 2, mode: 'local', common: { llm: { enabled: false, mode: 'disabled' }, email: { enabled: false } }, local: { input: '../input.json', outputRoot: '../local' } });
+  await write(path.join(data, 'config/paperecho.config.json'), { schemaVersion: 2, mode, common: { llm: { enabled: false, mode: 'disabled' }, email: { enabled: false } }, local: { input: '../input.json', outputRoot: '../local' } });
   const env = { PAPERECHO_LAYOUT: layout, PAPERECHO_APPLICATION_ROOT: app, ...(layout === 'dev' ? {} : { PAPERECHO_DATA_ROOT: data }), PAPERECHO_SKIP_DOTENV: '1', PATH: '' };
   const context = await resolveApplicationRuntimeContext({ cwd: app, env }); await fs.mkdir(context.cacheRoot, { recursive: true });
   const services = createControlServices({ root: app, context, env });
@@ -166,4 +166,49 @@ test('CLI and authenticated UI share status, exit semantics, workspace isolation
   const response = await fetch(server.url + '/api/doctor', { headers: { cookie } }); assert.equal(response.status, 200); assert.deepEqual(await response.json(), ui);
   assert.deepEqual(await snapshot(f.root), before);
   output = ''; assert.equal(await main(['--doctor', '--run'], { env: f.env, cwd: f.app, stdout: { write: text => output += text } }), 2);
+});
+
+async function rssRun(f, items, { runId = 'rss-new', startedAt = '2026-10-26T00:00:00Z', artifactPath = 'pipeline/rss-new', complete = true } = {}) {
+  await write(path.join(f.context.runRoot, runId, 'run_group.json'), { schemaVersion: 1, runId, startedAt, status: 'completed', pipelineMode: 'desktop', artifacts: [{ kind: 'pipeline', rootKey: 'research', path: artifactPath }] });
+  const file = path.join(f.context.researchRoot, artifactPath, 'retrieval_audit.json');
+  await write(file, { schemaVersion: 1, complete, candidateCounts: { rss: items.length }, candidates: { rss: items } });
+  return file;
+}
+const rssItem = extra => ({ source_channel: 'rss', source_platform: 'rss', title: 'dummy-private-paper', abstract: 'dummy-private-topic', feed_url: 'https://private.example/feed?token=dummy-secret', ...extra });
+
+test('RSS Doctor counts canonical venues, current declared fallback, labels and unknown without guessing provenance or leaking content', async t => {
+  const f = await fixture(t, 'installed', 'desktop');
+  await write(path.join(f.data, 'config/rss_sources.json'), { sources: [{ url: 'https://single.example/feed', publicationTitle: 'Synthetic Journal', enabled: true }] });
+  await rssRun(f, [rssItem({ publicationTitle: 'Trusted Canonical Journal' }), rssItem({ feed_url: 'https://single.example/feed' }), rssItem({ feed_title: 'Private Multi Journal Roundup' }), rssItem({}), rssItem({ journal: 'Legacy Journal' })]);
+  const before = await snapshot(f.root), result = check(await diagnostic(f).status(), 'rss.venue');
+  assert.equal(result.status, 'WARN'); assert.equal(result.blocking, false);
+  for (const text of ['5/5', '非全部历史', 'publicationTitle 1', '其它 venue 1', 'fallback 1', 'feed title 1', 'unknown 1']) assert.ok(result.summary.includes(text), text);
+  assert.match(result.actionableHint, /配置匹配不证明历史 fallback/); assert.match(result.actionableHint, /综合来源.*unknown/);
+  for (const text of ['private.example', 'single.example', 'dummy-secret', 'dummy-private', 'Private Multi', 'Trusted Canonical', f.root]) assert.ok(!JSON.stringify(result).includes(text));
+  assert.deepEqual(await snapshot(f.root), before);
+});
+
+test('RSS Doctor bounds the latest registered run and sample denominator; never substitutes older evidence or follows escaped artifacts', async t => {
+  const f = await fixture(t, 'installed', 'desktop');
+  await rssRun(f, [rssItem({ publicationTitle: 'Old Journal' })], { runId: 'rss-old', startedAt: '2026-10-25T00:00:00Z', artifactPath: 'pipeline/rss-old' });
+  const file = await rssRun(f, Array.from({ length: 501 }, () => rssItem({ publicationTitle: 'New Journal' })));
+  let before = await snapshot(f.root), result = check(await diagnostic(f).status(), 'rss.venue');
+  assert.equal(result.status, 'WARN'); assert.ok(result.summary.includes('500/501')); assert.match(result.summary, /publicationTitle 500/);
+  assert.deepEqual(await snapshot(f.root), before);
+  await fs.rm(file); before = await snapshot(f.root);
+  assert.equal(check(await diagnostic(f).status(), 'rss.venue').status, 'UNKNOWN'); assert.deepEqual(await snapshot(f.root), before);
+  await write(path.join(f.context.runRoot, 'rss-new/run_group.json'), { schemaVersion: 1, runId: 'rss-new', startedAt: '2026-10-26T00:00:00Z', artifacts: [{ kind: 'pipeline', rootKey: 'research', path: '../outside' }] });
+  before = await snapshot(f.root); assert.equal(check(await diagnostic(f).status(), 'rss.venue').status, 'UNKNOWN'); assert.deepEqual(await snapshot(f.root), before);
+});
+
+test('RSS Doctor missing, empty, malformed, incomplete, oversized and excessive registration evidence is never a coverage PASS', async t => {
+  const f = await fixture(t, 'installed', 'desktop');
+  assert.equal(check(await diagnostic(f).status(), 'rss.venue').status, 'UNKNOWN');
+  const file = await rssRun(f, []); assert.equal(check(await diagnostic(f).status(), 'rss.venue').status, 'UNKNOWN');
+  await fs.writeFile(file, '{dummy-private-invalid'); assert.equal(check(await diagnostic(f).status(), 'rss.venue').status, 'UNKNOWN');
+  await rssRun(f, [rssItem({ publicationTitle: 'Journal' })], { complete: false }); assert.equal(check(await diagnostic(f).status(), 'rss.venue').status, 'WARN');
+  await fs.writeFile(file, ' '.repeat(1048577)); assert.equal(check(await diagnostic(f).status(), 'rss.venue').status, 'UNKNOWN');
+  await rssRun(f, [rssItem({ publicationTitle: 'Journal' })]); assert.equal(check(await diagnostic(f).status(), 'rss.venue').status, 'PASS');
+  for (let i = 0; i < 101; i++) await fs.mkdir(path.join(f.context.runRoot, 'extra-' + i));
+  const before = await snapshot(f.root); assert.equal(check(await diagnostic(f).status(), 'rss.venue').status, 'UNKNOWN'); assert.deepEqual(await snapshot(f.root), before);
 });

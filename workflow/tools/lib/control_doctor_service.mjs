@@ -5,10 +5,50 @@ import { parseRunnerArgs } from '../runner/args.mjs';
 import { resolveRunnerConfiguration } from '../runner/config_loader.mjs';
 import { runPreflight } from '../runner/preflight.mjs';
 import { resolveRuntimePaths, prepareRuntimePaths, resolveApplicationRuntimeContext } from './runtime_config.mjs';
-import { readBoundedJson } from './atomic_json.mjs';
+import { readBoundedJson, boundedDirectory } from './atomic_json.mjs';
 import { ControlScheduleStatusService } from './control_schedule_status_service.mjs';
 import { RuntimeLog } from './runtime_logging.mjs';
 import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
+import { getPublicationVenue } from './journal_name_cleaner.mjs';
+import { isValidRssPublicationTitle } from './application_config.mjs';
+
+// One registered run, bounded reads and at most 500 RSS candidates; never all-history coverage.
+async function rssVenueSummary(review, config, root) {
+  const runs = [];
+  for (const entry of await boundedDirectory(review.runRoot)) {
+    if (!entry.isDirectory()) continue;
+    const run = await readBoundedJson(review.runRoot, path.join(review.runRoot, entry.name, 'run_group.json'));
+    if (!run || run.schemaVersion !== 1 || run.runId !== entry.name || !Number.isFinite(Date.parse(run.startedAt))) throw new Error('RSS_RUN_UNCONFIRMED');
+    runs.push(run);
+  }
+  runs.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt) || a.runId.localeCompare(b.runId));
+  const run = runs[0], pipeline = run && review.pipeline(run);
+  if (!pipeline) throw new Error('RSS_ARTIFACT_UNAVAILABLE');
+  const audit = await readBoundedJson(review.researchRoot, path.join(pipeline, 'retrieval_audit.json'));
+  if (audit?.schemaVersion !== 1 || !Array.isArray(audit.candidates?.rss) || audit.candidateCounts?.rss !== audit.candidates.rss.length) throw new Error('RSS_ARTIFACT_UNCONFIRMED');
+  let sources = [], configKnown = false;
+  try {
+    const canonical = await readBoundedJson(root, config.ownerPath('paperecho.config.json'));
+    const value = canonical?.schemaVersion >= 3 ? canonical.rss : await readBoundedJson(root, config.ownerPath('rss_sources.json'));
+    if (Array.isArray(value?.sources)) { sources = value.sources; configKnown = true; }
+  } catch { /* Current config attribution stays unknown; never guess or fetch. */ }
+  const counts = { publicationTitle: 0, otherVenue: 0, configuredFallbackAvailable: 0, feedTitleOnly: 0, unknown: 0 };
+  const items = audit.candidates.rss.slice(0, 500);
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || item.source_channel !== 'rss' || item.source_platform !== 'rss') throw new Error('RSS_ITEM_UNCONFIRMED');
+    if (getPublicationVenue({ source_channel: 'rss', publicationTitle: item.publicationTitle })) counts.publicationTitle++;
+    else if (getPublicationVenue(item)) counts.otherVenue++;
+    else {
+      const matches = sources.filter(source => source && source.enabled !== false && typeof source.url === 'string' && source.url === item.feed_url);
+      if (configKnown && matches.length === 1 && matches[0].publicationTitle && isValidRssPublicationTitle(matches[0].publicationTitle)) counts.configuredFallbackAvailable++;
+      else if (typeof item.feed_title === 'string' && item.feed_title.trim()) counts.feedTitleOnly++;
+      else counts.unknown++;
+    }
+  }
+  const missing = items.length - counts.publicationTitle - counts.otherVenue;
+  return { status: !items.length ? 'UNKNOWN' : missing || items.length < audit.candidates.rss.length || audit.complete !== true ? 'WARN' : 'PASS',
+    summary: `最近登记运行的 RSS 候选样本 ${items.length}/${audit.candidates.rss.length} 条（非全部历史）；canonical publicationTitle ${counts.publicationTitle}，其它 venue ${counts.otherVenue}，当前显式单期刊配置可提供 fallback ${counts.configuredFallbackAvailable}，仅 feed title ${counts.feedTitleOnly}，unknown ${counts.unknown}；来源完整性 ${audit.complete === true ? '完整' : '未确认'}，当前配置 ${configKnown ? '可读' : 'unknown'}。` };
+}
 
 const labels = { PASS: '正常', WARN: '建议处理', FAIL: '立即阻塞', UNKNOWN: '无法确认' };
 const overall = checks => ['FAIL', 'UNKNOWN', 'WARN', 'PASS'].find(status => checks.some(check => check.status === status)) || 'UNKNOWN';
@@ -122,6 +162,14 @@ export class DoctorService {
       const state = await new ControlScheduleStatusService({ context, config: this.config, fsApi }).status();
       add('workflow.scheduleClaim', state.status === 'invalid' || state.currentRun?.state === 'unconfirmed' ? 'UNKNOWN' : state.status === 'recovery_required' ? 'WARN' : 'PASS',
         state.currentRun?.state === 'running' ? 'Stage0 已登记任务仍在运行' : state.status === 'unsupported' ? 'Local 路径不使用 Stage0 调度 claim' : state.status === 'invalid' ? 'Stage0 claim 或登记状态无法确认' : '已检查当前计划槽的 Stage0 claim', '不注册调度、不释放 claim、不恢复工作流。');
+    });
+    await inspect('rss.venue', async () => {
+      if (!resolved) throw new Error('RSS_CONFIGURATION_UNCONFIRMED');
+      if (resolved.options.mode === 'local') { add('rss.venue', 'PASS', 'Local 路径不执行 RSS 检索；未统计 RSS。'); return; }
+      const { ReviewQueryService } = await import('./control_review_query_service.mjs');
+      const review = context.runRoot === this.context.runRoot ? this.review : new ReviewQueryService({ root: context.userDataRoot, context });
+      const result = await rssVenueSummary(review, this.config, context.userDataRoot);
+      add('rss.venue', result.status, result.summary, '只读有界观察，不重抓、不补写；配置匹配不证明历史 fallback。未保存单期刊/综合来源及原始期刊溯源时，原因 unknown，不根据 feed title 猜测。');
     });
     await inspect('research', async () => {
       if (!resolved) { add('research', 'UNKNOWN', '配置尚未确定，无法定位正式研究反馈状态', '先检查基础配置。'); return; }
