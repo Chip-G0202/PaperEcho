@@ -114,6 +114,14 @@ export class WindowsTaskScheduler {
   constructor({ env = process.env, sandboxOnly = false, transport } = {}) {
     this.env = env; this.sandboxOnly = sandboxOnly; this.transport = transport;
   }
+  async inspectPresence(paths) {
+    // Presence-only probe: a missing canonical config must not hide a stale task.
+    // The constructed spec is never registered; callers must reject an existing
+    // task when its real configuration is unknown.
+    const probe = scheduleSpec({ paths, platform: 'win32', config: { schemaVersion: 6, mode: 'desktop', profile: 'standard',
+      scheduler: { schemaVersion: 1, enabled: false, time: '15:00', timezone: 'Asia/Shanghai' } } });
+    return { ...await this.execute('query', probe), presenceOnly: true };
+  }
   async execute(operation, input) {
     if (!taskOperations.includes(operation)) fail('SCHEDULER_ARGUMENT_INVALID');
     const spec = validateWindowsScheduleSpec(input);

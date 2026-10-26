@@ -215,6 +215,18 @@ Verify 不解析现有数据根、不加载 `.env`、不创建目录或解密副
 
 `PaperEcho-headless.cmd --verify-backup-data <绝对备份路径>` 复用安全密码输入，认证备份后只读核对当前 Runtime Root 的 owner 文件清单、逐文件 SHA256、根映射与本地 Secret ACL；额外、缺失或被修改的 owner 文件返回 `BACKUP_DATA_MISMATCH`，不修复数据。两次正式源清单检查拒绝观察期间的变化，外部 owner 在访问前拒绝。此数据审计保持 `restoreReady:false`、`installerAuthorization:false`，不能代替旧包来源核验、运行状态检查、用户卸载确认、Doctor 或完整方案 B 的真实 Guest Gate。
 
+### 受控手动重装预检与确认（正常 TEST ONLY 路径已验证）
+
+现有 Backup/Verify CLI 先创建并验证完整备份：`--backup <新备份绝对路径>`、`--verify-backup <备份绝对路径>`。关闭应用并明确暂停已有任务后，使用 `--reinstall-preflight --request <请求文件绝对路径>`；它只读检查 Installed 根、schema 6、活动事务与锁、当前用户安装状态旧/新 `5/-1`、程序版本、保留的安装包、备份与数据哈希、Secret ACL、Doctor 和任务是否已停用。未知状态拒绝，不能通过确认绕过。
+
+请求 JSON 的 `schemaVersion` 为 `1`，其余字段为 `sourceApplicationRoot`、`sourceDataRoot`、`sourceLayout:"installed"`、`targetDataRoot`、`targetLayout:"installed"`、`backup`、`installers`。`targetDataRoot` 是预留的**不存在的恢复根**，不是要覆盖的现有 User Root；请求、备份及安装包保留在应用和 User Root 之外。`installers.old` 与 `installers.new` 分别包含绝对 `path`、小写 `sha256`、`version`、大写带括号的 `productCode`、大写 `signerThumbprint`。版本限定为递增的 `2.6.x`；两包 UpgradeCode 不变，必须验证有效签名与预先可信的签名者指纹。没有可信旧包不产生重装许可；没有官方 v2.5 MSI，不得伪造。未签名 TEST ONLY 包仅能由隔离测试注入信任，CLI 没有绕过开关。
+
+预检返回 `READY_FOR_USER_CONFIRMATION` 后，在真实交互终端执行 `--reinstall-confirm --request <同一请求绝对路径> --confirm-plan <原计划id>`。密码使用已有非回显输入；确认须准确输入 `REINSTALL <计划id>`，其它输入均取消。提示说明停机、已验证备份、保留旧包及非原子恢复；同意后重新执行全部检查，计划变化即拒绝。无交互授权拒绝；取消不调用卸载。成功也只有手动操作计划，始终 `executionAllowed:false`、`osMutation:false`，不会自动安装、卸载或重装旧版。
+
+用户手动卸载时只删除应用，保留原 User Root；新装后仍明确使用同一 User Root，核验 `--verify-backup-data`、九类 owner、Secret ACL 与 Doctor，通过后才由用户恢复任务。安装失败则停止，保留原始数据和认证备份；由用户重装已保留的可信旧包，或使用既有 `--restore-backup <备份绝对路径> --target-data-root <安全新根>` 显式恢复后复核。VM 检查点不是产品恢复机制。
+
+断网普通用户 Guest 已验证 TEST ONLY 2.6.0→2.6.1 正常手动重装：预检及模拟确认/取消、未授权和过期计划拒绝通过，卸载与新装均退出 0；安装后旧/新 ProductState 为 -1/5、版本为 2.6.1，无活动 MSI 事务。同一状态下的独立只读 audit 退出 0，九类 owner、数据和备份哈希、Secret ACL、Doctor 及 Scheduler 检查通过。此证据仅覆盖正常流程；完整安装 GUI、失败恢复、MSP 技术路径和历史 MSI 原子回滚仍未通过，不能据此宣布完整方案 B 或 Release 完成。
+
 验证：`node --test workflow/tests/backup.test.mjs`，配合 Local、Secret、Runtime Root、Runner 与 ledger/recovery 回归。Local fixture 必须符合真实 Import 的“标题 + 稳定身份”契约，标题单独存在仍应被拒绝。Windows 使用已校验的本地 Electron ZIP 执行 `npm run package:win --prefix desktop/electron-poc`，随后 `npm run smoke:packaged --prefix desktop/electron-poc`，验证空 PATH、仓库外 cwd 下的真实 packaged Backup/Verify、源数据快照和独立 Headless。macOS 未实测；Phase 3A 仍为 Blocked。
 
 ## 恢复到全新 User Data Root

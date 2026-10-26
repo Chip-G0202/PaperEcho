@@ -1,5 +1,7 @@
 # Public Release Checklist
 
+方案 B 的正常受控手动重装组件已有 unsigned TEST ONLY Guest 证据：预检与模拟确认/取消、未授权和过期计划拒绝通过；手动卸载、新装均退出 0，2.6.1 安装后旧/新 ProductState 为 -1/5，九类 owner、数据与备份哈希、Secret ACL、Doctor、Scheduler 的独立只读 audit 通过。正式 CLI 只返回需用户执行的手动计划，不自动卸载或安装。完整安装 GUI、失败恢复、MSP_PATH_UNVERIFIED、历史 MSI 原子回滚及 Signing/macOS/Notarization/Release 继续 BLOCKED；此记录不表示完整方案 B 或 Release 已通过。
+
 ## Windows TEST ONLY MSI验收（Phase 3A）
 
 用户级 MSI 已在断网、已真实验证检查点回滚的独立 Hyper-V Windows Guest 中验收；这是 unsigned TEST ONLY 产物，不是正式发行。构建复用匹配当前源码的 Windows packaged runtime，逐文件核对源与 payload；安装目录为用户级 `LocalAppData/Programs/PaperEcho`，数据与 Cache 继续由 Runtime Root owner 解析。

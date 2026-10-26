@@ -18,7 +18,7 @@ export async function build() {
   await fs.mkdir(shell); await fs.mkdir(core);
   const tracked = execFileSync('git', ['ls-files', '-z', 'workflow/tools', 'skills', 'config'], { cwd: repo }).toString().split('\0').filter(Boolean);
   tracked.push('workflow/tools/lib/os_scheduler.mjs', 'workflow/tools/runner/os_scheduler.mjs', 'workflow/tools/lib/os_scheduler_management.mjs', 'workflow/tools/lib/windows_task_scheduler.mjs');
-  tracked.push('workflow/tools/lib/upgrade_preflight_service.mjs', 'workflow/tools/runner/upgrade.mjs');
+  tracked.push('workflow/tools/lib/upgrade_preflight_service.mjs', 'workflow/tools/lib/windows_installer_metadata.mjs', 'workflow/tools/runner/upgrade.mjs');
   tracked.push('workflow/tools/lib/upgrade_migration_service.mjs');
   tracked.push('workflow/tools/lib/backup_service.mjs', 'workflow/tools/lib/backup_format.mjs', 'workflow/tools/runner/backup.mjs');
   tracked.push('workflow/tools/lib/restore_service.mjs', 'workflow/tools/lib/restore_filesystem.mjs');

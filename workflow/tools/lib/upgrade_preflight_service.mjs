@@ -14,6 +14,9 @@ import { createControlServices } from './control_application_services.mjs';
 import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
 import { validateOperationLedger } from '../recovery/operation_ledger.mjs';
 import { inspectRestoreVolume } from './restore_filesystem.mjs';
+import { inspectWindowsInstaller } from './windows_installer_metadata.mjs';
+import { manageOsSchedule } from './os_scheduler_management.mjs';
+import { WindowsTaskScheduler } from './windows_task_scheduler.mjs';
 
 export const UPGRADE_COMPATIBILITY = Object.freeze({ targetRelease: '2.6', targetSchema: 6, readableSchemas: [1, 2, 3, 4, 5, 6],
   previewSchemas: [3, 4, 5, 6], legacyTag: '2b5e65e0df376f67c2bee26fbc527264ddb8dd69', taggedSchema: 6,
@@ -25,6 +28,16 @@ const exists = async file => { try { return await fs.lstat(file); } catch (e) { 
 const safeCode = e => /^UPGRADE_[A-Z_]+$/.test(e?.code || '') ? e.code : /^BACKUP_[A-Z_]+$/.test(e?.code || '') ? e.code : 'UPGRADE_INSPECTION_FAILED';
 const controls = (app, data, layout, resource = app) => ({ PAPERECHO_APPLICATION_ROOT: app, PAPERECHO_RESOURCE_ROOT: resource,
   PAPERECHO_LAYOUT: layout, ...(layout === 'dev' ? {} : { PAPERECHO_DATA_ROOT: data }), PAPERECHO_SKIP_DOTENV: '1' });
+async function inspectReinstallSchedule(sourceEnv, paths) {
+  const env = { ...process.env, ...sourceEnv };
+  try { return await manageOsSchedule('query', { env, applicationRoot: paths.applicationRoot }); }
+  catch (cause) {
+    if (cause.message !== 'SCHEDULER_WINDOWS_SPEC_REQUIRED') throw cause;
+    const presence = await new WindowsTaskScheduler({ env }).inspectPresence(paths);
+    if (presence.exists) throw error('UPGRADE_REINSTALL_SCHEDULE_UNKNOWN');
+    return presence;
+  }
+}
 
 // Metadata identifies a contract family, not a signed executable. The old tag
 // has no package version: only its exact public Runtime Root fingerprint is used.
@@ -49,7 +62,76 @@ async function releaseEvidence(app, layout) {
 
 // Planning only. No migration/restore method, OS registration or write API is called.
 export class UpgradePreflightService {
-  constructor({ applicationRoot, env = process.env, volume = inspectRestoreVolume } = {}) { Object.assign(this, { applicationRoot, env, volume }); }
+  constructor({ applicationRoot, env = process.env, volume = inspectRestoreVolume, installerInspector = inspectWindowsInstaller,
+    scheduleInspector = inspectReinstallSchedule, testPackageTrust } = {}) {
+    Object.assign(this, { applicationRoot, env, volume, installerInspector, scheduleInspector, testPackageTrust });
+  }
+  async inspectReinstall({ installers, ...options } = {}) {
+    const blocked = code => ({ schemaVersion: 1, scope: 'safe-user-controlled-reinstall', status: 'BLOCKED', code,
+      uninstallAllowed: false, executionAllowed: false, osMutation: false });
+    try {
+      if (options.sourceLayout !== 'installed' || options.targetLayout !== 'installed') throw error('UPGRADE_REINSTALL_LAYOUT_UNSUPPORTED');
+      if (![options.sourceApplicationRoot, options.sourceDataRoot, options.backup].every(value => path.isAbsolute(value || ''))
+        || inside(options.sourceApplicationRoot, options.sourceDataRoot) || inside(options.sourceDataRoot, options.sourceApplicationRoot)
+        || inside(options.sourceApplicationRoot, options.backup) || inside(options.sourceDataRoot, options.backup)) throw error('UPGRADE_REINSTALL_ROOT_UNSAFE');
+      const preview = await this.inspect(options);
+      if (preview.status !== 'PASS' || preview.source.schema !== 6 || preview.source.releaseLine !== '2.6') return { ...blocked('UPGRADE_REINSTALL_PREFLIGHT_BLOCKED'), checks: preview.checks };
+      const pkg = await readBoundedJson(options.sourceApplicationRoot, path.join(options.sourceApplicationRoot, 'resources/core/package.json'));
+      const metadata = []; let testOnly = this.installerInspector !== inspectWindowsInstaller || this.volume !== inspectRestoreVolume || this.scheduleInspector !== inspectReinstallSchedule;
+      for (const role of ['old', 'new']) {
+        const expected = installers?.[role];
+        if (!expected || !path.isAbsolute(expected.path || '') || !/^[a-f0-9]{64}$/.test(expected.sha256 || '')
+          || !/^2\.6\.(?:0|[1-9]\d{0,4})$/.test(expected.version || '') || Number(expected.version.split('.')[2]) > 65535
+          || !/^\{[A-F0-9]{8}(?:-[A-F0-9]{4}){3}-[A-F0-9]{12}\}$/.test(expected.productCode || '')) throw error('UPGRADE_INSTALLER_REFERENCE_REQUIRED');
+        if (inside(options.sourceApplicationRoot, expected.path) || inside(options.sourceDataRoot, expected.path)) throw error('UPGRADE_INSTALLER_NOT_RETAINED');
+        await backupSafePath(expected.path);
+        if (!(await exists(expected.path))?.isFile()) throw error('UPGRADE_INSTALLER_MISSING');
+        const actual = await this.installerInspector(expected.path, { applicationRoot: options.sourceApplicationRoot });
+        if (actual.sha256 !== expected.sha256 || actual.version !== expected.version || actual.productCode !== expected.productCode
+          || actual.upgradeCode !== '{7395EC5E-338E-4E71-92A2-579BD64EE6E4}' || !/^PaperEcho(?: TEST ONLY)?$/.test(actual.productName || '')
+          || actual.allUsers || actual.isAdmin !== false) throw error('UPGRADE_INSTALLER_IDENTITY_MISMATCH');
+        if (actual.applicationRunning !== false) throw error('UPGRADE_REINSTALL_APPLICATION_BUSY');
+        const signed = actual.signatureStatus === 'Valid' && /^[A-F0-9]{40}$/.test(expected.signerThumbprint || '') && actual.signerThumbprint === expected.signerThumbprint;
+        // Test harness injection is never sourced from a CLI/env/config bypass.
+        // Real Guest tests must pin unsigned TEST ONLY input hashes and report that limitation.
+        if (!signed) {
+          if (typeof this.testPackageTrust !== 'function' || await this.testPackageTrust(expected, actual) !== true) throw error('UPGRADE_INSTALLER_TRUST_UNVERIFIED');
+          testOnly = true;
+        }
+        metadata.push(actual);
+      }
+      const [oldPackage, newPackage] = metadata;
+      if (oldPackage.productState !== 5 || newPackage.productState !== -1 || oldPackage.userSid !== newPackage.userSid || !oldPackage.userSid
+        || pkg.version !== oldPackage.version || Number(newPackage.version.split('.')[2]) <= Number(oldPackage.version.split('.')[2])
+        || oldPackage.productCode === newPackage.productCode) throw error('UPGRADE_REINSTALL_STATE_UNSAFE');
+      const sourceEnv = controls(options.sourceApplicationRoot, options.sourceDataRoot, 'installed', path.join(options.sourceApplicationRoot, 'resources/core'));
+      const context = await resolveApplicationRuntimeContext({ env: sourceEnv, readOnly: true });
+      const schedule = await this.scheduleInspector(sourceEnv, resolveRuntimePaths({ env: sourceEnv }));
+      if (schedule.status !== 'PASS' || schedule.osMutation !== false || typeof schedule.exists !== 'boolean'
+        || schedule.exists && (schedule.definitionMatches !== true || schedule.currentUser !== true || schedule.leastPrivilege !== true
+          || schedule.interactiveToken !== true || schedule.enabled !== false || schedule.runningInstances !== 0)) throw error('UPGRADE_REINSTALL_SCHEDULE_BUSY_OR_UNKNOWN');
+      await new BackupService().withVerifiedContents({ input: options.backup, password: options.password }, manifest => {
+        context.backupInputs = manifest.roots.inputs.map(relative => path.join(options.sourceDataRoot, relative));
+      }, false);
+      const audit = await new BackupService({ context, env: sourceEnv }).verifyData({ input: options.backup, password: options.password });
+      const doctor = await createControlServices({ root: options.sourceApplicationRoot, context, env: sourceEnv }).doctor.status();
+      if (['configuration', 'secrets', 'runtime.resources'].some(id => doctor.checks.find(check => check.checkId === id)?.status !== 'PASS')) throw error('UPGRADE_REINSTALL_DOCTOR_BLOCKED');
+      for (const file of ['PaperEcho-headless.cmd', 'resources/core/workflow/tools/lib/restore_service.mjs']) {
+        const retained = path.join(options.sourceApplicationRoot, file); await backupSafePath(retained);
+        if (!(await exists(retained))?.isFile()) throw error('UPGRADE_RECOVERY_RUNTIME_UNAVAILABLE');
+      }
+      const latest = await this.inspect(options);
+      if (latest.status !== 'PASS' || latest.plan.id !== preview.plan.id) throw error('UPGRADE_REINSTALL_PLAN_STALE');
+      const packages = metadata.map(({ productCode, version, sha256 }) => ({ productCode, version, sha256 }));
+      const plan = { schemaVersion: 1, policy: 'verified-backup-user-confirmed-reinstall', dataPlanId: preview.plan.id, packages,
+        testOnly, backupVerified: audit.authenticated, dataPreserved: true, downtimeRequired: true, atomicRollback: false,
+        preserveUserDataRoot: true, recovery: ['STOP_ON_FAILURE', 'USER_REINSTALL_RETAINED_TRUSTED_OLD_PACKAGE', 'EXPLICIT_RESTORE_TO_NEW_EMPTY_ROOT', 'VERIFY_DATA_AND_DOCTOR'],
+        manualSteps: ['STOP_APPLICATION_AND_PAUSE_SCHEDULE', 'USER_CONFIRM', 'USER_UNINSTALL_OLD_APPLICATION_ONLY', 'USER_INSTALL_NEW_PACKAGE', 'VERIFY_BACKUP_DATA', 'DOCTOR', 'USER_REENABLE_SCHEDULE_ONLY_AFTER_VALIDATION'] };
+      plan.id = sha256(JSON.stringify({ plan, installers, backup: options.backup, root: options.sourceDataRoot, recoveryRoot: options.targetDataRoot }));
+      return { schemaVersion: 1, scope: 'safe-user-controlled-reinstall', status: 'READY_FOR_USER_CONFIRMATION', plan,
+        uninstallAllowed: false, executionAllowed: false, osMutation: false, testOnly };
+    } catch (cause) { return blocked(safeCode(cause)); }
+  }
   async inspect({ sourceApplicationRoot, sourceDataRoot, sourceLayout, targetDataRoot, targetLayout, backup, password } = {}) {
     const checks = []; const add = (checkId, status) => checks.push({ checkId, status });
     let source = { releaseLine: null, schema: null, layout: ['dev', 'portable', 'installed'].includes(sourceLayout) ? sourceLayout : null };
