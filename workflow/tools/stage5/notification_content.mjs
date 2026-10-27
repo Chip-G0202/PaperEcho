@@ -21,13 +21,17 @@ function literatureContent(items = []) {
 }
 export function buildRadarNotificationContent(items = [], { runId = "", audit = {} } = {}) {
   const papers = literatureContent(items);
+  const candidateStatistics = audit.profile === 'radar' && audit.runId === runId
+    && Number.isSafeInteger(audit.candidateCount) && audit.candidateCount >= 0
+    && ['A', 'B', 'C', 'D'].every(grade => Number.isSafeInteger(audit.candidateGrades?.[grade]) && audit.candidateGrades[grade] >= 0)
+    && ['A', 'B', 'C', 'D'].reduce((sum, grade) => sum + audit.candidateGrades[grade], 0) === audit.candidateCount
+    ? { total: audit.candidateCount, grades: { ...audit.candidateGrades } } : null;
   const summary = [];
   if (hasNumber(audit.candidateCount)) summary.push({ label: "本轮候选", value: Number(audit.candidateCount) });
-  summary.push({ label: "本封推荐", value: papers.length });
-  summary.push({ label: "A 级文献", value: papers.filter((item) => item.grade === "A").length });
+  summary.push({ label: "本封即时推荐", value: papers.length });
   const content = {
     eventId: String(runId), eventType: "radar_completed", title: "今日文献速览", generatedAt: String(audit.generatedAt || ""), date: String(audit.generatedAt || "").slice(0, 10), runId: String(runId),
-    subject: `PaperEcho Daily Radar：${papers.length} 篇文献`, summary, items: papers,
+    subject: `PaperEcho Daily Radar：${papers.length} 篇文献`, summary, items: papers, candidateStatistics,
     businessStatus: audit.status, notificationStatus: audit.notificationStatus,
     sections: { overview: typeof audit.overview === 'string' ? audit.overview : '', warnings: (audit.warnings || []).map(warningText).filter(Boolean) },
   };
@@ -82,14 +86,15 @@ export function notificationSummary(content) {
   const radar = content.eventType === 'radar_completed';
   if (!radar && content.eventType !== 'weekly_completed') throw new Error('NOTIFICATION_CONTENT_EVENT_UNSUPPORTED');
   const sections = content.sections || {};
-  const grades = Object.fromEntries(['A', 'B', 'C', 'D'].map(grade => [grade, radar ? (content.items || []).filter(item => item.grade === grade).length : hasNumber(content.summary?.grades?.[grade]) ? Number(content.summary.grades[grade]) : null]));
+  const grades = Object.fromEntries(['A', 'B', 'C', 'D'].map(grade => [grade, radar ? content.candidateStatistics?.grades[grade] ?? null : hasNumber(content.summary?.grades?.[grade]) ? Number(content.summary.grades[grade]) : null]));
   const alerts = [...(sections.integrityLines || []), ...(sections.warnings || [])];
   if (sections.remainingWarnings) alerts.push(`另有 ${sections.remainingWarnings} 条提醒，请查看导出结果。`);
   if (['incomplete', 'unknown'].includes(content.notificationStatus)) alerts.push(content.notificationStatus === 'unknown' ? '通知结果尚不确定，请在工作台核对。' : '通知尚未完成，请在工作台核对。');
   if (content.recoveryState === 'pending') alerts.push('恢复尚未完成，请在工作台核对。');
   const status = String(content.businessStatus || 'completed');
   const statusText = /failed|error|incomplete/.test(status) ? '文献流程未完成' : /partial/.test(status) ? '文献流程部分完成' : radar ? 'Radar 检查已完成' : '文献流程已完成';
-  return { brand: `PaperEcho · ${radar ? 'Daily Radar' : '周报'}`, status: statusText, date: content.date || '', totalLabel: radar ? '本轮推荐' : '本次新增',
+  return { brand: `PaperEcho · ${radar ? 'Daily Radar' : '周报'}`, status: statusText, date: content.date || '', totalLabel: radar ? '本封即时推荐' : '本次新增',
+    ...(radar && content.candidateStatistics ? { gradesLabel: `全轮候选分级概况（${content.candidateStatistics.total} 篇）` } : {}),
     total: radar ? (content.items || []).length : hasNumber(content.summary?.created) ? Number(content.summary.created) : null,
     grades, overview: sections.overview || (radar ? (content.summary || []).filter(item => item.label !== 'A 级文献').map(item => `${item.label}：${item.value} 篇`).join(' · ') : ''), alerts };
 }

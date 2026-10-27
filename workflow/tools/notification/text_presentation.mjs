@@ -11,7 +11,7 @@ export function summaryBlocks(content, budget) {
   const view = notificationSummary(content);
   const blocks = [{ value: view.brand }, { value: view.status }, { label: '日期', value: boundedText(view.date || '未提供', 100) }];
   if (view.total !== null) blocks.push({ label: view.totalLabel, value: `${view.total} 篇` });
-  if (Object.values(view.grades).some(value => value !== null)) blocks.push({ label: '分级', value: ['A', 'B', 'C', 'D'].map(grade => `${grade} ${view.grades[grade] ?? '—'}`).join(' ｜ ') });
+  if (Object.values(view.grades).some(value => value !== null)) blocks.push({ label: view.gradesLabel || '分级', value: ['A', 'B', 'C', 'D'].map(grade => `${grade} ${view.grades[grade] ?? '—'}`).join(' ｜ ') });
   // Reserve space for actual alerts before shortening the overview.
   const alerts = boundedText(view.alerts.join('\n'), Math.floor(budget / 2));
   const used = Buffer.byteLength(blocks.map(block => `${block.label || ''}\n${block.value}`).join('\n\n') + alerts) + 100;

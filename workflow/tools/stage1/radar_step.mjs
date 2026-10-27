@@ -105,6 +105,7 @@ export async function finalizeRadarStage1({
     runId,
     generatedAt: clock().toISOString(),
     candidateCount: triagedItems.length,
+    candidateGrades: Object.fromEntries(["A", "B", "C", "D"].map((grade) => [grade, triagedItems.filter((item) => clean(item.final_grade || item.grade).slice(0, 1).toUpperCase() === grade).length])),
     llmEligibleCount: eligible.length,
     llmReliableCount: resolved.length,
     backlogCount: unresolved.length,

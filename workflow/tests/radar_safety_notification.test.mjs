@@ -141,8 +141,8 @@ test("all urgent items are sent in one summary-only aggregate mail without attac
   assert.equal(result.status, "accepted");
   assert.equal(calls, 1);
   assert.equal(message.attachments.length, 0);
-  assert.match(message.text, /本轮推荐 2 篇/);
-  assert.match(message.text, /分级：A 2 \/ B 0 \/ C 0 \/ D 0/);
+  assert.match(message.text, /本封即时推荐 2 篇/);
+  assert.doesNotMatch(message.text, /分级/); // No complete candidate audit was supplied.
   assert.doesNotMatch(message.text, /Urgent|Second|10\.1000\/(?:notify|second)/);
   assert.doesNotMatch(message.html, /Urgent|Second|10\.1000\/(?:notify|second)/);
 });

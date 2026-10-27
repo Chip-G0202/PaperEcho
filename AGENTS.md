@@ -667,6 +667,7 @@ Desktop/Web run groups live at `review_results/文献评价/runs/<runId>/run_gro
 - Stage5 email omits the weekly XLSX because review happens in Control Center. The explicit current-run monthly DOCX remains optional; at most one attachment and 20 MiB total. The formatter does not render an attachment body section.
 - Receipt/overview live in the run's `stage5/` directory. Successful run ID plus recipient hash is idempotent; `--force-resend` reuses an unchanged overview input hash.
 - Notification content belongs to `stage5/notification_content.mjs`; Radar/Weekly renderers share `stage5/email_layout.mjs`. Formal `--resume` uses `recovery/notification_recovery.mjs` to retry only delivery after verified business completion, reusing the original receipt/identity and saved content. Accepted mail is not resent; unknown or mismatched evidence fails closed. Never rerun successful business stages to recover email. Details: `skills/paperecho-workflow/references/stage5-email.md`.
+- Radar candidate grades come only from the matching run's complete Stage1 audit with nonnegative integer counts totaling `candidateCount`; omit unavailable distributions. Keep this message's selected recommendation count separate, and preserve saved summary views for notification-only replay.
 - `PAPERFLOW_CLEANUP_ENABLED` defaults true. `PAPERFLOW_RETENTION_DAYS` defaults 30; `0` disables age deletion. Full scans run at most once per 24 hours unless forced and never change the business result.
 
 ### Modification Rules

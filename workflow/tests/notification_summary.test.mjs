@@ -16,7 +16,7 @@ function visible(channel, payload) {
   return channel === 'email' ? payload.text : channel === 'qq' ? visibleSummary(payload.markdown.content) : channel === 'wechat' ? payload.messages.map(part => part.content).join('') : channel === 'feishu' ? [payload.content.post.zh_cn.title, ...payload.content.post.zh_cn.content.flat().map(node => node.text)].join('\n') : payload.markdown.content.replace(/\\([*_\[\]#!|.\-])/g, '$1');
 }
 for (const kind of ['radar', 'weekly']) test(`${kind} all five notifications show summary, counts, date and warnings without article details`, () => {
-  const content = kind === 'radar' ? buildRadarNotificationContent(papers, { audit: { generatedAt: '2026-10-02T00:00:00Z', candidateCount: 8, overview: 'SUMMARY_CANARY', warnings: ['WARNING_CANARY'] } }) : buildWeeklyNotificationContent({ finishedAt: '2026-10-02T00:00:00Z', counts: { created: 20, grades: { A: 0, B: 3, C: 17, D: 0 } }, warnings: ['WARNING_CANARY'], notificationStatus: 'incomplete' }, { overview: 'SUMMARY_CANARY', literatureItems: papers });
+  const content = kind === 'radar' ? buildRadarNotificationContent(papers, { runId: 'radar-summary', audit: { profile: 'radar', runId: 'radar-summary', generatedAt: '2026-10-02T00:00:00Z', candidateCount: 8, candidateGrades: { A: 1, B: 2, C: 3, D: 2 }, overview: 'SUMMARY_CANARY', warnings: ['WARNING_CANARY'] } }) : buildWeeklyNotificationContent({ finishedAt: '2026-10-02T00:00:00Z', counts: { created: 20, grades: { A: 0, B: 3, C: 17, D: 0 } }, warnings: ['WARNING_CANARY'], notificationStatus: 'incomplete' }, { overview: 'SUMMARY_CANARY', literatureItems: papers });
   content.secret = 'SECRET_CANARY'; content.credentials = { apiKey: 'SECRET_CANARY' };
   const before = structuredClone(content);
   for (const channel of CHANNEL_IDS) {
@@ -30,9 +30,9 @@ for (const kind of ['radar', 'weekly']) test(`${kind} all five notifications sho
 });
 test('canonical owner projects honest Radar counts and Weekly zero/missing counts', () => {
   const radar = buildRadarNotificationContent(papers);
-  assert.equal(radar.summaryView.totalLabel, '本轮推荐'); // Radar does not perform Zotero writeback.
+  assert.equal(radar.summaryView.totalLabel, '本封即时推荐'); // Radar does not perform Zotero writeback.
   assert.equal(radar.summaryView.total, 1);
-  assert.deepEqual(radar.summaryView.grades, { A: 0, B: 1, C: 0, D: 0 });
+  assert.deepEqual(radar.summaryView.grades, { A: null, B: null, C: null, D: null });
   const zero = buildWeeklyNotificationContent({ counts: { created: 0, grades: { A: 0, B: 0, C: 0, D: 0 } } });
   for (const channel of CHANNEL_IDS) { const payload = render(zero, channel); assert.match(visible(channel, payload), /0 篇/); assert.doesNotMatch(JSON.stringify(payload), /undefined|null|ARTICLE/); }
   assert.equal(buildWeeklyNotificationContent({}).summaryView.total, null);
