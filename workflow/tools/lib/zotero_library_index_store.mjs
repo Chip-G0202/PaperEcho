@@ -469,6 +469,7 @@ export async function updateLocalLiteratureIndexItems(filePath, items = [], { ou
 export async function updateSharedLiteratureRecordState(filePath, updates = [], { generatedAt = nowIso() } = {}) {
   return withIndexLock(filePath, async () => {
     const read = await readZoteroLibraryIndex(filePath);
+    if (!read.usable && read.reason !== 'index_missing' && updates.some(update => typeof update?.patch === 'function')) throw new Error('SHARED_INDEX_CONDITIONAL_UPDATE_UNUSABLE');
     const index = read.usable ? normalizeZoteroLibraryIndex(read.index) : emptyZoteroLibraryIndex({ generatedAt });
     let updatedCount = 0;
     for (const update of updates) {
@@ -476,7 +477,9 @@ export async function updateSharedLiteratureRecordState(filePath, updates = [], 
       const canonicalId = canonicalRecordId(item);
       if (!canonicalId) continue;
       const previous = index.records[canonicalId] || {};
-      const patch = update?.patch && typeof update.patch === "object" ? update.patch : {};
+      // Conditional namespace updates must inspect the current record under this lock.
+      const patch = typeof update?.patch === "function" ? update.patch(structuredClone(previous)) : update?.patch && typeof update.patch === "object" ? update.patch : {};
+      if (patch === null) continue;
       index.records[canonicalId] = {
         ...previous,
         ...patch,

@@ -27,6 +27,12 @@ Packaged code is resolved from the pinned Resource Root inside Application Root;
 - The old `review_results/zotero_index/current_library_index.json` is read only as a migration source when the shared file is absent; it is not a second authority.
 - Writes take a shared lock, merge protected namespaces, write a same-directory temporary file, and atomically rename it.
 
+### Radar notification fingerprint compatibility
+
+`radar/state.mjs` keeps the Legacy `radarClassificationFingerprint` unchanged for queue fallback and old notification comparisons. New notification decisions use `radarNotificationFingerprint`: `v2:` plus a digest of normalized DOI (otherwise normalized title), Rule/LLM/Final grade letters and confidence. Confidence serializes the existing `llm_review.confidence` enum as its existing score (low 0.3 / medium 0.65 / high 0.9), otherwise uses a finite numeric `semantic_confidence` in [0,1], otherwise null. Reasons, timestamps, item/batch IDs and other metadata are excluded; grading itself is unchanged.
+
+Delivered/unknown digests carry their own version prefix independently. Exact Legacy matches are suppressed using their original outcome and acquire only the proven slot's V2 baseline through a conditional shared-index patch under its existing lock/atomic writer. Concurrent outcomes, other namespaces, old decision digests/timestamps and saved receipt selections are preserved; persistence failure stops selection. Unmatched Legacy records continue using the original algorithm and expose `compatibility[].status=legacy_unmatched`, so the algorithm upgrade itself creates no extra resend. This does not resolve their pre-existing reason-drift ambiguity. Failed Legacy attempts remain retryable, not proof of delivery; unsupported versions or missing accepted/unknown evidence fail closed. No bulk migration or fabricated historical classification snapshot is permitted. Regression: `workflow/tests/radar_fingerprint.test.mjs`.
+
 ## Local persistent state
 
 All Local paths are relative to the configured output root:

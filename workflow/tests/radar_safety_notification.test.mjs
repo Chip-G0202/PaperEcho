@@ -176,12 +176,13 @@ test("unknown SMTP receipt is held against automatic repeat", async () => {
   assert.equal(second.suppressed[0].reason, "unknown_held");
 });
 
-test("material grade or metadata change permits a new notification decision", async () => {
+test("material grade change permits a new notification decision; journal drift does not", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "radar-change-mail-"));
   const indexPath = getDefaultZoteroLibraryIndexPath(root);
   const first = await selectRadarNotificationCandidates(indexPath, [urgent()]);
   await recordRadarNotificationOutcome(indexPath, first.selected, { status: "accepted" });
-  assert.equal((await selectRadarNotificationCandidates(indexPath, [urgent({ journal: "Changed" })])).selected.length, 1);
+  assert.equal((await selectRadarNotificationCandidates(indexPath, [urgent({ journal: "Changed" })])).selected.length, 0);
+  assert.equal((await selectRadarNotificationCandidates(indexPath, [urgent({ final_grade: "B" })])).selected.length, 1);
 });
 
 test("integrity-only state change does not retrigger Daily Radar", async () => {
