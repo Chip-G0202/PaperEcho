@@ -6,6 +6,22 @@ import { pathToFileURL } from 'node:url';
 export const repo = fileURLToPath(new URL('../../', import.meta.url));
 export const sandboxBase = path.join(repo, 'tests', 'runs', 'electron-poc');
 export const preferences = Object.freeze({ nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true });
+export function trustedFirstRunFrame(event, contents, origin) {
+  return Boolean(origin && event.sender === contents && event.senderFrame === contents.mainFrame
+    && allowedDocument(event.senderFrame.url, origin) && new URL(event.senderFrame.url).hash === '#setup');
+}
+export async function selectFirstRunDirectory({ paths, env, owner, choose, confirm, restart }) {
+  if (owner.explicitStartupLocation(env)) throw new Error('STARTUP_SELECTION_UNAVAILABLE');
+  await owner.assertFirstRunBlank(paths);
+  const result = await choose();
+  if (result.canceled || result.filePaths.length !== 1) return { status: 'cancelled' };
+  const target = result.filePaths[0];
+  if (!await confirm(target)) return { status: 'cancelled' };
+  await owner.saveFirstRunLocation({ applicationRoot: paths.applicationRoot, env, currentPaths: paths, target });
+  // No success/Ready receipt until a different process has initialized the saved root.
+  try { await restart(); return { status: 'restarting' }; }
+  catch { return { status: 'restart-required', error: 'STARTUP_RESTART_REQUIRED' }; }
+}
 export const failurePage = 'data:text/html;charset=utf-8,' + encodeURIComponent('<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'"><title>PaperEcho</title><p>PaperEcho 无法连接本地工作空间。请关闭窗口后重试。</p>');
 export function allowedDocument(value, origin) {
   try { const u = new URL(value); return u.origin === origin && u.pathname === '/' && !u.search && !u.username && !u.password; } catch { return false; }

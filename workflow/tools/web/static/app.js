@@ -999,6 +999,29 @@ async function setup() {
     section.append(el('p', 'PaperEcho 在本机运行。向导不会自动检索、调用 AI、写入 Zotero、发送通知或创建计划任务。'), el('p', '已有配置和研究历史会保留；可选服务可以稍后在 Settings 中配置。'));
   } else if (setupStep === 1) {
     section.append(contextCard('已选定的数据位置', [`部署模式：${{ installed: '安装模式（程序与数据分离）', portable: '可携带模式', dev: '开发模式' }[state.roots.layout] || state.roots.layout}`, `用户数据目录：${state.roots.userDataRoot}`, `缓存目录：${state.roots.cacheRoot}`]), el('p', '数据目录由启动时的路径契约确定。此处仅确认，不迁移数据，也不切换到其它工作空间。'));
+    if (window.paperEchoFirstRun) {
+      const availability = await window.paperEchoFirstRun.status();
+      if (availability.available) {
+        const notice = el('p', '首次空白配置可选择其他空目录；保存后必须重新启动。', 'meta'); notice.setAttribute('role', 'status');
+        const choose = button('选择数据目录…', async () => {
+          let pending = false;
+          const controls = [...document.querySelectorAll('button,input,select,textarea')].map(node => [node, node.disabled]);
+          controls.forEach(([node]) => { node.disabled = true; });
+          try {
+            const result = await window.paperEchoFirstRun.choose();
+            if (['restarting', 'restart-required'].includes(result.status)) {
+              pending = true;
+              notice.textContent = result.status === 'restarting' ? '位置已保存，正在重新启动。新进程确认目录后才可继续。' : '位置已保存，但尚未重新启动。请关闭并重新打开 PaperEcho；不要在当前窗口继续配置。';
+              document.querySelectorAll('button,input,select,textarea,a').forEach(node => { if ('disabled' in node) node.disabled = true; else node.setAttribute('aria-disabled', 'true'); });
+              return;
+            }
+            notice.textContent = result.status === 'cancelled' ? '已取消，数据位置未改变。' : `目录未切换：${result.error || 'STARTUP_SELECTION_FAILED'}。请选择独立、可写的空目录，或保留默认位置。`;
+          } catch { pending = true; section.replaceChildren(el('h2', '需要重新启动'), el('p', '未确认重新启动。请关闭并重新打开 PaperEcho，核对实际数据位置；不要重复保存。')); }
+          finally { if (!pending) controls.forEach(([node, disabled]) => { node.disabled = disabled; }); }
+        });
+        section.append(choose, notice);
+      }
+    }
   } else if (setupStep === 2) {
     const form = el('form', undefined, 'settings-subgroup');
     const saved = id => setupDraft.has(id) ? setupDraft.get(id) : entries.find(x => x.id === id)?.value;

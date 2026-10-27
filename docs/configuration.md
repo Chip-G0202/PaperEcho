@@ -181,6 +181,8 @@ GUI 启动读取真实配置与原 `runPreflight` 的本地检查结果：缺少
 
 步骤为欢迎、本地数据位置确认、基础配置、可选凭据、本地检查摘要。运行路径由用户明确选择，Local 输入/输出、Web User ID 等字段来自既有 Settings registry；凭据可稍后补充，缺少运行必需项仍显示“仍需配置”。普通设置走原 `/api/settings` / ConfigService 原子批量保存；凭据完全复用 Settings 编辑器及 SecretService write-only API，外部管理只读，旧值不回显，不写 URL/browser storage/普通 JSON。旧版配置不会在读取或检查时自动初始化、迁移或重写。新布局的缺省配置模板读取包内 Resource Root，保存目标始终为 User Data Root。
 
+Windows 打包程序在“本地数据位置”步骤仅对符合首次空白条件、无显式路径覆盖且由当前进程拥有工作台服务的用户显示“选择数据目录”。受限 preload 只允许当前主 frame 的同源向导调用状态/原生选择，不接受渲染页提供路径。原生目录选择及二次确认后，沿启动位置契约校验并原子保存；先关闭旧服务，再在旧根日志结束后按原始启动参数重新启动。只有新进程实际绑定选定根，才能继续配置和本地检查；取消或保存失败不切换，重启未确认时要求关闭后重新打开，不报告 Ready。旧数据不移动或删除；已有业务数据、显式 Portable/其它根以及重新进入已配置向导均不能通过此入口改根。直接回归：`node --test tests/helpers/first_run_directory.test.mjs workflow/tests/startup_location.test.mjs workflow/tests/control_setup.test.mjs`；原生对话框及冷启动须另有真实 GUI 证据。
+
 `control_setup_service.mjs` 仅组合已有 ConfigService、Runner resolver 与 preflight，返回受既有会话保护的 `/api/setup` 摘要，不执行 workflow、LLM、Zotero 写入、通知测试或调度注册。本地检查通过不等于外部服务已连接。运行路径变更继续遵守 Settings 的下次启动语义；摘要区分已保存路径和当前服务路径，不原地切换工作空间。失败保持原子写与原 Secret ACL 约束；成功步骤保留，失败步骤可重试。
 
 Headless 不导入向导，也不弹窗等待配置；缺少配置或必要依赖时由原 Runner 返回失败码。Packaged GUI 和 Headless 使用同一默认/显式 workspace 契约。Windows 凭据写入继续依赖项目既有 PowerShell 7 ACL owner，不能回退 Windows PowerShell 5 或放宽权限；缺少该运行时应安全拒绝凭据保存。空 PATH 的凭据 smoke 通过 `PWSH_PATH` 显式提供已安装 PowerShell 7，同时保持系统 Node/npm 不可见。

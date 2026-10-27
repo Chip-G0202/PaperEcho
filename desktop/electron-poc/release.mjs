@@ -121,10 +121,10 @@ export async function inspectElectron(root) {
   const integrity = entries.find(e => e.type === 'INTEGRITY' && e.id === 'ELECTRONASAR');
   if (!integrity || JSON.parse(Buffer.from(integrity.bin).toString('utf8'))[0]?.value !== hash(getRawHeader(asar).headerString)) fail('RELEASE_ASAR_INTEGRITY');
   const asarFiles = listPackage(asar).map(f => f.replaceAll('\\', '/').replace(/^\//, '')).sort();
-  if (canonical(asarFiles) !== canonical(['main.mjs', 'package.json', 'shell.mjs'])) fail('RELEASE_ASAR_CONTENT');
+  if (canonical(asarFiles) !== canonical(['main.mjs', 'package.json', 'preload.cjs', 'shell.mjs'])) fail('RELEASE_ASAR_CONTENT');
   const shell = JSON.parse(extractFile(asar, 'package.json'));
   if (shell.version !== appVersion || shell.main !== 'main.mjs') fail('RELEASE_VERSION_MISMATCH');
-  for (const file of ['main.mjs', 'shell.mjs']) if (hash(extractFile(asar, file)) !== (await fingerprint(path.join(root, 'resources/core/desktop/electron-poc', file))).sha256) fail('RELEASE_SHELL_MISMATCH');
+  for (const file of ['main.mjs', 'shell.mjs', 'preload.cjs']) if (hash(extractFile(asar, file)) !== (await fingerprint(path.join(root, 'resources/core/desktop/electron-poc', file))).sha256) fail('RELEASE_SHELL_MISMATCH');
   return { ...identity, fuses: 'VERIFIED', asar: 'VERIFIED' };
 }
 export function verifyFuseWire(wire) {

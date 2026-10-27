@@ -23,7 +23,7 @@ export async function build() {
   tracked.push('workflow/tools/lib/backup_service.mjs', 'workflow/tools/lib/backup_format.mjs', 'workflow/tools/runner/backup.mjs');
   tracked.push('workflow/tools/lib/restore_service.mjs', 'workflow/tools/lib/restore_filesystem.mjs');
   tracked.push('workflow/tools/recovery/restore_transaction.mjs', 'workflow/tools/recovery/restore_transaction_status.mjs');
-  const sources = [...new Set([...tracked, 'workflow/tools/lib/control_support_bundle_service.mjs', 'workflow/tools/lib/runtime_logging.mjs', 'workflow/tools/lib/control_setup_service.mjs', 'workflow/tools/lib/control_doctor_service.mjs', 'workflow/tools/runner/doctor.mjs', 'desktop/electron-poc/runtime.mjs', 'desktop/electron-poc/headless.mjs', 'desktop/electron-poc/main.mjs', 'desktop/electron-poc/shell.mjs', 'tests/helpers/electron_smoke.mjs', 'tests/helpers/first_run_smoke.mjs', 'tests/helpers/packaged_probe.mjs'])].filter(sourceAllowed);
+  const sources = [...new Set([...tracked, 'workflow/tools/lib/control_support_bundle_service.mjs', 'workflow/tools/lib/runtime_logging.mjs', 'workflow/tools/lib/control_setup_service.mjs', 'workflow/tools/lib/control_doctor_service.mjs', 'workflow/tools/runner/doctor.mjs', 'desktop/electron-poc/preload.cjs', 'desktop/electron-poc/runtime.mjs', 'desktop/electron-poc/headless.mjs', 'desktop/electron-poc/main.mjs', 'desktop/electron-poc/shell.mjs', 'tests/helpers/electron_smoke.mjs', 'tests/helpers/first_run_smoke.mjs', 'tests/helpers/packaged_probe.mjs'])].filter(sourceAllowed);
   for (const file of sources) { const target = path.join(core, file); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.copyFile(path.join(repo, file), target); }
   const metadata = JSON.parse(await fs.readFile(path.join(repo, 'package.json'), 'utf8'));
   await fs.writeFile(path.join(core, 'package.json'), JSON.stringify({ name: 'paperecho-core', version: appVersion, private: true, type: 'module', dependencies: metadata.dependencies }));
@@ -34,7 +34,7 @@ export async function build() {
     assert.ok(directory.startsWith(path.join(repo, 'node_modules') + path.sep));
     await fs.cp(directory, path.join(core, path.relative(repo, directory)), { recursive: true, dereference: false });
   }
-  for (const file of ['main.mjs', 'shell.mjs']) await fs.copyFile(path.join(repo, 'desktop/electron-poc', file), path.join(shell, file));
+  for (const file of ['main.mjs', 'shell.mjs', 'preload.cjs']) await fs.copyFile(path.join(repo, 'desktop/electron-poc', file), path.join(shell, file));
   await fs.writeFile(path.join(shell, 'package.json'), JSON.stringify({ name: 'paperecho', productName: 'PaperEcho', author: 'PaperEcho contributors', version: appVersion, private: true, type: 'module', main: 'main.mjs' }));
   // Official checksums shipped in the locked Electron package also validate cached ZIPs offline.
   const electron = JSON.parse(await fs.readFile(new URL('./node_modules/electron/package.json', import.meta.url), 'utf8'));

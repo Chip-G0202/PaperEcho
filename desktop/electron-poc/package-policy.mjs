@@ -15,5 +15,5 @@ export function sourceAllowed(file) {
     || /^workflow\/tools\/web\/static\/(index\.html|app\.js|styles\.css|paperecho-mark\.svg)$/.test(file)
     || /^skills\/paperecho-(local|zotero-desktop|zotero-web)\/scripts\/run\.mjs$/.test(file)
     || file.startsWith('config/') && configs.has(file.slice(7))
-    || ['desktop/electron-poc/runtime.mjs', 'desktop/electron-poc/headless.mjs', 'desktop/electron-poc/main.mjs', 'desktop/electron-poc/shell.mjs', 'tests/helpers/electron_smoke.mjs', 'tests/helpers/first_run_smoke.mjs', 'tests/helpers/packaged_probe.mjs'].includes(file);
+    || ['desktop/electron-poc/preload.cjs', 'desktop/electron-poc/runtime.mjs', 'desktop/electron-poc/headless.mjs', 'desktop/electron-poc/main.mjs', 'desktop/electron-poc/shell.mjs', 'tests/helpers/electron_smoke.mjs', 'tests/helpers/first_run_smoke.mjs', 'tests/helpers/packaged_probe.mjs'].includes(file);
 }
