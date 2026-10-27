@@ -3,6 +3,14 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolveRuntimePaths, prepareRuntimePaths } from '../../workflow/tools/lib/runtime_config.mjs';
 import { inspectRestoreTransaction, restoreTransactionRoot } from '../../workflow/tools/recovery/restore_transaction_status.mjs';
+import { resolveStartupEnvironment } from '../../workflow/tools/lib/startup_location.mjs';
+
+export async function preparePackagedStartup(options = {}) {
+  const core = fileURLToPath(new URL('../../', import.meta.url));
+  const applicationRoot = path.resolve(core, '../..');
+  Object.assign(process.env, await resolveStartupEnvironment({ applicationRoot, env: process.env }));
+  return preparePackagedRuntime(options);
+}
 
 // Explicit bootstrap argv is shared by native OS tasks and the console entry.
 // Resolve and validate through Runtime Root before any config, dotenv or writes.

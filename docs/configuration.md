@@ -4,6 +4,8 @@
 
 唯一 root owner 仍是 `workflow/tools/lib/runtime_config.mjs`：`resolveRuntimePaths()` 解析 Application/User Data/Cache/Temporary roots，`prepareRuntimePaths()` 校验边界和目录写权限。部署 layout 与业务 mode（Desktop/Web/Local）独立，不自动切换 backend。下列 bootstrap 环境参数必须在启动前提供，不能通过 `.env` 改变自身位置；打包 Headless 的显式参数见 OS Scheduler 小节，不包含安装器。
 
+Windows 打包 GUI/Headless 在任何日志、缓存及业务 owner 初始化前共用 `preparePackagedStartup()`。优先级为显式 layout/data root/workspace/cache 参数 → `%LOCALAPPDATA%/PaperEcho/startup/location.json` → Installed/default。位置记录只含 schemaVersion/dataRoot，复用受保护 ACL、原子写入及原路径边界；缺失沿用默认，损坏、链接、不安全 ACL 或目标丢失均 fail-closed，不静默改根。首次选择只允许原默认根无业务数据、目标为独立空目录；只识别空 config 和受登记的 GUI 启动日志，未知内容拒绝，不删除旧日志或迁移数据。显式 Portable 不读取此记录。
+
 | 参数 | 契约 |
 |---|---|
 | `PAPERECHO_LAYOUT` | `dev`（默认）、`portable`、`installed`；不根据 cwd、只读目录或凭据猜测 layout |

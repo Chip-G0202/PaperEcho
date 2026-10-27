@@ -8,8 +8,8 @@ let runtimeLog;
 
 export async function prepareShell({ workspace } = {}) {
   if (app.isPackaged) {
-    const { preparePackagedRuntime } = await import(pathToFileURL(path.join(process.resourcesPath, 'core/desktop/electron-poc/runtime.mjs')).href);
-    const paths = preparePackagedRuntime();
+    const { preparePackagedStartup } = await import(pathToFileURL(path.join(process.resourcesPath, 'core/desktop/electron-poc/runtime.mjs')).href);
+    const paths = await preparePackagedStartup();
     for (const [key, directory] of [['userData', 'electron-profile'], ['sessionData', 'electron-session'], ['crashDumps', 'crashes']]) {
       const value = path.join(paths.cacheRoot, directory); await fs.mkdir(value, { recursive: true }); app.setPath(key, value);
     }

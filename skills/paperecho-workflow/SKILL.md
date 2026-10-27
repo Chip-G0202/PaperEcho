@@ -45,6 +45,8 @@ Windows packaged runtime uses the same root owner with a pinned read-only Resour
 
 Deployment layout is resolved only by `runtime_config.mjs`; reuse its Portable/Installed/Dev roots before config or Secret loading. Do not add adapter root resolvers, infer layout from cwd, or migrate real data implicitly. See [configuration](../../docs/configuration.md) for bootstrap inputs and compatibility boundaries.
 
+Windows packaged startup reads the protected first-run location through the shared bootstrap before any owner initialization. Explicit bootstrap overrides retain priority; unknown/nonempty data prevents first-run selection. Validate with `workflow/tests/startup_location.test.mjs` and existing runtime/setup tests; never hot-switch services.
+
 - Use the single schema v1 resolver in `workflow/tools/runner/config_loader.mjs`. The user template is `config/paperecho.config.example.json`; the real `config/paperecho.config.json` stays local and gitignored.
 - Keep settings partitioned as `common`, `desktop`, `web`, and `local`. A path Skill reads only `common` plus its own section and fixes its own mode.
 - Precedence is CLI -> unified config -> environment/`.env` -> existing domain config/defaults. Never infer mode from secret/backend residue.
