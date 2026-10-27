@@ -43,6 +43,10 @@ npm run smoke:packaged --prefix desktop/electron-poc
 
 唯一打包工具为 Electron Packager。构建按代码/模板 allowlist 和 npm production dependency tree 组装一次 `resources/core`；Electron Shell 放入 `app.asar`。物理 workflow、静态资源和依赖只保留一份，供 Electron 与独立 Node 子进程共同读取。产物及报告在 `tests/runs/phase2b/`，不进入 Git。打包使用锁定 Electron npm 包的官方 `checksums.json` 验证 ZIP；`tests/runs/electron-cache/` 中由官方安装器或 `@electron/get` 填充的匹配缓存可离线复用，无需再次获取远程校验表。缺少资产时仍走官方下载和校验，不关闭 TLS/checksum。
 
+Windows ZIP 交付：在有当前 HEAD 的 clean unpacked 构建后运行 `npm run package:zip:win --prefix desktop/electron-poc`。此命令不重建 Electron；复用 Release manifest 的文件、边界、私有内容、ASAR 和 fuse 校验，并拒绝与当前工作树源码不一致的产物。PS7/.NET 按清单创建 ZIP，再逐项解压读取核对长度和 SHA256；输出至独立 `tests/runs/phase2b/zip-*`，含 ZIP、`.sha256` 与 `zip-report.json`。不覆盖旧包，不含用户数据，不上传或放行 Release。
+
+ZIP 解压至新目录后，可按包内 `release-manifest.json` 的逐文件长度/SHA256 核验，再直接运行 `PaperEcho.exe`。ZIP 只是程序封装：零参数仍使用 Installed/default workspace，**不会自动启用 Portable 数据布局**。真实解压启动及 clean-machine 是不同 Gate；签名等发行条件仍须独立验收。
+
 GUI 运行产物中的 `PaperEcho.exe`；独立无窗口入口为 `PaperEcho-headless.cmd --check --mode local`（或显式选择 `desktop` / `web`）。Headless 复用 Shared Runner、preflight 和原 workflow entry，退出码沿用 Runner，无系统 Node/npm 依赖。Packaged 缺省为 Installed，未指定数据根/id 时使用 `default` workspace；GUI 首次配置通过下述向导完成。显式数据根/id 仍优先，Portable 需显式设置 `PAPERECHO_LAYOUT=portable`。不迁移数据或自动生成文献输入。
 
 Packaged bootstrap 固定 Application Root 为程序目录、Resource Root 为其 `resources/core`，不受 cwd 或外部程序根 override 影响。配置、Secret 和可变状态继续使用数据根；Electron profile/session/crash/native debug 使用 cache，正式运行日志使用下述 User Data Logs Root。业务脚本通过统一 owner 从 Resource Root 定位；模块边界测试使用 `realpath` 加 `path.relative`，兼容末尾分隔符并拒绝链接或外部根，不能用字符串前缀扩大允许范围。
