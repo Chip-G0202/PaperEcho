@@ -456,6 +456,7 @@ async function research(showIntro = true) {
     try {
       const result = await api('/api/research', { text: input.value, requestId: researchRequestId });
       if (!result.saved) throw new Error('反馈保存未确认，请重试。');
+      notice.textContent = '';
       receipt.textContent = result.status === 'processed' || result.status === 'consumed' ? '该反馈已处理，可在规则建议中查看。' : '已保存，等待下一次工作流处理；业务成功后发布待审核建议。';
       viewRules.hidden = !['processed', 'consumed'].includes(result.status);
       input.value = ''; researchDraft = ''; researchRequestId = crypto.randomUUID();

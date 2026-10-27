@@ -738,6 +738,23 @@ test('Research Feedback shares the document content column', async () => {
   const app = ui(); await app.research(); const form = app.main.querySelector('.research-form');
   assert.match(form.className, /page-content/); assert.match(form.className, /document-column/); assert.ok(form.querySelector('textarea'));
 });
+test('Research Feedback retry clears the previous error only after confirmed durable saving', async () => {
+  const app = ui(), calls = [];
+  app.setApi(async (url, input) => {
+    calls.push([url, input]);
+    if (calls.length === 1) throw new Error('SYNTHETIC_SAVE_FAILURE');
+    return { saved: true, status: 'pending', suggestions: 0 };
+  });
+  await app.research(); const input = app.main.querySelector('textarea'); input.value = '合成研究反馈';
+  await byText(app.main, '提交研究反馈').click();
+  assert.equal(app.notice.dataset.kind, 'error'); assert.equal(input.value, '合成研究反馈');
+  assert.match(app.main.textContent, /提交未完成/); assert.doesNotMatch(app.main.textContent, /已保存/);
+  await byText(app.main, '提交研究反馈').click();
+  assert.equal(calls.length, 2); assert.equal(calls[0][1].requestId, calls[1][1].requestId);
+  assert.equal(app.notice.textContent, ''); assert.equal(app.notice.dataset.kind, 'success');
+  assert.match(app.main.textContent, /已保存，等待下一次工作流处理/); assert.equal(input.value, '');
+});
+
 test('Research Feedback confirms durable saving and waits for workflow without exposing new suggestions', async () => {
   const app = ui(); const calls = [];
   app.setApi(async (url, input) => { calls.push([url, input]); return { saved: true, status: 'pending', suggestions: 0, warnings: [] }; });
