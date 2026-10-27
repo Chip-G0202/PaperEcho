@@ -22,10 +22,10 @@ for (const [enabled, daily, weekly] of [[['email', 'qq'], true, true], [['email'
   });
 }
 for(const event of ['radar','weekly'])test(`all five ${event} renderers show the same canonical summary and keep papers internal`,()=>{
-  const content=event==='radar'?buildRadarNotificationContent(papers,{runId:'one-event',audit:{candidateCount:8}}):buildWeeklyNotificationContent({runId:'one-event',counts:{created:3,grades:{A:1,B:1,C:1}},finishedAt:'2026-09-30'},{literatureItems:papers,overview:'Existing overview'});
+  const content=event==='radar'?buildRadarNotificationContent(papers,{runId:'one-event',audit:{profile:'radar',runId:'one-event',candidateCount:8,candidateGrades:{A:2,B:2,C:3,D:1}}}):buildWeeklyNotificationContent({runId:'one-event',counts:{created:3,grades:{A:1,B:1,C:1}},finishedAt:'2026-09-30'},{literatureItems:papers,overview:'Existing overview'});
   assert.deepEqual(content.items.map(item=>item.id),['paper-0','paper-1','paper-2']); const before=structuredClone(content);
   const outputs={email:(event==='radar'?formatRadarReport(content):renderWeeklyReport(content)).text,...Object.fromEntries(CHANNEL_IDS.filter(id=>id!=='email').map(id=>[id,texts[id](renderChannelNotification(id,content))]))};
-  for(const text of Object.values(outputs)){ assertNotificationParity(content,text);assert.ok(!text.includes(papers[3].title));assert.ok(!text.includes(papers[4].title));for(const marker of event==='radar'?['本轮候选','8','本轮推荐','3','分级','1']:['本次新增','3','A','B','C','Existing overview'])assert.ok(text.includes(marker),marker); }assert.deepEqual(content,before);
+  for(const text of Object.values(outputs)){ assertNotificationParity(content,text);assert.ok(!text.includes(papers[3].title));assert.ok(!text.includes(papers[4].title));for(const marker of event==='radar'?['本轮候选','8','本封即时推荐','3','全轮候选分级概况（8 篇）']:['本次新增','3','A','B','C','Existing overview'])assert.ok(text.includes(marker),marker); }assert.deepEqual(content,before);
   const long={...content,summaryView:{...content.summaryView,overview:'Overview '.repeat(1000)},items:Array.from({length:30},(_,i)=>({...content.items[0],id:`long-${i}`,title:`Long [${i}] end`,translatedTitle:'中'.repeat(35),reason:'reason '.repeat(30).trim()}))};
   for(const id of CHANNEL_IDS.filter(id=>id!=='email'))assertNotificationParity(long,texts[id](renderChannelNotification(id,long)),{bounded:true});
 });

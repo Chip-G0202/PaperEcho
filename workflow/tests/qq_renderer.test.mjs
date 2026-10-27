@@ -8,11 +8,11 @@ import { createQqTransport } from '../tools/notification/qq_transport.mjs';
 test('QQ Radar shows a clear summary hierarchy and leaves input unchanged', () => {
   const content = buildRadarNotificationContent([
     { title: 'B title', final_grade: 'B' }, { title: 'English title', translatedTitle: '中文标题 🧪', journal: 'Journal', year: 2026, final_grade: 'A', grade_reason: '推荐理由' },
-  ], { runId: 'fixture', audit: { generatedAt: '2026-09-30T12:00:00Z', candidateCount: 10 } });
+  ], { runId: 'fixture', audit: { profile: 'radar', runId: 'fixture', generatedAt: '2026-09-30T12:00:00Z', candidateCount: 10, candidateGrades: { A: 2, B: 3, C: 4, D: 1 } } });
   const before = structuredClone(content);
   const result = renderQqNotification(content);
   assert.equal(result.msg_type, 2);
-  for (const text of ['PaperEcho · Daily Radar', '2026-09-30', '本轮候选：10', '**本轮推荐**\n2 篇', '**分级**', 'A 1 ｜ B 1 ｜ C 0 ｜ D 0']) assert.ok(visibleSummary(result.markdown.content).includes(text), text);
+  for (const text of ['PaperEcho · Daily Radar', '2026-09-30', '本轮候选：10', '**本封即时推荐**\n2 篇', '**全轮候选分级概况（10 篇）**', 'A 2 ｜ B 3 ｜ C 4 ｜ D 1']) assert.ok(visibleSummary(result.markdown.content).includes(text), text);
   assert.doesNotMatch(result.markdown.content, /B title|English title|中文标题|推荐理由/);
   assert.deepEqual(content, before);
   assert.deepEqual(renderQqNotification(content), result);
@@ -27,7 +27,7 @@ test('QQ Weekly uses shared summary and key results without HTML', () => {
 
 for (const title of ['长'.repeat(10000), '😀'.repeat(10000), '👩🏽‍🔬'.repeat(10000), 'e\u0301'.repeat(10000)]) test(`QQ deterministic budget preserves Unicode (${title.slice(0, 10)})`, () => {
   const items = Array.from({ length: 100 }, (_, i) => ({ title: title + i, translatedTitle: title, final_grade: i === 0 ? 'A' : 'B', grade_reason: title }));
-  const content = buildRadarNotificationContent(items, { audit: { generatedAt: '2026-09-30', overview: title, warnings: ['Important alert'] } });
+  const content = buildRadarNotificationContent(items, { runId: 'budget', audit: { profile: 'radar', runId: 'budget', candidateCount: 100, candidateGrades: { A: 1, B: 99, C: 0, D: 0 }, generatedAt: '2026-09-30', overview: title, warnings: ['Important alert'] } });
   const result = renderQqNotification(content);
   assert.ok(Buffer.byteLength(result.markdown.content, 'utf8') <= QQ_TEXT_BUDGET_BYTES);
   assert.equal(/\p{Surrogate}/u.test(result.markdown.content), false);
