@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { startControlCenter, MAX_BODY_BYTES, safeLink } from '../tools/web/server.mjs';
+import { startControlCenter, readControlCenterVersion, MAX_BODY_BYTES, safeLink } from '../tools/web/server.mjs';
 import { createControlServices } from '../tools/lib/control_application_services.mjs';
 import { createRunRecoveryCoordinator } from '../tools/recovery/run_recovery.mjs';
 import { finalizePendingPaperReview } from '../tools/lib/pending_paper_review.mjs';
@@ -42,6 +42,20 @@ async function setup(t, count = 0) {
   const post = (route, value, headers = {}) => request(route, { method: 'POST', headers: { ...auth, ...headers }, data: JSON.stringify(value) });
   return { ...running, root, reviewRoot, pipeline, request, auth, get, post, write, services, llmCalls: () => llmCalls };
 }
+
+test('System application version reads packaged code metadata, never workspace or compatibility versions', async (t) => {
+  const app = await setup(t);
+  const metadata = path.join(app.root, 'package.json');
+  await app.write(metadata, { name: 'paperecho-core', version: '2.6.0' });
+  assert.equal(await readControlCenterVersion(metadata), '2.6.0');
+  assert.deepEqual((await app.get('/api/version')).json, { version: null }); // Development code has no application version metadata.
+  assert.equal((await app.request('/api/version')).status, 403);
+  for (const value of [{ name: 'paperecho', version: '2.5.0' }, { name: 'paperecho-core', version: 'invalid' }, {}]) {
+    await app.write(metadata, value); assert.equal(await readControlCenterVersion(metadata), null);
+  }
+  await app.write(metadata, '{'); assert.equal(await readControlCenterVersion(metadata), null);
+  assert.equal(await readControlCenterVersion(path.join(app.root, 'missing.json')), null);
+});
 
 test('suggestions API and all counters expose only active rules while durable history stays complete', async (t) => {
   const app = await setup(t);

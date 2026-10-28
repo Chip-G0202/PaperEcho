@@ -282,7 +282,8 @@ async function downloadSupportBundle() {
 async function system() {
   main.append(pageIntro('系统健康 · System Health', '只读本地检查；不会连接外部服务、修改权限、恢复工作流或显示凭据。'));
   const facts = el('dl', undefined, 'status-list');
-  for (const [name, value] of [['版本', 'PaperEcho v2.5'], ['本地服务', '已响应 · 仅本机访问']]) facts.append(el('dt', name), el('dd', value));
+  const { version } = await api('/api/version');
+  for (const [name, value] of [['应用版本', version ? `PaperEcho v${version}` : 'PaperEcho（版本未标定）'], ['本地服务', '已响应 · 仅本机访问']]) facts.append(el('dt', name), el('dd', value));
   main.append(facts);
   const support = el('section', undefined, 'settings-section');
   const supportState = el('p', '尚未导出。', 'meta'); supportState.setAttribute('role', 'status'); supportState.setAttribute('aria-live', 'polite'); supportState.dataset.supportStatus = 'idle';

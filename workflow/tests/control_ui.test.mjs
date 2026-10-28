@@ -13,6 +13,21 @@ test('System Health uses explicit refresh, fixed state labels and accessible rea
   for (const state of ['PASS', 'WARN', 'FAIL', 'UNKNOWN']) assert.ok(system.includes(state));
   assert.doesNotMatch(system, /setInterval|setTimeout|localStorage|sessionStorage|innerHTML/);
 });
+
+test('System renders application metadata version and an honest unknown fallback without changing compatibility copy', async () => {
+  const source = app.slice(app.indexOf('async function system()'), app.indexOf('async function feedback()'));
+  for (const version of ['2.6.0', '2.7.1-test', null]) {
+    const nodes = [];
+    const el = (tag, text) => { const node = { tag, text, dataset: {}, append() {}, setAttribute() {} }; nodes.push(node); return node; };
+    const scope = vm.createContext({ main: { append() {} }, pageIntro: () => ({}), el, button: () => el('button'), supportExportBusy: false,
+      api: async route => { assert.equal(route, '/api/version'); return { version }; } });
+    await vm.runInContext(source + ';system()', scope);
+    assert.ok(nodes.some(node => node.tag === 'dt' && node.text === '应用版本'));
+    assert.ok(nodes.some(node => node.tag === 'dd' && node.text === (version ? `PaperEcho v${version}` : 'PaperEcho（版本未标定）')));
+  }
+  assert.doesNotMatch(source, /PaperEcho v2\.5/);
+  assert.match(app, /PaperEcho v2\.5 的 Web 路径使用个人文库/);
+});
 test('support download selects a destination before POST and handles cancellation, permissions and size safely', async () => {
   const source = app.slice(app.indexOf('async function downloadSupportBundle()'), app.indexOf('async function system()'));
   const flow = []; let aborts = 0; let posts = 0; let blobReads = 0;
@@ -55,7 +70,7 @@ test('sidebar owns L1 and L2 navigation while workspace owns L3 tabs', () => {
 test('sidebar footer offers one accessible GitHub Star link without API or tracking', () => {
   assert.match(html, /<div class="sidebar-footer">[\s\S]*<div class="sidebar-star">[\s\S]*仅本机访问[\s\S]*PaperEcho v2\.5/);
   assert.doesNotMatch(html, /PaperEcho v2\.4/); assert.doesNotMatch(app, /PaperEcho v2\.4/);
-  assert.match(app, /\['版本', 'PaperEcho v2\.5'\]/);
+  assert.match(app, /\['应用版本', version \? `PaperEcho v\$\{version\}`/);
   assert.match(html, /<a href="https:\/\/github\.com\/Chip-G0202\/PaperEcho" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 打开 PaperEcho 仓库">/);
   assert.match(html, /<svg[^>]*aria-hidden="true"[^>]*><path fill="currentColor"/);
   assert.match(html, /<span>GitHub Star<\/span><span aria-hidden="true">★<\/span>/);

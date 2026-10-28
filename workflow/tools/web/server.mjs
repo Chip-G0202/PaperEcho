@@ -13,6 +13,12 @@ export const CONTROL_CENTER_HOST = '127.0.0.1';
 export const CONTROL_CENTER_PORT = 8765;
 export const CONTROL_CENTER_PRODUCT = 'PaperEcho Control Center';
 export const CONTROL_CENTER_ROOT = path.resolve(here, '../../..');
+export async function readControlCenterVersion(metadataUrl = new URL('../../../package.json', import.meta.url)) {
+  try {
+    const metadata = JSON.parse(await fs.readFile(metadataUrl, 'utf8'));
+    return metadata.name === 'paperecho-core' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(metadata.version) ? metadata.version : null;
+  } catch { return null; }
+}
 export function controlCenterInstance(root, context = {}) {
   if (context.layout && context.layout !== 'dev') root = context.userDataRoot;
   return createHash('sha256').update(JSON.stringify([path.resolve(root), context.configPath, context.mode, context.reviewRoot, context.researchRoot, context.localRepository?.root])).digest('hex');
@@ -50,6 +56,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
     services = createControlServices({ root, env, context });
   }
   const instance = controlCenterInstance(root, context);
+  const version = await readControlCenterVersion();
   const dataRoot = context?.userDataRoot || root;
   const startupIdentity = await fs.lstat(dataRoot).then(restoreIdentity, error => { if (error.code === 'ENOENT') return null; throw error; });
   const session = randomBytes(32).toString('hex');
@@ -92,6 +99,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       const cookie = String(req.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
       if (!equal(cookie, session)) return send(403, { error: 'SESSION_REQUIRED' });
       if (req.method === 'GET') {
+        if (decoded === '/api/version') return send(200, { version });
         if (decoded === '/api/doctor') return send(200, await services.doctor.status());
         if (decoded === '/api/setup') return send(200, await services.setup.status());
         if (decoded === '/api/schedule-status') return send(200, await services.schedule.status());
