@@ -9,16 +9,16 @@ import { verifyReleaseArtifact } from './release.mjs';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const base = path.join(repo, 'tests/runs/phase2b');
-export async function packageZip({ root, parent, expectedCommit, inspect, outputParent = base }) {
+export async function packageZip({ root, parent, expectedCommit, inspect, outputParent = base, testOnly = false }) {
   const artifact = await verifyReleaseArtifact({ root, parent, expectedCommit, inspect });
-  if (artifact.dirty) throw new Error('ZIP_DIRTY_ARTIFACT');
+  if (artifact.dirty && testOnly !== true) throw new Error('ZIP_DIRTY_ARTIFACT');
   outputParent = path.resolve(outputParent);
   const relative = path.relative(repo, outputParent);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('ZIP_OUTPUT_BOUNDARY');
   await fs.mkdir(outputParent, { recursive: true });
   if ((await fs.realpath(outputParent)).toLowerCase() !== outputParent.toLowerCase()) throw new Error('ZIP_OUTPUT_BOUNDARY');
   const folder = await fs.mkdtemp(path.join(outputParent, 'zip-'));
-  const name = `PaperEcho-${artifact.appVersion}-win32-x64`;
+  const name = `PaperEcho-${artifact.appVersion}-win32-x64${testOnly === true ? '-TEST-ONLY' : ''}`;
   const zip = path.join(folder, name + '.zip');
   const bytes = await fs.readFile(path.join(root, 'release-manifest.json'));
   const manifest = JSON.parse(bytes);
@@ -32,7 +32,7 @@ export async function packageZip({ root, parent, expectedCommit, inspect, output
   for await (const chunk of createReadStream(zip)) digest.update(chunk);
   const report = { zip, sha256: digest.digest('hex'), sizeBytes: (await fs.stat(zip)).size,
     fileCount: manifest.files.length + 1, artifactId: artifact.artifactId, gitCommit: artifact.gitCommit,
-    evidence: artifact.evidence, layout: 'UNCHANGED_INSTALLED_DEFAULT', release: 'BLOCKED' };
+    evidence: artifact.evidence, layout: 'UNCHANGED_INSTALLED_DEFAULT', release: 'BLOCKED', testOnly: testOnly === true };
   await fs.writeFile(zip + '.sha256', `${report.sha256}  ${name}.zip\n`, { flag: 'wx' });
   await fs.writeFile(path.join(folder, 'zip-report.json'), JSON.stringify(report, null, 2), { flag: 'wx' });
   return report;
@@ -46,5 +46,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   for (const source of manifest.sources) {
     if (!(await fs.readFile(path.join(output, 'resources/core', source))).equals(await fs.readFile(path.join(repo, source)))) throw new Error('ZIP_STALE_SOURCE');
   }
-  console.log(JSON.stringify(await packageZip({ root: output, parent: path.dirname(output), expectedCommit })));
+  console.log(JSON.stringify(await packageZip({ root: output, parent: path.dirname(output), expectedCommit, testOnly: process.argv.includes('--test-only') })));
 }

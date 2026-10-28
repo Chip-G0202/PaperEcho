@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { getCurrentFuseWire, FuseState } from '@electron/fuses';
 import { appVersion, sourceAllowed, fuseConfig } from './package-policy.mjs';
+import { powershell } from './powershell-runtime.mjs';
 
 export const limits = Object.freeze({ files: 20000, totalBytes: 2 * 1024 ** 3, manifestBytes: 8 * 1024 ** 2 });
 const fail = code => { throw new Error(code); };
@@ -71,14 +72,14 @@ async function inventory(root, sources, modules) {
       if (/(^|\/)\.env($|\.)|(^|\/)(?:\.npmrc|\.pypirc|paperecho\.config\.json|.*\.(?:pfx|p12|pem|key|log|pebackup|zip))$/i.test(name)) fail('RELEASE_PRIVATE_CONTENT');
       if (item.isDirectory() && stat.isDirectory()) {
         const core = name.startsWith('resources/core/') ? name.slice('resources/core/'.length) : '';
-        if (!['locales', 'resources', 'resources/core'].includes(name)
+        if (!['locales', 'resources', 'resources/core', 'resources/powershell'].includes(name) && !name.startsWith('resources/powershell/')
           && !sources.some(s => s.startsWith(core + '/'))
           && !modules.some(m => m === core || m.startsWith(core + '/') || core.startsWith(m + '/'))) fail('RELEASE_UNEXPECTED_FILE');
         await walk(file, name + '/'); continue;
       }
       if (!stat.isFile() || stat.nlink !== 1) fail('RELEASE_LINK_REJECTED');
       if (name === 'release-manifest.json') continue;
-      let allowed = native.has(name) || /^locales\/[a-zA-Z0-9_-]+\.pak$/.test(name) || name === 'resources/app.asar';
+      let allowed = native.has(name) || /^locales\/[a-zA-Z0-9_-]+\.pak$/.test(name) || name === 'resources/app.asar' || name.startsWith('resources/powershell/');
       if (name.startsWith('resources/core/')) {
         const core = name.slice('resources/core/'.length);
         allowed = core === 'package.json' || sourceSet.has(core) || modules.some(m => core.startsWith(m + '/'));
@@ -108,6 +109,7 @@ export function peIdentity(bytes) {
   return { arch: 'x64', signature: certificateBytes ? 'UNVERIFIED' : 'NOT_SIGNED' };
 }
 export async function inspectElectron(root) {
+  for (const name of ['pwsh.exe', 'pwsh.dll', 'System.Management.Automation.dll', 'LICENSE.txt', 'ThirdPartyNotices.txt']) await fingerprint(path.join(root, 'resources/powershell', name));
   const exe = path.join(root, 'PaperEcho.exe'), bytes = await fs.readFile(exe);
   const identity = peIdentity(bytes), wire = await getCurrentFuseWire(exe);
   verifyFuseWire(wire);
@@ -145,7 +147,8 @@ async function metadata(root, sources, modules, gitCommit, dirty, builtAt) {
     packageVersion: (await boundedJSON(fileURLToPath(new URL('./package.json', import.meta.url)))).version,
     entrypoints: { gui: 'resources/app.asar', headless: 'resources/core/desktop/electron-poc/headless.mjs' },
     runtime: { owner: 'resources/core/workflow/tools/lib/runtime_config.mjs', layouts: ['installed', 'portable'],
-      installed: 'OS_USER_DATA', portable: 'APPLICATION_DATA_SUBDIRECTORY', cache: 'RUNTIME_ROOT_OWNER' },
+      installed: 'OS_USER_DATA', portable: 'APPLICATION_DATA_SUBDIRECTORY', cache: 'RUNTIME_ROOT_OWNER',
+      powershell: { ...powershell, executable: 'resources/powershell/pwsh.exe' } },
     sources: [...sources].sort(), modules: [...modules].sort() };
 }
 export async function createReleaseManifest({ root, parent, sources, modules, gitCommit, dirty, builtAt, inspect = inspectElectron }) {

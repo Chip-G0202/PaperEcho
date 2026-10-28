@@ -47,6 +47,10 @@ npm run smoke:packaged --prefix desktop/electron-poc
 
 Windows ZIP 交付：在有当前 HEAD 的 clean unpacked 构建后运行 `npm run package:zip:win --prefix desktop/electron-poc`。此命令不重建 Electron；复用 Release manifest 的文件、边界、私有内容、ASAR 和 fuse 校验，并拒绝与当前工作树源码不一致的产物。PS7/.NET 按清单创建 ZIP，再逐项解压读取核对长度和 SHA256；输出至独立 `tests/runs/phase2b/zip-*`，含 ZIP、`.sha256` 与 `zip-report.json`。不覆盖旧包，不含用户数据，不上传或放行 Release。
 
+Windows 构建将官方自包含 PowerShell ZIP 放入 `resources/powershell`，无需用户安装 PS7、.NET 或设置 PATH。版本、官方 URL 与 SHA256 固定在 `desktop/electron-poc/powershell-runtime.mjs`；构建核对归档哈希、路径、关键文件及实际 Core 版本，保留 MIT LICENSE 与 ThirdPartyNotices。GUI/Headless 的同一 bootstrap 在读取启动位置记录前绑定包内 `pwsh.exe`，覆盖外部 PWSH_PATH；开发脚本仍使用原有显式 PWSH_PATH/PATH。启动失败分类为 `CREDENTIAL_ACL_RUNTIME_UNAVAILABLE`，非预期退出、超时或不可验证结果为 `CREDENTIAL_ACL_CHECK_FAILED`；只有实际 Owner/DACL 断言失败才为 `CREDENTIAL_ACL_UNSAFE`。这些错误均拒绝写入，不迁移数据、不修改全局环境。
+提交前隔离验收可在同一 ZIP 命令追加 `-- --test-only`，生成明确命名的 TEST-ONLY 候选包；仍验证完整清单、源码、哈希、ASAR及fuses，保留 dirty 状态和 Release BLOCKED。默认命令继续拒绝未提交产物，候选包不作为正式发行包。
+Windows 资源管理器解压较深路径可能报 `0x80010135`；请选择较短且全新的用户可写目标目录，避免同名长目录重复嵌套。不得跳过运行时 DLL 继续启动，也不需要修改系统长路径或安全策略。
+
 ZIP 解压至新目录后，可按包内 `release-manifest.json` 的逐文件长度/SHA256 核验，再直接运行 `PaperEcho.exe`。ZIP 只是程序封装：零参数仍使用 Installed/default workspace，**不会自动启用 Portable 数据布局**。真实解压启动及 clean-machine 是不同 Gate；签名等发行条件仍须独立验收。
 
 GUI 运行产物中的 `PaperEcho.exe`；独立无窗口入口为 `PaperEcho-headless.cmd --check --mode local`（或显式选择 `desktop` / `web`）。Headless 复用 Shared Runner、preflight 和原 workflow entry，退出码沿用 Runner，无系统 Node/npm 依赖。Packaged 缺省为 Installed，未指定数据根/id 时使用 `default` workspace；GUI 首次配置通过下述向导完成。显式数据根/id 仍优先，Portable 需显式设置 `PAPERECHO_LAYOUT=portable`。不迁移数据或自动生成文献输入。

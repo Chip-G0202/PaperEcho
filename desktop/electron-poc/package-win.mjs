@@ -8,6 +8,7 @@ import { flipFuses, getCurrentFuseWire, FuseV1Options as F, FuseState } from '@e
 import { appVersion, sourceAllowed, fuseConfig } from './package-policy.mjs';
 export { sourceAllowed, fuseConfig } from './package-policy.mjs';
 import { createReleaseManifest } from './release.mjs';
+import { bundlePowerShell } from './powershell-runtime.mjs';
 
 export const repo = fileURLToPath(new URL('../../', import.meta.url));
 export async function build() {
@@ -44,6 +45,7 @@ export async function build() {
     extraResource: [core], prune: false, out: path.join(stage, 'output'), tmpdir: path.join(stage, 'tmp'),
     download: { cacheRoot: path.join(repo, 'tests/runs/electron-cache'), checksums } });
   const output = outputs[0]; const exe = path.join(output, 'PaperEcho.exe');
+  await bundlePowerShell(path.join(output, 'resources/powershell'));
   await flipFuses(exe, fuseConfig);
   const wire = await getCurrentFuseWire(exe);
   for (const key of Object.values(F).filter(x => typeof x === 'number')) assert.equal(wire[key], fuseConfig[key] ? FuseState.ENABLE : FuseState.DISABLE);

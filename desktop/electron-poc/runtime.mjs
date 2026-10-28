@@ -8,8 +8,20 @@ import { resolveStartupEnvironment } from '../../workflow/tools/lib/startup_loca
 export async function preparePackagedStartup(options = {}) {
   const core = fileURLToPath(new URL('../../', import.meta.url));
   const applicationRoot = path.resolve(core, '../..');
+  bindPackagedPowerShell({ core });
   Object.assign(process.env, await resolveStartupEnvironment({ applicationRoot, env: process.env }));
   return preparePackagedRuntime(options);
+}
+
+export function bindPackagedPowerShell({ core, env = process.env, platform = process.platform }) {
+  if (platform !== 'win32') return;
+  const executable = path.resolve(core, '../powershell/pwsh.exe');
+  try {
+    if (!fs.statSync(executable).isFile() || fs.realpathSync(executable).toLowerCase() !== executable.toLowerCase()) throw new Error();
+  } catch { throw new Error('CREDENTIAL_ACL_RUNTIME_UNAVAILABLE'); }
+  // Packaged GUI and Headless pin the shipped runtime before reading protected state.
+  env.PWSH_PATH = executable;
+  return executable;
 }
 
 // Explicit bootstrap argv is shared by native OS tasks and the console entry.

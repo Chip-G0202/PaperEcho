@@ -134,7 +134,7 @@ export class SecretService {
       // Native ACL checks can exceed the shared 5s default; waiting remains bounded.
       }, { timeoutMs: 15000, staleMs: Infinity }); // Never steal a credential lock from a slow live writer.
     } catch (error) {
-      const allowed = ['CREDENTIAL_EXTERNALLY_MANAGED', 'CREDENTIAL_ENV_FORMAT_UNSUPPORTED', 'CREDENTIAL_ENV_PATH_UNSAFE', 'CREDENTIAL_VALUE_INVALID', 'CREDENTIAL_ACL_UNSAFE', 'CREDENTIAL_CONCURRENT_CHANGE', 'CREDENTIAL_RECOVERY_REQUIRED'];
+      const allowed = ['CREDENTIAL_EXTERNALLY_MANAGED', 'CREDENTIAL_ENV_FORMAT_UNSUPPORTED', 'CREDENTIAL_ENV_PATH_UNSAFE', 'CREDENTIAL_VALUE_INVALID', 'CREDENTIAL_ACL_UNSAFE', 'CREDENTIAL_ACL_RUNTIME_UNAVAILABLE', 'CREDENTIAL_ACL_CHECK_FAILED', 'CREDENTIAL_CONCURRENT_CHANGE', 'CREDENTIAL_RECOVERY_REQUIRED'];
       throw new Error(allowed.includes(error.message) ? error.message : 'CREDENTIAL_WRITE_FAILED');
     }
   }

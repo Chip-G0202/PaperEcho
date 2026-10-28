@@ -9,7 +9,7 @@ import { createReleaseManifest } from '../../desktop/electron-poc/release.mjs';
 import { packageZip } from '../../desktop/electron-poc/package-zip.mjs';
 
 const commit = 'a'.repeat(40), inspect = async () => ({ arch: 'x64', signature: 'NOT_SIGNED', fuses: 'MOCK', asar: 'MOCK' });
-async function fixture(t) {
+async function fixture(t, dirty = false) {
   const base = path.resolve('tests/runs/zip-tests'); await fs.mkdir(base, { recursive: true });
   const parent = await fs.mkdtemp(path.join(base, '包 空间-')), root = path.join(parent, 'application');
   t.after(() => fs.rm(parent, { recursive: true, force: true }));
@@ -19,10 +19,21 @@ async function fixture(t) {
     'resources/core/node_modules/dummy/package.json': '{"name":"dummy","version":"1.0.0"}', 'resources/core/node_modules/dummy/native.node': 'native dummy bytes' };
   for (const source of sources) files['resources/core/' + source] = 'export const dummy = true;';
   for (const [file, value] of Object.entries(files)) { await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true }); await fs.writeFile(path.join(root, file), value); }
-  const manifest = await createReleaseManifest({ root, parent, sources, modules: ['node_modules/dummy'], gitCommit: commit, dirty: false, builtAt: '2026-10-27T00:00:00.000Z', inspect });
+  const manifest = await createReleaseManifest({ root, parent, sources, modules: ['node_modules/dummy'], gitCommit: commit, dirty, builtAt: '2026-10-27T00:00:00.000Z', inspect });
   await fs.writeFile(path.join(root, 'release-manifest.json'), JSON.stringify(manifest));
-  return { root, parent, manifest, package: () => packageZip({ root, parent, expectedCommit: commit, inspect, outputParent: path.join(parent, 'output') }) };
+  return { root, parent, manifest, package: (options = {}) => packageZip({ root, parent, expectedCommit: commit, inspect, outputParent: path.join(parent, 'output'), ...options }) };
 }
+
+test('uncommitted payload requires explicit TEST-ONLY delivery and never becomes a clean release', async t => {
+  const f = await fixture(t, true);
+  await assert.rejects(f.package(), /ZIP_DIRTY_ARTIFACT/);
+  const result = await f.package({ testOnly: true });
+  assert.equal(result.testOnly, true); assert.equal(result.release, 'BLOCKED');
+  assert.match(path.basename(result.zip), /-TEST-ONLY\.zip$/);
+  const zip = await JSZip.loadAsync(await fs.readFile(result.zip));
+  const record = JSON.parse(await zip.file('PaperEcho-2.6.0-win32-x64-TEST-ONLY/release-manifest.json').async('string'));
+  assert.equal(record.dirty, true);
+});
 test('ZIP preserves every manifest resource and native dependency with exact bytes and hashes', async t => {
   const f = await fixture(t), result = await f.package();
   const bytes = await fs.readFile(result.zip), zip = await JSZip.loadAsync(bytes);

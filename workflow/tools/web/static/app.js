@@ -22,6 +22,10 @@ const errorMessages = { SETTING_VALUE_INVALID: '请检查字段格式或允许�
 // Keep the existing API/canonical values; the stored learning action is unchanged.
 Object.assign(errorMessages, { SESSION_REQUIRED: '会话已失效，请刷新页面后重试。', CSRF_REQUIRED: '安全校验未通过，请刷新页面后重试。', ORIGIN_REJECTED: '请求来源未通过安全校验。', CREDENTIAL_ACL_UNSAFE: '文件权限无法安全确认，凭据未保存，请在原配置入口检查权限。', CREDENTIAL_CONCURRENT_CHANGE: '凭据文件已被其他操作更改，请重新读取后重试。', CREDENTIAL_RECOVERY_REQUIRED: '凭据恢复未完成，请通过原配置入口检查后再继续。', CREDENTIAL_KEY_NOT_ALLOWED: '此凭据字段不允许修改。' });
 const feedbackLabels = { highly_relevant: '升级', relevant: '不变', maybe: '降级', irrelevant: '排除', do_not_recommend_similar: '排除（原强负反馈）' };
+Object.assign(errorMessages, {
+  CREDENTIAL_ACL_RUNTIME_UNAVAILABLE: '安全校验运行时不可用，未保存。请完整解压官方程序包后重试；无需修改目录权限。',
+  CREDENTIAL_ACL_CHECK_FAILED: '安全校验未能完成，未保存。请关闭并重启程序后重试；不要放宽目录权限。',
+});
 const feedbackActions = ['highly_relevant', 'relevant', 'maybe', 'irrelevant'];
 const manualGrades = ['A', 'B', 'C', 'D'];
 const statusLabels = { pending: '待确认', candidate: '候选', accepted: '已接受', revised: '已修改接受', rejected: '已拒绝', superseded: '已被替代', expired: '已过期' };
@@ -1015,7 +1019,7 @@ async function setup() {
               document.querySelectorAll('button,input,select,textarea,a').forEach(node => { if ('disabled' in node) node.disabled = true; else node.setAttribute('aria-disabled', 'true'); });
               return;
             }
-            notice.textContent = result.status === 'cancelled' ? '已取消，数据位置未改变。' : `目录未切换：${result.error || 'STARTUP_SELECTION_FAILED'}。请选择独立、可写的空目录，或保留默认位置。`;
+            notice.textContent = result.status === 'cancelled' ? '已取消，数据位置未改变。' : `目录未切换：${errorMessages[result.error] || '请选择独立、可写的空目录，或保留默认位置。'}`;
           } catch { pending = true; section.replaceChildren(el('h2', '需要重新启动'), el('p', '未确认重新启动。请关闭并重新打开 PaperEcho，核对实际数据位置；不要重复保存。')); }
           finally { if (!pending) controls.forEach(([node, disabled]) => { node.disabled = disabled; }); }
         });

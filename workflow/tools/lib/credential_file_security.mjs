@@ -4,10 +4,10 @@ import { promisify } from 'node:util';
 
 // Windows DACLs, not POSIX mode bits, protect credentials on NTFS. Unknown
 // principals fail closed rather than removing an existing legitimate user's access.
-const aclScript = `
+export const windowsCredentialAclScript = `
 $ErrorActionPreference = 'Stop'
 try {
-  if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'runtime' }
+  if ($PSVersionTable.PSVersion.Major -lt 7 -or $PSVersionTable.PSEdition -ne 'Core') { throw 'runtime' }
   $file = $env:PAPERECHO_CREDENTIAL_FILE
   $source = $env:PAPERECHO_CREDENTIAL_ACL_SOURCE
   $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -30,6 +30,7 @@ public static class CredentialAccountType {
   }
 }
 '@
+  if ($owner.Value -notin @($identity.Value, 'S-1-5-18', 'S-1-5-32-544') -and -not [CredentialAccountType]::IsUser($owner)) { throw 'unsupported owner' }
   foreach ($rule in $rules) {
     if ([CredentialAccountType]::IsUser($rule.IdentityReference)) { $trusted += $rule.IdentityReference.Value }
   }
@@ -54,8 +55,18 @@ public static class CredentialAccountType {
     if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $trusted) { throw 'broad permissions' }
   }
   [Console]::Out.Write('secure')
-} catch { [Console]::Error.Write('CREDENTIAL_ACL_UNSAFE'); exit 1 }
+} catch {
+  $code = if ($_.Exception.Message -eq 'runtime') { 'CREDENTIAL_ACL_RUNTIME_UNAVAILABLE' }
+    elseif ($_.Exception.Message -in @('unsupported owner', 'unsupported principal', 'inherited permissions', 'broad permissions')) { 'CREDENTIAL_ACL_UNSAFE' }
+    else { 'CREDENTIAL_ACL_CHECK_FAILED' }
+  [Console]::Error.Write($code); exit 1
+}
 `;
+export function credentialAclFailure(error) {
+  if (['ENOENT', 'EACCES', 'EPERM', 'ENOEXEC'].includes(error.code)) return 'CREDENTIAL_ACL_RUNTIME_UNAVAILABLE';
+  if (error.code === 1 && ['CREDENTIAL_ACL_UNSAFE', 'CREDENTIAL_ACL_RUNTIME_UNAVAILABLE'].includes(error.stderr)) return error.stderr;
+  return 'CREDENTIAL_ACL_CHECK_FAILED';
+}
 export async function credentialSecurityRuntimeAvailable() {
   if (process.platform !== 'win32') return true;
   try {
@@ -73,7 +84,7 @@ export async function secureCredentialFile(file, { source = '', checkOnly = fals
   for (const name of ['SystemRoot', 'PATH', 'TEMP', 'TMP', 'USERPROFILE']) if (process.env[name]) env[name] = process.env[name];
   Object.assign(env, { PAPERECHO_CREDENTIAL_FILE: file, PAPERECHO_CREDENTIAL_ACL_SOURCE: source, PAPERECHO_CREDENTIAL_ACL_ACTION: checkOnly ? 'check' : 'secure' });
   try {
-    const result = await promisify(execFile)(process.env.PWSH_PATH || 'pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(aclScript, 'utf16le').toString('base64')], { env, windowsHide: true, timeout: 15000, maxBuffer: 1024 });
+    const result = await promisify(execFile)(process.env.PWSH_PATH || 'pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsCredentialAclScript, 'utf16le').toString('base64')], { env, windowsHide: true, timeout: 15000, maxBuffer: 1024 });
     if (result.stdout !== 'secure') throw new Error();
-  } catch { throw new Error('CREDENTIAL_ACL_UNSAFE'); }
+  } catch (error) { throw new Error(credentialAclFailure(error)); }
 }
