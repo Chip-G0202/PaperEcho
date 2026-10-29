@@ -14,6 +14,7 @@ import { startControlCenter } from '../tools/web/server.mjs';
 import { readBoundedJson } from '../tools/lib/atomic_json.mjs';
 import { createNotificationReceipt } from '../tools/stage5/email_receipt.mjs';
 import { RuntimeLog } from '../tools/lib/runtime_logging.mjs';
+import { WindowsTaskScheduler } from '../tools/lib/windows_task_scheduler.mjs';
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 async function write(file, value) { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(value)); }
 async function snapshot(root) {
@@ -145,8 +146,14 @@ test('bounded history, unreadable and unsafe linked files never become PASS', as
   await assert.rejects(readBoundedJson(f.data, path.join(linked, 'private.json')), /UNSAFE/);
 });
 test('CLI and authenticated UI share status, exit semantics, workspace isolation and zero writes', async t => {
-  const f = await fixture(t); const other = await fixture(t); await fs.rm(path.join(other.data, 'config/paperecho.config.json'));
+  const f = await schedulerFixture(t); const other = await fixture(t); await fs.rm(path.join(other.data, 'config/paperecho.config.json'));
+  const execute = WindowsTaskScheduler.prototype.execute;
+  t.mock.method(WindowsTaskScheduler.prototype, 'execute', function (operation, spec) {
+    assert.equal(operation, 'query');
+    return execute.call(new WindowsTaskScheduler({ transport: async () => schedulerResponse() }), operation, spec);
+  });
   const before = await snapshot(f.root); const ui = await f.services.doctor.status(); let output = '';
+  assert.equal(check(ui, 'scheduler.os').status, 'PASS');
   const code = await main(['--doctor'], { env: f.env, cwd: f.app, stdout: { write: text => output += text } });
   assert.deepEqual(JSON.parse(output), ui); assert.equal(code, ui.status === 'FAIL' ? 2 : ui.status === 'UNKNOWN' ? 3 : 0);
   assert.equal(check(await diagnostic(other).status(), 'configuration').status, 'FAIL'); assert.equal(check(ui, 'configuration').status, 'PASS');
@@ -166,6 +173,97 @@ test('CLI and authenticated UI share status, exit semantics, workspace isolation
   const response = await fetch(server.url + '/api/doctor', { headers: { cookie } }); assert.equal(response.status, 200); assert.deepEqual(await response.json(), ui);
   assert.deepEqual(await snapshot(f.root), before);
   output = ''; assert.equal(await main(['--doctor', '--run'], { env: f.env, cwd: f.app, stdout: { write: text => output += text } }), 2);
+});
+
+async function schedulerFixture(t, layout = 'installed') {
+  const f = await fixture(t, layout, 'desktop');
+  const file = path.join(f.data, 'config/paperecho.config.json');
+  f.value = { ...JSON.parse(await fs.readFile(file)), schemaVersion: 6, profile: 'standard',
+    scheduler: { schemaVersion: 1, enabled: true, time: '15:00', timezone: 'Asia/Shanghai' } };
+  await write(file, f.value); return f;
+}
+const schedulerResponse = (extra = {}) => ({ schemaVersion: 1, status: 'PASS', exists: true, currentUser: true,
+  leastPrivilege: true, interactiveToken: true, enabled: true, definitionMatches: true, ...extra });
+
+test('OS scheduler diagnostics query only the canonical task, remain advisory and preserve business checks (mock OS)', async t => {
+  const cases = [
+    ['enabled', true, {}, 'PASS'], ['missing', true, { exists: false }, 'WARN'],
+    ['disabled in OS', true, { enabled: false }, 'WARN'], ['definition mismatch', true, { definitionMatches: false }, 'WARN'],
+    ['disabled and absent', false, { exists: false }, 'PASS'], ['disabled and installed', false, { enabled: false }, 'PASS'],
+    ['unexpectedly enabled', false, {}, 'WARN'], ['wrong user', true, { currentUser: false }, 'UNKNOWN'],
+    ['elevated task', true, { leastPrivilege: false }, 'UNKNOWN'], ['wrong logon type', true, { interactiveToken: false }, 'UNKNOWN'],
+    ['malformed response', true, null, 'UNKNOWN'], ['unconfirmed definition', true, { definitionMatches: undefined }, 'UNKNOWN'],
+    ['unconfirmed enabled', true, { enabled: undefined }, 'UNKNOWN'],
+  ];
+  for (const layout of ['installed', 'portable']) {
+    const f = await schedulerFixture(t, layout);
+    for (const [name, enabled, extra, expected] of cases) await t.test(`${layout}: ${name}`, async () => {
+      await write(path.join(f.data, 'config/paperecho.config.json'), { ...f.value, scheduler: { ...f.value.scheduler, enabled } });
+      const before = await snapshot(f.root); let queries = 0, preflights = 0;
+      const report = await diagnostic(f, { platform: 'win32',
+        preflight: async () => { assert.equal(++preflights, 1, 'no recursive preflight'); return { canRun: true, requiredMissing: [], optionalMissing: [], featureMissing: [] }; },
+        schedulerTransport: async request => {
+          queries++; assert.equal(request.operation, 'query'); assert.equal(request.definition, undefined);
+          assert.equal(request.sandboxOnly, false); assert.equal(request.triggerEnabled, enabled);
+          assert.ok(request.arguments.includes('--scheduled-daily')); assert.ok(request.arguments.includes(f.data));
+          return extra === null ? null : schedulerResponse({ ...extra, xml: 'dummy-private-secret', path: f.root });
+        } }).status();
+      const result = check(report, 'scheduler.os');
+      assert.equal(queries, 1); assert.equal(preflights, 1); assert.equal(result.status, expected);
+      assert.equal(result.blocking, false); assert.equal(report.canRun, true);
+      assert.equal(check(report, 'workflow.scheduleClaim').status, 'PASS');
+      assert.doesNotMatch(JSON.stringify(result), /dummy-private-secret|<Task|--scheduled-daily/); assert.ok(!JSON.stringify(result).includes(f.root));
+      if (!enabled && extra?.exists === false) assert.match(result.summary, /未注册/);
+      if (expected !== 'PASS') assert.ok(result.actionableHint);
+      assert.deepEqual(await snapshot(f.root), before);
+    });
+  }
+});
+
+test('OS scheduler query failures are UNKNOWN without private exception details or business blocking (mock OS)', async t => {
+  const f = await schedulerFixture(t);
+  for (const code of ['EACCES', 'SCHEDULER_OS_OPERATION_FAILED', 'ETIMEDOUT']) {
+    const before = await snapshot(f.root);
+    const report = await diagnostic(f, { platform: 'win32', schedulerTransport: async request => {
+      assert.equal(request.operation, 'query'); throw Object.assign(new Error(`dummy-private-token ${f.root}`), { code });
+    } }).status();
+    const result = check(report, 'scheduler.os'); assert.equal(result.status, 'UNKNOWN'); assert.equal(result.blocking, false);
+    assert.ok(!JSON.stringify(result).includes(f.root)); assert.doesNotMatch(JSON.stringify(result), /dummy-private|EACCES|ETIMEDOUT/);
+    assert.deepEqual(await snapshot(f.root), before);
+  }
+});
+
+test('OS scheduler inapplicable, missing and invalid configuration never queries OS or invents registration (mock OS)', async t => {
+  const f = await schedulerFixture(t), local = await fixture(t), dev = await schedulerFixture(t, 'dev');
+  let forbiddenCalls = 0;
+  const poison = async () => { forbiddenCalls++; assert.fail('OS query forbidden'); };
+  const preflight = await diagnostic(f, { platform: 'win32', schedulerTransport: poison }).status({ queryOsScheduler: false });
+  assert.equal(check(preflight, 'scheduler.os').status, 'UNKNOWN'); assert.equal(check(preflight, 'configuration').status, 'PASS');
+  assert.equal(check(preflight, 'workflow.scheduleClaim').status, 'PASS');
+  for (const [value, options, expected] of [[local, {}, 'PASS'], [dev, {}, 'PASS'], [f, { platform: 'darwin' }, 'UNKNOWN'],
+    [f, { platform: 'linux' }, 'UNKNOWN']]) {
+    const result = check(await diagnostic(value, { platform: 'win32', schedulerTransport: poison, ...options }).status(), 'scheduler.os');
+    assert.equal(result.status, expected); assert.equal(result.blocking, false); assert.match(result.summary, /未查询/);
+  }
+  for (const value of [null, { ...f.value, schemaVersion: 999 }, { ...f.value, mode: null },
+    { ...f.value, scheduler: undefined }, { ...f.value, scheduler: { ...f.value.scheduler, enabled: 'true' } }]) {
+    const file = path.join(f.data, 'config/paperecho.config.json');
+    if (value === null) await fs.rm(file); else await write(file, value);
+    const before = await snapshot(f.root);
+    assert.equal(check(await diagnostic(f, { platform: 'win32', schedulerTransport: poison }).status(), 'scheduler.os').status, 'UNKNOWN');
+    assert.deepEqual(await snapshot(f.root), before);
+  }
+  assert.equal(forbiddenCalls, 0);
+});
+
+test('scheduler preflight excludes only the OS advisory query and retains native timeout ownership', async () => {
+  const source = await fs.readFile(path.join(repo, 'workflow/tools/lib/control_doctor_service.mjs'), 'utf8');
+  assert.doesNotMatch(source, /inspectOsSchedule|manageOsSchedule/);
+  assert.equal((source.match(/\.execute\(/g) || []).length, 1); assert.match(source, /\.execute\('query', spec\)/);
+  const adapter = await fs.readFile(path.join(repo, 'workflow/tools/lib/windows_task_scheduler.mjs'), 'utf8');
+  assert.match(adapter, /timeout: 30000/); assert.match(source, /}, false, 35000\)/);
+  const preflight = await fs.readFile(path.join(repo, 'workflow/tools/lib/os_scheduler.mjs'), 'utf8');
+  assert.match(preflight, /doctor\.status\(\{ queryOsScheduler: false }\)/);
 });
 
 async function rssRun(f, items, { runId = 'rss-new', startedAt = '2026-10-26T00:00:00Z', artifactPath = 'pipeline/rss-new', complete = true } = {}) {

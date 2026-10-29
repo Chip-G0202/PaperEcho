@@ -98,7 +98,7 @@ export async function inspectOsSchedule({ env = process.env, applicationRoot, pl
     add('scheduler.application', 'PASS');
     const context = await resolveApplicationRuntimeContext({ cwd: paths.applicationRoot, env, readOnly: true });
     const services = createControlServices({ root: paths.applicationRoot, env, context });
-    const doctor = await services.doctor.status();
+    const doctor = await services.doctor.status({ queryOsScheduler: false });
     for (const check of doctor.checks.filter(c => c.blocking)) add(check.checkId, check.status === 'WARN' ? 'UNKNOWN' : check.status);
     const secrets = await services.secrets.health();
     add('scheduler.secretSource', secrets.credentials.some(c => c.configured && ['external-managed', 'unknown'].includes(c.storageClass)) ? 'UNKNOWN' : 'PASS');

@@ -7,6 +7,8 @@ import { runPreflight } from '../runner/preflight.mjs';
 import { resolveRuntimePaths, prepareRuntimePaths, resolveApplicationRuntimeContext } from './runtime_config.mjs';
 import { readBoundedJson, boundedDirectory } from './atomic_json.mjs';
 import { ControlScheduleStatusService } from './control_schedule_status_service.mjs';
+import { scheduleSpec } from './os_scheduler.mjs';
+import { WindowsTaskScheduler } from './windows_task_scheduler.mjs';
 import { RuntimeLog } from './runtime_logging.mjs';
 import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
 import { getPublicationVenue } from './journal_name_cleaner.mjs';
@@ -60,10 +62,10 @@ async function bounded(task, milliseconds) {
 
 // Only summaries cross this boundary. Never return owner objects or exception text.
 export class DoctorService {
-  constructor({ config, secrets, research, review, context, env, fsApi = fs, preflight = runPreflight }) {
-    Object.assign(this, { config, secrets, research, review, context, env, fsApi, preflight });
+  constructor({ config, secrets, research, review, context, env, fsApi = fs, preflight = runPreflight, schedulerTransport, platform = process.platform }) {
+    Object.assign(this, { config, secrets, research, review, context, env, fsApi, preflight, schedulerTransport, platform });
   }
-  async status({ signal } = {}) {
+  async status({ signal, queryOsScheduler = true } = {}) {
     const checks = [];
     const add = (checkId, status, summary, actionableHint = '', blocking = false) => checks.push({ checkId, status,
       severity: blocking ? 'blocking' : status === 'PASS' ? 'info' : 'advisory', summary, actionableHint, blocking });
@@ -163,6 +165,31 @@ export class DoctorService {
       add('workflow.scheduleClaim', state.status === 'invalid' || state.currentRun?.state === 'unconfirmed' ? 'UNKNOWN' : state.status === 'recovery_required' ? 'WARN' : 'PASS',
         state.currentRun?.state === 'running' ? 'Stage0 已登记任务仍在运行' : state.status === 'unsupported' ? 'Local 路径不使用 Stage0 调度 claim' : state.status === 'invalid' ? 'Stage0 claim 或登记状态无法确认' : '已检查当前计划槽的 Stage0 claim', '不注册调度、不释放 claim、不恢复工作流。');
     });
+    await inspect('scheduler.os', async () => {
+      if (!queryOsScheduler || this.platform !== 'win32') {
+        add('scheduler.os', 'UNKNOWN', '本次检查未查询 OS 调度任务', '平台验收与本地预检分别记录；不据此推断任务已注册。'); return;
+      }
+      if (!paths || !resolved) throw new Error('SCHEDULER_CONFIGURATION_UNCONFIRMED');
+      if (resolved.options.mode === 'local' || paths.layout === 'dev') {
+        add('scheduler.os', 'PASS', '当前运行路径或开发布局不适用正式 OS 调度；未查询任务'); return;
+      }
+      const spec = scheduleSpec({ paths, platform: this.platform,
+        config: { ...resolved.config, mode: resolved.options.mode, profile: resolved.options.profile } });
+      const state = await new WindowsTaskScheduler({ env: this.env, transport: this.schedulerTransport }).execute('query', spec).catch(() => null);
+      if (!state || state.exists && (typeof state.definitionMatches !== 'boolean' || typeof state.enabled !== 'boolean')) {
+        add('scheduler.os', 'UNKNOWN', '无法确认 Windows 调度任务状态', '核对当前用户任务的归属、查询权限和 Task Scheduler 服务；Doctor 不自动修复。'); return;
+      }
+      if (!state.exists) {
+        add('scheduler.os', spec.enabled ? 'WARN' : 'PASS', spec.enabled ? '计划已启用，但 Windows 调度任务不存在' : '计划未启用，Windows 调度任务未注册',
+          spec.enabled ? '通过显式 Scheduler 管理入口检查并注册；Doctor 不自动修复。' : ''); return;
+      }
+      const matches = state.definitionMatches && state.enabled === spec.enabled;
+      add('scheduler.os', matches ? 'PASS' : 'WARN', state.enabled !== spec.enabled ? 'Windows 调度任务启用状态与当前配置不一致'
+        : !state.definitionMatches ? 'Windows 调度任务定义与当前配置不匹配'
+          : spec.enabled ? 'Windows 调度任务已启用，定义及当前用户归属匹配' : 'Windows 调度任务已停用，定义及当前用户归属匹配',
+        matches ? '' : '通过显式 Scheduler 管理入口核对任务和配置；Doctor 不修改或启动任务。');
+      // The native query owns a 30s child-process timeout; do not abandon it at the default 2.5s inspection limit.
+    }, false, 35000);
     await inspect('rss.venue', async () => {
       if (!resolved) throw new Error('RSS_CONFIGURATION_UNCONFIRMED');
       if (resolved.options.mode === 'local') { add('rss.venue', 'PASS', 'Local 路径不执行 RSS 检索；未统计 RSS。'); return; }
