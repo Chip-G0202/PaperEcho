@@ -8,6 +8,7 @@
     "start": "electron .",
     "package:win": "node package-win.mjs",
     "package:zip:win": "node package-zip.mjs",
+    "package:dmg:mac": "node package-mac-dmg.mjs",
     "release:preflight": "node release.mjs",
     "smoke:packaged": "node ../../tests/helpers/packaged_runner.mjs"
   },
