@@ -54,6 +54,7 @@ export async function migrationFixture(t, options = {}) {
     receipt.status = 'accepted'; receipt.attempts = 1;
     await writeUpgradeFixture(path.join(runRoot, runId, 'stage5/email_receipt.json'), validateNotificationReceipt(receipt));
   }
+  await options.prepareSource?.(f);
   await writeUpgradeFixture(path.join(root, 'synthetic-workspace.json'), { schemaVersion: 1, kind: 'paperecho-synthetic-upgrade', fixtureId: path.basename(root), sourceLayout: f.input.sourceLayout, targetLayout: f.input.targetLayout });
   const make = extra => new UpgradeMigrationService({ env: f.hostEnv, ...extra });
   const beforeBackup = await make().inspect({ ...f.input });

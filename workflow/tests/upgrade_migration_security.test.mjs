@@ -5,9 +5,77 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { migrationFixture, upgradeFileHashes } from '../../tests/helpers/upgrade_migration_fixture.mjs';
-import { inspectRestoreTransaction } from '../tools/recovery/restore_transaction_status.mjs';
+import { inspectRestoreTransaction, assertRestoreWritable } from '../tools/recovery/restore_transaction_status.mjs';
 import { validateOperationLedger } from '../tools/recovery/operation_ledger.mjs';
 import { validateNotificationReceipt } from '../tools/stage5/email_receipt.mjs';
+import { ResearchEvaluationService } from '../tools/lib/research_evaluation_service.mjs';
+import { RuleSuggestionService } from '../tools/lib/control_rule_suggestion_service.mjs';
+import { createRunRecoveryCoordinator } from '../tools/recovery/run_recovery.mjs';
+import { blockMigrationNetwork } from '../../tests/helpers/upgrade_migration_process.mjs';
+
+test('schema5 upgrade preserves prepared/published feedback fingerprints and reviewed history without replay', async t => {
+  const network = blockMigrationNetwork();
+  t.after(() => { network.restore(); assert.equal(network.calls, 0); });
+  let calls = 0;
+  const f = await migrationFixture(t, { schema: 5, history: true, prepareSource: async source => {
+    const reviewRoot = path.join(source.data, 'review_results/文献评价');
+    const research = new ResearchEvaluationService({ root: source.data, reviewRoot, env: source.env, llmClient: async () => {
+      calls++; return { rules_added: [], rules_deleted: [], rules_changed: [], keywords_added: { required: [], optional: [`compatibility_term_${calls}`], negative: [] }, keywords_removed: [], negative_keywords_added: [], unmapped_feedback: [] };
+    } });
+    for (const state of ['published', 'prepared']) {
+      const runId = `compat-${state}`;
+      await research.submit({ requestId: runId, text: `合成研究反馈 ${state}` });
+      const coordinator = await createRunRecoveryCoordinator({ runRoot: path.join(reviewRoot, 'runs'), runId, mode: 'web', profile: 'standard', launcherId: 'compatibility-fixture',
+        configHash: source.context.backupConfigHash, inputHash: 'b'.repeat(64), artifactPath: path.join(reviewRoot, 'runs', runId, 'input_artifact.json') });
+      await coordinator.persistArtifact([], []);
+      assert.equal((await research.prepare({ store: coordinator.store })).status, 'prepared');
+      for (const stage of ['stage1', 'stage2_writeback', 'stage3_translation', 'stage4_exports']) await coordinator.store.setStage(stage, 'verified');
+      await coordinator.store.setRunStatus('completed', 'completed');
+      if (state === 'published') {
+        assert.equal((await research.publish({ store: coordinator.store })).status, 'published');
+        const rules = new RuleSuggestionService({ root: source.data, reviewRoot, env: source.env });
+        const suggestion = (await rules.list()).find(item => item.feedback_event_ids?.includes(runId));
+        assert.ok(suggestion); await rules.decide({ id: suggestion.id, decision: 'rejected', humanApproval: true });
+      }
+    }
+    await research.submit({ requestId: 'compat-pending', text: '合成待处理反馈' });
+  } });
+  assert.equal(calls, 2);
+  const archive = await fs.readFile(f.backup), before = await upgradeFileHashes(f.data);
+  let guarded = false;
+  const result = await f.execute({ service: { hook: async phase => {
+    if (phase !== 'PREPARED') return; guarded = true;
+    assert.equal(inspectRestoreTransaction(f.data).blocking, true); assert.equal(inspectRestoreTransaction(f.target).blocking, true);
+    assert.throws(() => assertRestoreWritable(f.context.configPath), /RESTORE_RECOVERY_REQUIRED/);
+  } } });
+  assert.equal(guarded, true); assert.equal(result.status, 'committed'); assert.equal(result.reactivatedClaims, false); assert.equal(result.doctor.canRun, false);
+  const review = path.join(f.target, 'review_results/文献评价');
+  for (const state of ['prepared', 'published']) {
+    const batch = JSON.parse(await fs.readFile(path.join(review, 'runs', `compat-${state}`, 'research_evaluation_batch.json')));
+    assert.equal(batch.status, state); assert.match(batch.inputHash, /^[a-f0-9]{64}$/); assert.match(batch.resultHash, /^[a-f0-9]{64}$/);
+    assert.ok(batch.candidates.every(item => item.feedback_event_ids.includes(`compat-${state}`)));
+  }
+  const targetResearch = new ResearchEvaluationService({ root: f.target, reviewRoot: review, env: f.hostEnv, llmClient: () => assert.fail('migration must not regenerate feedback') });
+  assert.equal((await targetResearch.health()).prepared, 1);
+  const log = JSON.parse(await fs.readFile(path.join(review, 'standards_rule_suggestions_log.json')));
+  assert.ok(log.suggestions.some(item => item.status === 'rejected' && item.decision_history?.length));
+  assert.ok(log.suggestions.some(item => ['pending', 'candidate'].includes(item.status)));
+  for (const relative of Object.keys(before)) {
+    if (!relative.startsWith('review_results' + path.sep)) continue;
+    assert.deepEqual(await fs.readFile(path.join(f.target, relative)), await fs.readFile(path.join(f.data, relative)), relative);
+  }
+  assert.deepEqual(await upgradeFileHashes(f.data), before); assert.deepEqual(await fs.readFile(f.backup), archive);
+  assert.deepEqual(await fs.readFile(path.join(f.target, '.env')), await fs.readFile(path.join(f.data, '.env')));
+  const receipt = JSON.parse(await fs.readFile(path.join(f.target, '.paperecho-restore.json')));
+  assert.equal(receipt.workflowAllowed, false); assert.equal(receipt.reactivateClaims, false);
+  const response = JSON.stringify(result);
+  for (const text of ['dummy-upgrade-local-secret', '合成研究反馈', '合成待处理反馈']) assert.ok(!response.includes(text));
+  const targetBefore = await upgradeFileHashes(f.target);
+  assert.equal((await f.recover()).status, 'committed'); assert.equal((await f.recover()).status, 'committed');
+  assert.deepEqual(await upgradeFileHashes(f.target), targetBefore); assert.equal(calls, 2); assert.equal(network.calls, 0);
+  assert.equal((await f.recover({ rollback: true })).status, 'rolled-back'); assert.equal((await f.recover()).status, 'rolled-back');
+  assert.deepEqual(await upgradeFileHashes(f.data), before); assert.deepEqual(await fs.readFile(f.backup), archive);
+});
 
 test('completed ledger, receipt and nine data owners survive migration without reactivation or source changes', async t => {
   const f = await migrationFixture(t, { schema: 5, history: true });
