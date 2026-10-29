@@ -28,11 +28,12 @@ export function scheduleSpec({ paths, config, platform = process.platform, exist
   if (!['desktop', 'web'].includes(config.mode) || !['standard', 'complete'].includes(config.profile || 'standard')) fail('SCHEDULER_MODE_UNSUPPORTED');
   if (!['portable', 'installed'].includes(paths.layout)) fail('SCHEDULER_PACKAGED_LAYOUT_REQUIRED');
   if (!['win32', 'darwin'].includes(platform)) fail('SCHEDULER_PLATFORM_UNSUPPORTED');
-  if (![paths.applicationRoot, paths.userDataRoot, paths.cacheRoot].every(safePath)) fail('SCHEDULER_PATH_INVALID');
+  const pathApi = platform === 'darwin' ? path.posix : path;
+  if (![paths.applicationRoot, paths.userDataRoot, paths.cacheRoot].every(value => safePath(value) && (platform !== 'darwin' || path.posix.isAbsolute(value) && !value.includes('\\')))) fail('SCHEDULER_PATH_INVALID');
   if (platform === 'win32' && [paths.applicationRoot, paths.userDataRoot, paths.cacheRoot].some(value => !/^[A-Za-z]:[\\/]/.test(value))) fail('SCHEDULER_LOCAL_DRIVE_REQUIRED');
   const taskId = 'PaperEcho-' + createHash('sha256').update(platform === 'win32' ? paths.userDataRoot.toLowerCase() : paths.userDataRoot).digest('hex').slice(0, 24);
   if (existingTaskIds.includes(taskId)) fail('SCHEDULER_DUPLICATE_TASK');
-  const executable = path.join(paths.applicationRoot, platform === 'win32' ? 'PaperEcho.exe' : 'PaperEcho.app/Contents/MacOS/PaperEcho');
+  const executable = pathApi.join(paths.applicationRoot, platform === 'win32' ? 'PaperEcho.exe' : 'PaperEcho.app/Contents/MacOS/PaperEcho');
   const args = ['--headless', '--runtime-layout', paths.layout, '--user-data-root', paths.userDataRoot, '--cache-root', paths.cacheRoot,
     '--run', '--scheduled-daily', '--mode', config.mode, '--profile', config.profile || 'standard', '--fixed-mode'];
   parseRunnerArgs(args.slice(7), { allowUnresolvedMode: true });
