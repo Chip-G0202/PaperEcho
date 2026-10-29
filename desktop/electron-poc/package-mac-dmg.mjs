@@ -1,7 +1,8 @@
-// TEST-ONLY build with native read-only headless validation. No signing, notarization or release.
+// TEST-ONLY ad-hoc build with native validation. No Developer ID, notarization or release.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
@@ -10,17 +11,31 @@ import { flipFuses, getCurrentFuseWire, FuseV1Options as F, FuseState } from '@e
 import { appVersion, sourceAllowed, fuseConfig } from './package-policy.mjs';
 import { nativeSmoke } from './mac-native-smoke.mjs';
 
+// Reuse Packager's locked signer, including its inside-out nested-code ordering.
+const packagerRequire = createRequire(createRequire(import.meta.url).resolve('@electron/packager'));
+const { sign } = await import(pathToFileURL(packagerRequire.resolve('@electron/osx-sign')).href);
+
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const name = 'PaperEcho';
 // No project-specific Mac ID is configured; retain Packager 20's existing default.
 export const macBundleId = 'com.electron.paperecho';
 export const macSourceAllowed = file => sourceAllowed(file) && !file.startsWith('tests/');
+// Sign the complete final bundle below, instead of fuses' recursive --deep signer.
 export const macFuseConfig = Object.freeze({ ...fuseConfig, resetAdHocDarwinSignature: false });
+export const macSigningStatus = Object.freeze({ runtimeSignatureAfterFuseChanges: 'AD_HOC_TEST_ONLY',
+  developerIdSigning: 'DEVELOPER_ID_NOT_PERFORMED', notarization: 'NOTARIZATION_NOT_PERFORMED' });
+export async function finalizeMacBundle(bundle, stage, electronVersion, { flip = flipFuses, signApp = sign, smoke = nativeSmoke } = {}) {
+  await flip(bundle, macFuseConfig);
+  await signApp({ app: bundle, platform: 'darwin', version: electronVersion, identity: '-', identityValidation: false,
+    preAutoEntitlements: false, preEmbedProvisioningProfile: false, strictVerify: true,
+    // Ad-hoc test identity only: no certificate discovery, provisioning or timestamp service.
+    optionsForFile: () => ({ hardenedRuntime: false, timestamp: 'none' }) });
+  return smoke(bundle, stage, { electronVersion });
+}
 export function macOptions(stage, checksums, electronVersion) {
   return { dir: path.join(stage, 'shell'), name, appVersion, buildVersion: appVersion, electronVersion,
     platform: 'darwin', arch: 'arm64', asar: true, prune: false,
-    // Electron >=41's optional digest embedding runs an implicit ad-hoc signer.
-    // This unsigned structure-only build does not modify that digest or re-sign.
+    // Preserve the existing digest policy; the complete bundle is signed after fuses.
     asarIntegrityDigest: false,
     extraResource: [path.join(stage, 'core')], out: path.join(stage, 'output'), tmpdir: path.join(stage, 'tmp'),
     download: { cacheRoot: path.join(stage, 'electron-download'), checksums } };
@@ -89,12 +104,11 @@ export async function buildTestDmg() {
   const checksums = JSON.parse(await fs.readFile(new URL('./node_modules/electron/checksums.json', import.meta.url), 'utf8'));
   const outputs = await packager(macOptions(stage, checksums, electron.version)); assert.equal(outputs.length, 1);
   const bundle = path.join(outputs[0], name + '.app');
-  await flipFuses(bundle, macFuseConfig);
+  const smoke = await finalizeMacBundle(bundle, stage, electron.version);
   const wire = await getCurrentFuseWire(bundle);
   for (const key of Object.values(F).filter(x => typeof x === 'number')) assert.equal(wire[key], fuseConfig[key] ? FuseState.ENABLE : FuseState.DISABLE);
   for (const required of ['Contents/Resources/app.asar', 'Contents/Resources/core/package.json', 'Contents/Resources/core/workflow/tools/runner/main.mjs', 'Contents/Resources/core/desktop/electron-poc/headless.mjs']) await fs.access(path.join(bundle, required));
   const info = appMetadata(bundle);
-  const smoke = await nativeSmoke(bundle, stage, { electronVersion: electron.version });
   const before = await bundleInventory(bundle);
   const disk = path.join(stage, 'disk'); await fs.mkdir(disk);
   await fs.rename(bundle, path.join(disk, name + '.app')); await fs.symlink('/Applications', path.join(disk, 'Applications'));
@@ -113,7 +127,7 @@ export async function buildTestDmg() {
   const bytes = await fs.readFile(dmg);
   const validation = { testOnly: true, gitCommit, ...info, filename, bytes: bytes.length, sha256: sha256(bytes), files: Object.keys(before).length,
     sourceFiles: sources.length, electron: electron.version, dmgVerified: true, readonlyMountVerified: true, unmounted: true,
-    developerIdSigning: 'NOT_PERFORMED', notarization: 'NOT_PERFORMED', runtimeSignatureAfterFuseChanges: 'NOT_RESIGNED', signatureValidity: 'VERIFIED', nativeSmoke: smoke, guiAndGatekeeper: 'NOT_TESTED', releaseReady: false };
+    ...macSigningStatus, signatureValidity: 'VERIFIED', nativeSmoke: smoke, guiAndGatekeeper: 'NOT_TESTED', releaseReady: false };
   await fs.writeFile(path.join(artifact, 'validation.json'), JSON.stringify(validation, null, 2), { flag: 'wx' });
   console.log(JSON.stringify(validation)); return validation;
 }

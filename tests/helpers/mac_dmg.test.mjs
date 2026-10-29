@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { macOptions, macFuseConfig, macSourceAllowed, macBundleId, buildTestDmg } from '../../desktop/electron-poc/package-mac-dmg.mjs';
+import { macOptions, macFuseConfig, macSourceAllowed, macBundleId, buildTestDmg, finalizeMacBundle, macSigningStatus } from '../../desktop/electron-poc/package-mac-dmg.mjs';
 import { appVersion, fuseConfig } from '../../desktop/electron-poc/package-policy.mjs';
 import { nativeSmoke } from '../../desktop/electron-poc/mac-native-smoke.mjs';
 
@@ -70,7 +70,7 @@ test('native smoke verifies signature then bundled dependencies and the formal i
   assert.equal(report.headless.preflight.productionExecuted, false);
   assert.equal(report.gui, 'NOT_TESTED'); assert.equal(report.gatekeeper, 'NOT_TESTED');
   const builder = await fs.readFile(new URL('../../desktop/electron-poc/package-mac-dmg.mjs', import.meta.url), 'utf8');
-  assert.ok(builder.indexOf('await nativeSmoke(bundle') < builder.indexOf("['create', '-volname'"));
+  assert.ok(builder.indexOf('await finalizeMacBundle(bundle') < builder.indexOf("['create', '-volname'"));
 });
 test('invalid codesign stops before launch, retaining the actual error and no signature repair', async () => {
   const { root, bundle } = await nativeFixture(), calls = [];
@@ -93,4 +93,34 @@ test('native headless spawn failure, signal, failed preflight and wrong runtime 
 });
 test('non-Mac smoke refuses execution before file access or commands', async () => {
   await assert.rejects(nativeSmoke('unused', 'unused', { platform: 'win32', execute: () => assert.fail('must not execute') }), /MACOS_NATIVE_SMOKE_REQUIRED/);
+});
+
+test('final TEST-ONLY signature follows fuse changes and precedes strict native smoke', async () => {
+  const calls = [], bundle = '/synthetic/PaperEcho.app', stage = '/synthetic/build';
+  const result = await finalizeMacBundle(bundle, stage, '44.7.2', {
+    flip: async (app, options) => { calls.push('flip'); assert.equal(app, bundle); assert.equal(options.resetAdHocDarwinSignature, false); },
+    signApp: async options => {
+      calls.push('sign');
+      assert.deepEqual({ ...options, optionsForFile: undefined }, { app: bundle, platform: 'darwin', version: '44.7.2', identity: '-',
+        identityValidation: false, preAutoEntitlements: false, preEmbedProvisioningProfile: false, strictVerify: true, optionsForFile: undefined });
+      assert.deepEqual(options.optionsForFile(), { hardenedRuntime: false, timestamp: 'none' });
+    },
+    smoke: async (app, root, options) => { calls.push('smoke'); assert.equal(app, bundle); assert.equal(root, stage); assert.equal(options.electronVersion, '44.7.2'); return 'verified'; },
+  });
+  assert.equal(result, 'verified'); assert.deepEqual(calls, ['flip', 'sign', 'smoke']);
+  assert.deepEqual(macSigningStatus, { runtimeSignatureAfterFuseChanges: 'AD_HOC_TEST_ONLY',
+    developerIdSigning: 'DEVELOPER_ID_NOT_PERFORMED', notarization: 'NOTARIZATION_NOT_PERFORMED' });
+  const builder = await fs.readFile(new URL('../../desktop/electron-poc/package-mac-dmg.mjs', import.meta.url), 'utf8');
+  assert.match(builder, /\.\.\.macSigningStatus, signatureValidity: 'VERIFIED'/);
+  const windows = await fs.readFile(new URL('../../desktop/electron-poc/package-win.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(windows, /finalizeMacBundle|macSigningStatus|osx-sign/);
+});
+test('a failed final signature cannot reach native headless smoke or artifact construction', async () => {
+  const calls = [];
+  await assert.rejects(finalizeMacBundle('/synthetic/PaperEcho.app', '/synthetic', '44.7.2', {
+    flip: async () => calls.push('flip'),
+    signApp: async () => { calls.push('sign'); throw new Error('SIGNATURE_SEAL_FAILED'); },
+    smoke: () => assert.fail('headless must not run'),
+  }), /SIGNATURE_SEAL_FAILED/);
+  assert.deepEqual(calls, ['flip', 'sign']);
 });
