@@ -1,7 +1,9 @@
-param([switch]$NegativeOnly, [switch]$IdentityOnly, [string]$HyperVContextSha256)
+param([switch]$NegativeOnly, [switch]$IdentityOnly, [string]$HyperVContextSha256,
+    [ValidateSet('CancelBeforeInstall','Install')][string]$FullUiScenario)
 # Guest only. Fixed paths, immutable input, no commands or code from the output mapping.
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'POWERSHELL_7_REQUIRED' }
+if ($FullUiScenario -and ($NegativeOnly -or $HyperVContextSha256 -cnotmatch '^[a-fA-F0-9]{64}$')) { throw 'FULL_UI_HYPERV_CONTEXT_REQUIRED' }
 $inputRoot = 'C:\PaperEchoLab\Input'; $outputRoot = 'C:\PaperEchoLab\Output'
 $work = 'C:\PaperEchoLab\Workspace'; $steps = [Collections.Generic.List[object]]::new()
 $stage = 'identity'; $ownedPids = [Collections.Generic.List[int]]::new(); $identityVerified = $false
@@ -23,6 +25,10 @@ function Assert-InstallerGuest {
         if ($handoff.testOnly -ne $true -or $context.runId -cne $handoff.runId -or $context.msiSha256 -ine $handoff.msiSha256) { throw 'HYPERV_HANDOFF_INVALID' }
         if ([guid](Get-CimInstance Win32_ComputerSystemProduct).UUID -ne [guid]$context.biosGuid -or [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne $context.userSid) { throw 'HYPERV_GUEST_IDENTITY_REQUIRED' }
         if (([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'UNELEVATED_INSTALLER_TEST_REQUIRED' }
+        if ($FullUiScenario) {
+            if ($context.fullUiAuthorized -ne $true -or $context.fullUiScenario -cne $FullUiScenario -or $context.syntheticData -ne $true -or $context.networkIsolated -ne $true -or $context.checkpointRestoreVerified -ne $true -or $handoff.runId -cnotmatch '^[a-f0-9-]{36}$') { throw 'FULL_UI_AUTHORIZATION_REQUIRED' }
+            $script:fullUiContext = $context; $script:fullUiManifest = $handoff
+        }
         $script:reportStage = 'HYPERV_INSTALLER'
         $script:work = Join-Path $outputRoot 'Workspace'
         $env:PAPERECHO_TEST_HYPERV_CONTEXT_SHA256 = $HyperVContextSha256
@@ -96,6 +102,163 @@ function Data-Snapshot {
     Require ($snapshot.secretAclVerified -eq $true) 'SECRET_ACL_NOT_VERIFIED'
     return $snapshot.digest
 }
+function Assert-FullUiPath([string]$path) {
+    $item = Get-Item -LiteralPath $path
+    while ($item) {
+        Require (-not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and -not $item.LinkType) 'FULL_UI_LINK_REJECTED'
+        $item = if ($item.PSIsContainer) { $item.Parent } else { $item.Directory }
+    }
+}
+function Assert-FullUiDesktop {
+    Require ([Environment]::UserInteractive -and (Get-Process -Id $PID).SessionId -gt 0) 'INTERACTIVE_DESKTOP_REQUIRED'
+    if (-not ('PaperEchoInstallerDesktop' -as [type])) {
+        Add-Type -TypeDefinition 'using System; using System.Text; using System.Runtime.InteropServices; public static class PaperEchoInstallerDesktop { [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr OpenInputDesktop(uint f, bool i, uint a); [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr h); [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool GetUserObjectInformation(IntPtr h, int n, StringBuilder b, uint l, out uint needed); [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode)] private static extern bool WTSQuerySessionInformation(IntPtr s, int id, int c, out IntPtr b, out uint n); [DllImport("wtsapi32.dll")] private static extern void WTSFreeMemory(IntPtr b); public static bool IsActiveSession(int id) { IntPtr b; uint n; if(!WTSQuerySessionInformation(IntPtr.Zero,id,8,out b,out n)) return false; try { return n>=4 && Marshal.ReadInt32(b)==0; } finally { WTSFreeMemory(b); } } }'
+    }
+    # Only query this process's session: WTSConnectState=8, WTSActive=0.
+    Require ([PaperEchoInstallerDesktop]::IsActiveSession((Get-Process -Id $PID).SessionId)) 'ACTIVE_USER_SESSION_REQUIRED'
+    $desktop = [PaperEchoInstallerDesktop]::OpenInputDesktop(0, $false, 1)
+    Require ($desktop -ne [IntPtr]::Zero) 'INTERACTIVE_DESKTOP_REQUIRED'
+    try {
+        $name = [Text.StringBuilder]::new(256); [uint32]$needed = 0
+        Require ([PaperEchoInstallerDesktop]::GetUserObjectInformation($desktop, 2, $name, 512, [ref]$needed) -and $name.ToString() -ceq 'Default') 'VISIBLE_DEFAULT_DESKTOP_REQUIRED'
+    } finally { $null = [PaperEchoInstallerDesktop]::CloseDesktop($desktop) }
+}
+function Write-FullUiJson([string]$path, $value, [switch]$Replace) {
+    Assert-FullUiPath (Split-Path -Parent $path)
+    if (Test-Path -LiteralPath $path) { Assert-FullUiPath $path; Require ($Replace.IsPresent) 'FULL_UI_REPORT_EXISTS' }
+    $temporary = Join-Path (Split-Path -Parent $path) ([guid]::NewGuid().ToString()+'.tmp')
+    $stream = [IO.File]::Open($temporary, 'CreateNew', 'Write', 'None')
+    try { $bytes = [Text.Encoding]::UTF8.GetBytes(($value | ConvertTo-Json -Depth 10 -Compress)); $stream.Write($bytes,0,$bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+    [IO.File]::Move($temporary, $path, $Replace.IsPresent)
+}
+function Get-FullUiSnapshot([string]$root) {
+    if (-not (Test-Path -LiteralPath $root)) { return 'ABSENT' }
+    Assert-FullUiPath $root
+    $files = [Collections.Generic.List[string]]::new(); $pending = [Collections.Generic.Stack[string]]::new(); $pending.Push($root)
+    while ($pending.Count) {
+        foreach ($item in Get-ChildItem -LiteralPath $pending.Pop() -Force) {
+            Assert-FullUiPath $item.FullName
+            if ($item.PSIsContainer) { $pending.Push($item.FullName) } else {
+                Require ($files.Count -lt 10000) 'SYNTHETIC_DATA_LIMIT'
+                $files.Add($item.FullName.Substring($root.Length)+'|'+(Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash+'|'+(Get-Acl -LiteralPath $item.FullName).Sddl)
+            }
+        }
+    }
+    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($files.ToArray() | Sort-Object) -join "`n")))
+}
+function Read-FullUiPackage([string]$msi) {
+    $engine = New-Object -ComObject WindowsInstaller.Installer; $db = $engine.OpenDatabase($msi, 0); $identity = @{}
+    try {
+        foreach ($property in @('ProductName','ProductCode','ProductVersion','UpgradeCode')) {
+            $view = $db.OpenView(('SELECT `Value` FROM `Property` WHERE `Property` = ''{0}''' -f $property)); $view.Execute()
+            try { $identity[$property] = $view.Fetch().StringData(1) } finally { $view.Close() }
+        }
+        $identity.PackageCode = $db.SummaryInformation(0).Property(9)
+        return $identity
+    } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($db) | Out-Null; [Runtime.InteropServices.Marshal]::FinalReleaseComObject($engine) | Out-Null }
+}
+function Get-FullUiProductState([string]$product) {
+    $engine = New-Object -ComObject WindowsInstaller.Installer
+    try { return $engine.ProductState($product) } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($engine) | Out-Null }
+}
+function Wait-FullUiObservation($process, [string]$directory, $binding, $steps, [int]$index, $watch, [int]$budget = 1200) {
+    $phase = $steps[$index]
+    Write-FullUiJson (Join-Path $directory 'installer-progress.json') ($binding + @{phase=$phase;status='STARTED';stepIndex=$index}) -Replace
+    $file = Join-Path $directory ($phase+'.json')
+    while ($watch.Elapsed.TotalSeconds -lt $budget) {
+        if (Test-Path -LiteralPath $file) {
+            Assert-FullUiPath $file; Require ((Get-Item -LiteralPath $file).Length -le 4096) 'FULL_UI_SIGNAL_INVALID'
+            $signal = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+            $action = if ($phase -ceq 'msi-cancel') {'clicked-cancel'} elseif ($phase -ceq 'msi-install') {'clicked-install'} else {'observed'}
+            Require ($signal.runId -ceq $binding.runId -and $signal.scenario -ceq $binding.scenario -and $signal.msiSha256 -ceq $binding.msiSha256 -and $signal.contextSha256 -ceq $binding.contextSha256 -and $signal.step -ceq $phase -and $signal.stepIndex -eq $index -and $signal.action -ceq $action) 'FULL_UI_SIGNAL_INVALID'
+            return @{step=$phase;action=$action;source='manual-observation'}
+        }
+        Require (-not $process.HasExited) 'FULL_UI_OBSERVATION_INCOMPLETE'
+        Start-Sleep -Milliseconds 250
+    }
+    throw 'FULL_UI_TIMEOUT'
+}
+function Get-FullUiOutcome([string]$scenario, [int]$exitCode, [int]$productState, [bool]$transactionStarted, [bool]$transactionFinished) {
+    if ($scenario -ceq 'CancelBeforeInstall' -and $exitCode -eq 1602 -and $productState -eq -1 -and -not $transactionStarted) { return 'USER_CANCELLED' }
+    if ($scenario -ceq 'Install' -and $exitCode -eq 0 -and $productState -eq 5 -and $transactionStarted -and $transactionFinished) { return 'INSTALL_PASS' }
+    return 'FAIL'
+}
+function Invoke-FullUiScenario {
+    Assert-InstallerGuest; Assert-FullUiDesktop
+    $manifest = $script:fullUiManifest; $context = $script:fullUiContext
+    foreach ($dir in @($inputRoot,$outputRoot)) { Assert-FullUiPath $dir }
+    foreach ($prior in Get-ChildItem -LiteralPath $outputRoot -Directory | Where-Object Name -CMatch '^[a-f0-9-]{36}$') {
+        Assert-FullUiPath $prior.FullName
+        $result = Join-Path $prior.FullName 'full-ui-result.json'
+        Require (Test-Path -LiteralPath $result) 'FULL_UI_PREVIOUS_RUN_UNRESOLVED'
+        Assert-FullUiPath $result; Require ((Get-Item -LiteralPath $result).Length -le 16384) 'FULL_UI_PREVIOUS_RUN_UNRESOLVED'
+        $previous = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+        Require ($previous.runId -ceq $prior.Name -and $previous.status -cin @('USER_CANCELLED','INSTALL_PASS')) 'FULL_UI_PREVIOUS_RUN_UNRESOLVED'
+    }
+    Require (@(Get-CimInstance Win32_Process -Filter "Name='msiexec.exe' OR Name='PaperEcho.exe'").Count -eq 0) 'ACTIVE_INSTALL_OR_APPLICATION'
+    $app = Join-Path $env:LOCALAPPDATA 'Programs\PaperEcho'; $data = Join-Path $env:LOCALAPPDATA 'PaperEcho\workspaces\default'
+    Require (-not (Test-Path -LiteralPath $app) -and -not (Test-Path -LiteralPath $data)) 'FRESH_INSTALL_REQUIRED'
+    foreach ($entry in $manifest.files) {
+        Require ($entry.path -notmatch '(^|[\\/])\.\.($|[\\/])|[:\x00-\x1f]' -and -not [IO.Path]::IsPathRooted($entry.path)) 'HANDOFF_PATH_INVALID'
+        $file = Join-Path $inputRoot $entry.path; Assert-FullUiPath $file
+        Require ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ieq $entry.sha256) 'HANDOFF_HASH_INVALID'
+    }
+    $source = Join-Path $inputRoot 'PaperEcho-TEST-ONLY.msi'; Assert-FullUiPath $source
+    Require ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ieq $manifest.msiSha256) 'FULL_UI_MSI_HASH_INVALID'
+    $identity = Read-FullUiPackage $source
+    Require ($identity.ProductName -ceq 'PaperEcho TEST ONLY' -and $identity.ProductCode -ceq $manifest.productCode -and $identity.ProductCode -cmatch '^\{[A-F0-9-]{36}\}$' -and $identity.PackageCode -cmatch '^\{[A-F0-9-]{36}\}$' -and $identity.UpgradeCode -ceq '{7395EC5E-338E-4E71-92A2-579BD64EE6E4}' -and $identity.ProductVersion -ceq '2.6.0') 'FULL_UI_MSI_IDENTITY_INVALID'
+    $beforeState = Get-FullUiProductState $identity.ProductCode; Require ($beforeState -eq -1) 'FRESH_PRODUCT_REQUIRED'
+    Require (@($manifest.payload).Count -gt 0) 'PAYLOAD_MANIFEST_REQUIRED'
+    foreach ($entry in $manifest.payload) { Require ($entry.path -notmatch '(^|[\\/])\.\.($|[\\/])|[:\x00-\x1f]' -and -not [IO.Path]::IsPathRooted($entry.path)) 'PAYLOAD_PATH_INVALID' }
+    $directory = Join-Path $outputRoot $manifest.runId
+    Require (-not (Test-Path -LiteralPath $directory)) 'FULL_UI_RUN_ALREADY_EXISTS'
+    $null = New-Item -ItemType Directory -Path $directory; Assert-FullUiPath $directory
+    $work = Join-Path $directory 'Workspace'; $null = New-Item -ItemType Directory -Path $work
+    $msi = Join-Path $work 'PaperEcho-TEST-ONLY.msi'; Copy-Item -LiteralPath $source -Destination $msi
+    Require ((Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash -ieq $manifest.msiSha256) 'LOCAL_MSI_HASH_INVALID'
+    $binding = @{schemaVersion=1;runId=$manifest.runId;scenario=$FullUiScenario;msiSha256=$manifest.msiSha256;contextSha256=$HyperVContextSha256}
+    Write-FullUiJson (Join-Path $directory 'binding.json') $binding
+    $beforeData = Get-FullUiSnapshot $data; $log = Join-Path $directory 'msi-verbose.log'; $process = $null
+    $report = $binding + @{status='UNKNOWN';productStateBefore=$beforeState;automaticCleanupPerformed=$false;log='msi-verbose.log';observationEvidence='MANUAL_SIGNALS_REQUIRE_VISUAL_REVIEW';observations=@()}
+    try {
+        Assert-InstallerGuest; Assert-FullUiDesktop
+        # Manual GUI interaction only. Never call the silent Run(): it has a different timeout policy.
+        $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList ('/i "'+$msi+'" /qf /norestart /l*vx! "'+$log+'"') -WorkingDirectory $work -PassThru -WindowStyle Normal
+        $report.pid = $process.Id; $watch = [Diagnostics.Stopwatch]::StartNew()
+        $phases = if ($FullUiScenario -ceq 'CancelBeforeInstall') { @('msi-welcome','msi-ready','msi-cancel','msi-user-exit') } else { @('msi-welcome','msi-ready','msi-install','msi-progress','msi-exit') }
+        for ($i = 0; $i -lt $phases.Count; $i++) { $report.observations += Wait-FullUiObservation $process $directory $binding $phases $i $watch }
+        Require ($process.WaitForExit([Math]::Max(1,1200000-[int]$watch.ElapsedMilliseconds))) 'FULL_UI_TIMEOUT'
+        $report.exitCode = $process.ExitCode; $report.productStateAfter = Get-FullUiProductState $identity.ProductCode
+        Assert-FullUiPath $log
+        $started = $false; $finished = $false; $welcome = $false; $progress = $false; $exit = $false
+        foreach ($line in [IO.File]::ReadLines($log)) {
+            if ($line -match '^Action start [^:]+:[^:]+:[^:]+: InstallInitialize\.') {$started=$true}
+            if ($line -match '^Action ended .+: InstallFinalize\. Return value 1\.') {$finished=$true}
+            if ($line -match '^Action start .+: Welcome\.') {$welcome=$true}
+            if ($line -match '^Action start .+: Progress\.') {$progress=$true}
+            if ($line -match '^Action start .+: Exit\.') {$exit=$true}
+        }
+        Require ($welcome) 'FULL_UI_LOG_EVIDENCE_MISSING'
+        $report.status = Get-FullUiOutcome $FullUiScenario $report.exitCode $report.productStateAfter $started $finished
+        Require ($report.status -ne 'FAIL') 'FULL_UI_RESULT_MISMATCH'
+        Require ((Get-FullUiSnapshot $data) -ceq $beforeData) 'FULL_UI_DATA_CHANGED'
+        Require ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ieq $manifest.msiSha256) 'FULL_UI_INPUT_CHANGED'
+        Require (-not (Test-Path -LiteralPath ('HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\'+$identity.ProductCode)) -and -not (Test-Path -LiteralPath ('HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\'+$identity.ProductCode))) 'MACHINE_REGISTRATION_REMAINS'
+        if ($FullUiScenario -ceq 'Install') {
+            Require ($progress -and $exit) 'FULL_UI_LOG_EVIDENCE_MISSING'
+            foreach ($entry in $manifest.payload) { $file = Join-Path $app $entry.path; Assert-FullUiPath $file; Require ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ieq $entry.sha256) 'INSTALLED_PAYLOAD_HASH_INVALID' }
+        } else { Require (-not (Test-Path -LiteralPath $app) -and -not (Test-Path -LiteralPath ('HKCU:\Software\PaperEcho\Installer\Packages\'+$identity.ProductCode)) -and -not (Test-Path -LiteralPath ('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\'+$identity.ProductCode))) 'CANCEL_LEFT_PRODUCT_REGISTRATION' }
+        Require (@(Get-CimInstance Win32_Process -Filter "Name='PaperEcho.exe'").Count -eq 0) 'APPLICATION_AUTOSTARTED'
+        $report.dataUnchanged = $true; $report.payloadVerified = $FullUiScenario -ceq 'Install'
+    } catch {
+        $report.status = 'FAIL'; $report.code = if ($_.Exception.Message -cmatch '^[A-Z][A-Z0-9_]+$') { $_.Exception.Message } else { 'FULL_UI_CHECK_FAILED' }
+        if ($process -and -not $process.HasExited) { $report.status='UNKNOWN';$report.processState='RUNNING';$report.manualInspectionRequired=$true }
+    }
+    Write-FullUiJson (Join-Path $directory 'installer-progress.json') ($binding + @{status=$report.status;phase='finished'}) -Replace
+    Write-FullUiJson (Join-Path $directory 'full-ui-result.json') $report
+    if ($report.status -notin @('USER_CANCELLED','INSTALL_PASS')) { throw 'FULL_UI_INSPECTION_REQUIRED' }
+}
+if ($FullUiScenario) { Invoke-FullUiScenario; return }
 try {
     Assert-InstallerGuest; $identityVerified = $true
     Require (-not (Test-Path -LiteralPath $work)) 'FRESH_GUEST_WORKSPACE_REQUIRED'

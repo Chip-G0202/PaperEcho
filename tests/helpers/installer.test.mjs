@@ -48,6 +48,128 @@ test('installer identity-only probe rejects the host before reaching any MSI ope
       { timeout: 15000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), error => error.status !== 0 && error.stderr.includes('INSTALLER_GUEST_PATH_REQUIRED'));
   }
 });
+test('Full UI is explicit, Hyper-V authorized, interactive and never uses silent cleanup or forced termination', async () => {
+  const source = await fs.readFile('tests/helpers/sandbox_installer.ps1', 'utf8');
+  const full = source.slice(source.indexOf('function Invoke-FullUiScenario'), source.indexOf('if ($FullUiScenario) { Invoke-FullUiScenario; return }'));
+  assert.match(source, /ValidateSet\('CancelBeforeInstall','Install'\)/);
+  for (const guard of ['FULL_UI_HYPERV_CONTEXT_REQUIRED', 'fullUiAuthorized', 'checkpointRestoreVerified', 'networkIsolated', 'syntheticData', 'UNELEVATED_INSTALLER_TEST_REQUIRED', 'HYPERV_GUEST_IDENTITY_REQUIRED', 'HANDOFF_HASH_INVALID', 'FULL_UI_MSI_HASH_INVALID', 'FULL_UI_RUN_ALREADY_EXISTS']) assert.ok(source.includes(guard));
+  assert.match(full, /Assert-InstallerGuest; Assert-FullUiDesktop/);
+  assert.match(full, /\/qf \/norestart \/l\*vx!/); assert.match(full, /-WindowStyle Normal/);
+  assert.doesNotMatch(full, /-WindowStyle Hidden|\/qn|\/qb|ALLUSERS=1|\.Kill\(|Stop-Process|Restore-VM|Run \$|\/x /);
+  for (const proof of ['UserInteractive', 'SessionId -gt 0', 'OpenInputDesktop', 'IsActiveSession', 'FULL_UI_PREVIOUS_RUN_UNRESOLVED']) assert.ok(source.includes(proof));
+  for (const extra of [[], ['-HyperVContextSha256', '0'.repeat(64)]]) {
+    assert.throws(() => execFileSync(process.env.PWSH_PATH, ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', path.resolve('tests/helpers/sandbox_installer.ps1'), '-FullUiScenario', 'Install', ...extra],
+      { timeout: 15000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), error => error.status !== 0 && /FULL_UI_HYPERV_CONTEXT_REQUIRED|INSTALLER_GUEST_PATH_REQUIRED/.test(error.stderr));
+  }
+});
+
+test('Full UI signals bind scenario, run, hashes and ordered manual actions without replay', async t => {
+  const base = path.resolve('tests/runs/phase3a'); await fs.mkdir(base, { recursive: true });
+  const root = await fs.mkdtemp(path.join(base, 'full-ui-signals-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const command = String.raw`
+$ErrorActionPreference='Stop'
+foreach($scenario in @('CancelBeforeInstall','Install')){
+ $run=[guid]::NewGuid().ToString();$directory=Join-Path $env:TEST_ROOT $run;$null=New-Item -ItemType Directory -Path $directory
+ $binding=@{schemaVersion=1;runId=$run;scenario=$scenario;msiSha256=('a'*64);contextSha256=('b'*64)}
+ $binding|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $directory 'binding.json')
+ $steps=if($scenario -ceq 'Install'){@('msi-welcome','msi-ready','msi-install','msi-progress','msi-exit')}else{@('msi-welcome','msi-ready','msi-cancel','msi-user-exit')}
+ for($i=0;$i -lt $steps.Count;$i++){
+  $phase=$steps[$i];$action=if($phase -ceq 'msi-install'){'clicked-install'}elseif($phase -ceq 'msi-cancel'){'clicked-cancel'}else{'observed'}
+  $progress=$binding+@{phase=$phase;status='STARTED';stepIndex=$i};$progress|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $directory 'installer-progress.json')
+  foreach($bad in @(@{Scenario=$scenario;RunId=$run;Action='wrong'},@{Scenario=$scenario;RunId=[guid]::NewGuid().ToString();Action=$action},@{Scenario=$(if($scenario -ceq 'Install'){'CancelBeforeInstall'}else{'Install'});RunId=$run;Action=$action})){
+   $denied=$false;try{& $env:TEST_SIGNAL_HELPER -Directory $directory -Step $phase @bad}catch{$denied=$true};if(-not $denied){throw 'BAD_SIGNAL_ACCEPTED'}
+  }
+  if($i -eq 0){
+   $progress.msiSha256='c'*64;$progress|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $directory 'installer-progress.json')
+   $denied=$false;try{& $env:TEST_SIGNAL_HELPER -Directory $directory -Step $phase -Scenario $scenario -RunId $run -Action observed}catch{$denied=$true};if(-not $denied){throw 'HASH_CHANGE_ACCEPTED'}
+   $progress.msiSha256=$binding.msiSha256
+   $progress.phase=$steps[1];$progress.stepIndex=1;$progress|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $directory 'installer-progress.json')
+   $denied=$false;try{& $env:TEST_SIGNAL_HELPER -Directory $directory -Step $steps[1] -Scenario $scenario -RunId $run -Action observed}catch{$denied=$true};if(-not $denied){throw 'OUT_OF_ORDER_ACCEPTED'}
+   $progress.phase=$phase;$progress.stepIndex=$i;$progress|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $directory 'installer-progress.json')
+  }
+  & $env:TEST_SIGNAL_HELPER -Directory $directory -Step $phase -Scenario $scenario -RunId $run -Action $action
+  $signal=Get-Content -LiteralPath (Join-Path $directory ($phase+'.json')) -Raw|ConvertFrom-Json
+  if($signal.stepIndex -ne $i -or $signal.scenario -cne $scenario -or $signal.action -cne $action){throw 'SIGNAL_CONTENT_INVALID'}
+  $denied=$false;try{& $env:TEST_SIGNAL_HELPER -Directory $directory -Step $phase -Scenario $scenario -RunId $run -Action $action}catch{$denied=$true};if(-not $denied){throw 'REPLAY_ACCEPTED'}
+ }
+ $progress.status='INSTALL_PASS';$progress|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $directory 'installer-progress.json')
+ $denied=$false;try{& $env:TEST_SIGNAL_HELPER -Directory $directory -Step $phase -Scenario $scenario -RunId $run -Action $action}catch{$denied=$true};if(-not $denied){throw 'FINISHED_RUN_ACCEPTED'}
+ if(@(Get-ChildItem -LiteralPath $directory -Filter '*.tmp').Count){throw 'ATOMIC_TEMP_REMAINS'}
+}
+[Console]::Out.Write('FULL_UI_SIGNALS_PASS')`;
+  const output = execFileSync(process.env.PWSH_PATH, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', timeout: 20000, windowsHide: true,
+    env: { ...process.env, TEST_ROOT: root, TEST_SIGNAL_HELPER: path.resolve('tests/helpers/hyperv_ui_signal.ps1') } });
+  assert.equal(output, 'FULL_UI_SIGNALS_PASS');
+});
+
+test('Full UI safe substitutes distinguish cancellation, installation and running timeout without real MSI execution', async t => {
+  const base = path.resolve('tests/runs/phase3a'); await fs.mkdir(base, { recursive: true });
+  const root = await fs.mkdtemp(path.join(base, 'full-ui-mock-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const command = String.raw`
+$ErrorActionPreference='Stop'
+$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER_SOURCE,[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'PARSE_FAILED'}
+foreach($fn in $ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -in @('Require','Assert-FullUiPath','Write-FullUiJson','Get-FullUiSnapshot','Get-FullUiOutcome','Wait-FullUiObservation','Invoke-FullUiScenario')}){Invoke-Expression $fn.Extent.Text}
+foreach($case in @(@('CancelBeforeInstall',1602,-1,$false,$false,'USER_CANCELLED'),@('CancelBeforeInstall',0,5,$true,$true,'FAIL'),@('CancelBeforeInstall',1602,-1,$true,$false,'FAIL'),@('Install',0,5,$true,$true,'INSTALL_PASS'),@('Install',1603,5,$true,$false,'FAIL'),@('Install',0,-1,$true,$true,'FAIL'))){$arguments=@($case[0..4]);if((Get-FullUiOutcome @arguments) -cne $case[5]){throw 'OUTCOME_INVALID'}}
+$waiter=(Get-Item -LiteralPath 'Function:\Wait-FullUiObservation').ScriptBlock
+$desktopFn=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Assert-FullUiDesktop'},$true)[0]
+$compile=$desktopFn.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Add-Type'},$true)[0]
+& ([scriptblock]::Create($compile.Extent.Text))
+function Assert-InstallerGuest {$script:identityCalls++}
+function Assert-FullUiDesktop {$script:desktopCalls++}
+function Get-CimInstance {return @()}
+function Test-Path {param([string]$LiteralPath) if($LiteralPath -match '^HK[CL]'){return $false};Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath}
+function Read-FullUiPackage {return @{ProductName='PaperEcho TEST ONLY';ProductVersion='2.6.0';ProductCode='{11111111-1111-4111-8111-111111111111}';PackageCode='{22222222-2222-4222-8222-222222222222}';UpgradeCode='{7395EC5E-338E-4E71-92A2-579BD64EE6E4}'}}
+function Get-FullUiProductState {if($script:stateReads++ -eq 0){return -1};if($FullUiScenario -ceq 'Install'){return 5};return -1}
+function Wait-FullUiObservation {param($process,$directory,$binding,$steps,$index,$watch) return @{step=$steps[$index];source='OFFLINE_MOCK_ONLY'}}
+function Start-Process {
+ param($FilePath,$ArgumentList,$WorkingDirectory,[switch]$PassThru,$WindowStyle)
+ if($script:identityCalls -lt 2 -or $script:desktopCalls -lt 2 -or $WindowStyle -cne 'Normal' -or $ArgumentList -notmatch '/qf /norestart /l\*vx!' -or $ArgumentList -match '/qn|/qb|/x |ALLUSERS' -or [IO.Path]::GetFileName($FilePath) -ine 'msiexec.exe'){throw 'UNSAFE_START'}
+ $script:starts++
+ $lines=@('Action start 10:00:00: Welcome.')
+ if($FullUiScenario -ceq 'Install'){
+  $null=New-Item -ItemType Directory -Path (Join-Path $env:LOCALAPPDATA 'Programs\PaperEcho') -Force
+  [IO.File]::WriteAllText((Join-Path $env:LOCALAPPDATA 'Programs\PaperEcho\PaperEcho.exe'),'DUMMY_PAYLOAD')
+  $lines+=@('Action start 10:00:00: Progress.','Action start 10:00:00: InstallInitialize.','Action ended 10:00:00: InstallFinalize. Return value 1.','Action start 10:00:00: Exit.')
+ }
+ $lines|Set-Content -LiteralPath (Join-Path (Split-Path -Parent $WorkingDirectory) 'msi-verbose.log')
+ $p=[pscustomobject]@{Id=4242;HasExited=$false;ExitCode=$(if($FullUiScenario -ceq 'Install'){0}else{1602})}
+ $p|Add-Member ScriptMethod WaitForExit {param($budget) if($script:timeout){return $false};$this.HasExited=$true;return $true}
+ $p|Add-Member ScriptMethod Kill {$script:kills++;throw 'KILL_FORBIDDEN'}
+ return $p
+}
+$HyperVContextSha256='b'*64;$script:kills=0;$script:starts=0
+foreach($case in @('CancelBeforeInstall','Install','Timeout')){
+ $script:timeout=$case -ceq 'Timeout';$FullUiScenario=if($script:timeout){'CancelBeforeInstall'}else{$case}
+ $run=[guid]::NewGuid().ToString();$inputRoot=Join-Path $env:TEST_ROOT ('input-'+$run);$outputRoot=Join-Path $env:TEST_ROOT ('output-'+$run)
+ $env:LOCALAPPDATA=Join-Path $env:TEST_ROOT ('profile-'+$run)
+ $null=New-Item -ItemType Directory -Path $inputRoot,$outputRoot
+ $source=Join-Path $inputRoot 'PaperEcho-TEST-ONLY.msi';[IO.File]::WriteAllText($source,'DUMMY_NOT_AN_MSI')
+ $payload=Join-Path $inputRoot 'dummy-payload';[IO.File]::WriteAllText($payload,'DUMMY_PAYLOAD')
+ $hash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+ $script:fullUiManifest=@{runId=$run;msiSha256=$hash;productCode='{11111111-1111-4111-8111-111111111111}';files=@(@{path='PaperEcho-TEST-ONLY.msi';sha256=$hash});payload=@(@{path='PaperEcho.exe';sha256=(Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash})}
+ $script:fullUiContext=@{};$script:stateReads=0;$script:identityCalls=0;$script:desktopCalls=0
+ $caught=$false;try{Invoke-FullUiScenario}catch{if(-not $script:timeout -or $_.Exception.Message -cne 'FULL_UI_INSPECTION_REQUIRED'){throw};$caught=$true}
+ $directory=Join-Path $outputRoot $run;$report=Get-Content -LiteralPath (Join-Path $directory 'full-ui-result.json') -Raw|ConvertFrom-Json
+ $expected=if($script:timeout){'UNKNOWN'}elseif($case -ceq 'Install'){'INSTALL_PASS'}else{'USER_CANCELLED'}
+ if($report.status -cne $expected -or $report.automaticCleanupPerformed -ne $false -or $report.runId -cne $run -or $script:kills -ne 0){throw 'MOCK_REPORT_INVALID'}
+ if($script:timeout -and (-not $caught -or $report.processState -cne 'RUNNING' -or $report.code -cne 'FULL_UI_TIMEOUT')){throw 'TIMEOUT_LOST'}
+ if(-not $script:timeout){$denied=$false;try{Invoke-FullUiScenario}catch{$denied=$true};if(-not $denied){throw 'RUN_REUSE_ACCEPTED'}}
+ if($script:timeout){
+  $script:fullUiManifest.runId=[guid]::NewGuid().ToString();$denied=$false
+  try{Invoke-FullUiScenario}catch{if($_.Exception.Message -cne 'FULL_UI_PREVIOUS_RUN_UNRESOLVED'){throw};$denied=$true}
+  if(-not $denied){throw 'UNRESOLVED_RUN_BYPASSED'}
+ }
+}
+$binding=@{runId=$run;scenario='CancelBeforeInstall';msiSha256=('a'*64);contextSha256=('b'*64)}
+$denied=$false;try{& $waiter ([pscustomobject]@{HasExited=$false}) $directory $binding @('msi-welcome') 0 ([pscustomobject]@{Elapsed=[timespan]::FromSeconds(1201)})}catch{if($_.Exception.Message -cne 'FULL_UI_TIMEOUT'){throw};$denied=$true}
+if(-not $denied -or $script:starts -ne 3 -or $script:kills -ne 0){throw 'WAIT_SIDE_EFFECT'}
+[Console]::Out.Write('FULL_UI_OFFLINE_MOCK_PASS')`;
+  const output = execFileSync(process.env.PWSH_PATH, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', timeout: 20000, windowsHide: true,
+    env: { ...process.env, TEST_ROOT: root, TEST_INSTALLER_SOURCE: path.resolve('tests/helpers/sandbox_installer.ps1') } });
+  assert.equal(output, 'FULL_UI_OFFLINE_MOCK_PASS');
+});
+
 test('installer failure catch preserves diagnostics without cleanup; successful uninstall flow remains', () => {
   const pwsh = process.env.PWSH_PATH; assert.ok(pwsh && path.isAbsolute(pwsh), 'APPROVED_PWSH_7_REQUIRED');
   const command = String.raw`
