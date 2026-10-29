@@ -1,0 +1,78 @@
+name: Windows TEST-ONLY ZIP independent Headless (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh.exe -NoLogo -NoProfile -NonInteractive -File {0}
+
+jobs:
+  build:
+    if: github.event.repository.private == false && github.ref == 'refs/heads/codex/v2.6-development'
+    runs-on: windows-2025
+    timeout-minutes: 30
+    outputs:
+      zip-sha: ${{ steps.prepare.outputs.zip-sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          clean: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install locked dependencies and build existing TEST-ONLY ZIP
+        run: |
+          if ($PSVersionTable.PSVersion.Major -lt 7 -or $PSVersionTable.PSEdition -ne 'Core') { throw 'PS7_REQUIRED' }
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm ci --ignore-scripts --no-audit --no-fund --prefix desktop/electron-poc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run package:win --prefix desktop/electron-poc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $report = npm --silent run package:zip:win --prefix desktop/electron-poc -- --test-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $report | Set-Content -LiteralPath "$env:RUNNER_TEMP/zip-report.json" -Encoding utf8
+      - name: Verify and stage only ZIP and summary
+        id: prepare
+        run: |
+          & pwsh.exe -NoLogo -NoProfile -NonInteractive -File tests/helpers/windows_zip_smoke.ps1 -Mode Prepare -ArtifactRoot "$env:RUNNER_TEMP/zip-artifact" -ZipReport "$env:RUNNER_TEMP/zip-report.json" -ExpectedCommit $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Windows-ZIP-TEST-ONLY
+          path: |
+            ${{ runner.temp }}/zip-artifact/*.zip
+            ${{ runner.temp }}/zip-artifact/summary.json
+          if-no-files-found: error
+          retention-days: 3
+
+  independent-smoke:
+    if: github.event.repository.private == false && github.ref == 'refs/heads/codex/v2.6-development'
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          clean: false
+          sparse-checkout: tests/helpers/windows_zip_smoke.ps1
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: Windows-ZIP-TEST-ONLY
+          path: ${{ runner.temp }}/zip-artifact
+      - name: Verify, extract and run native isolated Headless check
+        env:
+          EXPECTED_ZIP_SHA: ${{ needs.build.outputs.zip-sha }}
+        run: |
+          & pwsh.exe -NoLogo -NoProfile -NonInteractive -File tests/helpers/windows_zip_smoke.ps1 -Mode Smoke -ArtifactRoot "$env:RUNNER_TEMP/zip-artifact" -ExpectedCommit $env:GITHUB_SHA -ExpectedZipSha $env:EXPECTED_ZIP_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
