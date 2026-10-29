@@ -103,6 +103,67 @@ test('private files, duplicate casefolded names and path injection fail closed',
   assert.throws(() => installerTables([{ path: 'x', size: 1 }], product), /INSTALLER_EXE_REQUIRED/);
 });
 
+test('native full-install UI has valid keys, control references, focus cycles and engine progress bindings', () => {
+  const t = installerTables(files, product);
+  const dialogs = new Map(t.Dialog.rows.map(row => [row[0], row]));
+  const controls = new Map(t.Control.rows.map(row => [`${row[0]}/${row[1]}`, row]));
+  assert.deepEqual([...dialogs.keys()], ['Welcome', 'Ready', 'Progress', 'CancelConfirm', 'Exit', 'UserExit', 'FatalError', 'ErrorDlg']);
+  for (const table of Object.values(t)) {
+    const columns = table.columns.split(', ').map(column => column.split(' ')[0]);
+    const keys = table.key.split(',').map(key => columns.indexOf(key.trim()));
+    const seen = new Set();
+    for (const row of table.rows) {
+      assert.equal(row.length, columns.length);
+      const key = JSON.stringify(keys.map(index => row[index])); assert.ok(!seen.has(key)); seen.add(key);
+    }
+  }
+  for (const [name, row] of dialogs) for (const control of row.slice(7).filter(Boolean)) assert.ok(controls.has(`${name}/${control}`));
+  for (const [name, control, , x, y, width, height, , , , next] of t.Control.rows) {
+    assert.ok(dialogs.has(name)); assert.ok(x >= 0 && y >= 0 && width > 0 && height > 0);
+    if (next) assert.ok(controls.has(`${name}/${next}`));
+    if (controls.get(`${name}/${control}`)[2] === 'PushButton' && name !== 'ErrorDlg') {
+      const visited = new Set(); let cursor = control;
+      do { assert.ok(!visited.has(cursor)); visited.add(cursor); cursor = controls.get(`${name}/${cursor}`)[10]; } while (cursor !== control);
+    }
+  }
+  for (const [name, control, event, argument] of t.ControlEvent.rows) {
+    assert.equal(controls.get(`${name}/${control}`)?.[2], 'PushButton');
+    if (['NewDialog', 'SpawnDialog'].includes(event)) assert.ok(dialogs.has(argument));
+    assert.ok(['NewDialog', 'SpawnDialog', 'EndDialog'].includes(event));
+  }
+  for (const [name, control] of t.EventMapping.rows) assert.ok(controls.has(`${name}/${control}`));
+  assert.deepEqual(t.EventMapping.rows, [['Progress', 'Bar', 'SetProgress', 'Progress'], ['Progress', 'Status', 'ActionText', 'Text']]);
+  assert.equal(dialogs.get('Progress')[5] & 2, 0);
+  const progress = t.Control.rows.filter(row => row[0] === 'Progress').sort((a, b) => a[4] - b[4]);
+  for (let i = 1; i < progress.length; i++) assert.ok(progress[i - 1][4] + progress[i - 1][6] <= progress[i][4]);
+  assert.ok(t.ActionText.rows.every(row => row.every(value => !String(value || '').includes('['))));
+  assert.ok(t.Control.rows.filter(row => row[0] === 'Progress').every(row => !/INSTALLROOT|LocalAppData|CommandLine|Secret|API_KEY/.test(row[9] || '')));
+});
+
+test('native UI confirmation, cancellation and mutually exclusive exits cannot bypass original security or execute actions', () => {
+  const t = installerTables(files, product);
+  const ui = new Map(t.InstallUISequence.rows.map(row => [row[0], row]));
+  for (const name of ['Welcome', 'Progress', 'Exit', 'UserExit', 'FatalError']) assert.equal(ui.get(name)[1], 'UILevel = 5 AND NOT Installed');
+  assert.ok(ui.get('LaunchConditions')[2] < ui.get('Welcome')[2]);
+  assert.ok(ui.get('Welcome')[2] < ui.get('Progress')[2] && ui.get('Progress')[2] < ui.get('ExecuteAction')[2]);
+  assert.deepEqual(t.InstallUISequence.rows.filter(row => row[2] < 0).map(row => [row[0], row[2]]), [['Exit', -1], ['UserExit', -2], ['FatalError', -3]]);
+  const hasEvent = (dialog, control, event, argument) => t.ControlEvent.rows.some(row => JSON.stringify(row) === JSON.stringify([dialog, control, event, argument, '1', 1]));
+  assert.ok(hasEvent('Welcome', 'Next', 'NewDialog', 'Ready'));
+  assert.ok(hasEvent('Ready', 'Back', 'NewDialog', 'Welcome'));
+  assert.ok(hasEvent('Ready', 'Install', 'EndDialog', 'Return'));
+  for (const name of ['Welcome', 'Ready', 'Progress']) assert.ok(hasEvent(name, 'Cancel', 'SpawnDialog', 'CancelConfirm'));
+  assert.ok(hasEvent('CancelConfirm', 'Yes', 'EndDialog', 'Exit'));
+  assert.ok(hasEvent('CancelConfirm', 'No', 'EndDialog', 'Return'));
+  assert.equal(t.Property.rows.find(row => row[0] === 'ErrorDialog')[1], 'ErrorDlg');
+  const error = t.Dialog.rows.find(row => row[0] === 'ErrorDlg'); assert.ok(error[5] & 65536); assert.equal(error[7], 'ErrorText');
+  for (const response of ['Abort', 'Cancel', 'Ignore', 'No', 'Ok', 'Retry', 'Yes']) {
+    assert.ok(hasEvent('ErrorDlg', response, 'EndDialog', 'Error' + response));
+    assert.equal(t.Control.rows.find(row => row[0] === 'ErrorDlg' && row[1] === response)[10], null);
+  }
+  assert.ok(!Object.hasOwn(t, 'CustomAction'));
+  assert.deepEqual(t.InstallExecuteSequence.rows.map(row => row[0]), ['AppSearch', 'FindRelatedProducts', 'LaunchConditions', 'CostInitialize', 'FileCost', 'CostFinalize', 'InstallValidate', 'InstallInitialize', 'ProcessComponents', 'UnpublishFeatures', 'RemoveRegistryValues', 'RemoveShortcuts', 'RemoveFiles', 'RemoveFolders', 'InstallFiles', 'CreateShortcuts', 'WriteRegistryValues', 'RegisterUser', 'RegisterProduct', 'PublishFeatures', 'PublishProduct', 'InstallFinalize']);
+});
+
 test('native MSI database roundtrips Unicode, apostrophes and NULL fields', async t => {
   assert.equal(process.platform, 'win32', 'WINDOWS_NATIVE_SQL_GATE');
   const pwsh = process.env.PWSH_PATH; assert.ok(pwsh && path.isAbsolute(pwsh), 'APPROVED_PWSH_7_REQUIRED');

@@ -19,6 +19,21 @@ try {
     $view.Close()
     if ($names.Count -ne 2 -or $names -notcontains "空 格's.mjs") { throw 'MSI_SQL_ROUNDTRIP_FAILED' }
     if ($database.SummaryInformation(0).Property(7) -ne 'x64;1033') { throw 'MSI_X64_SUMMARY_FAILED' }
+    # Reopen and compare actual UI tables as well as all existing authoring rows; never execute the MSI.
+    foreach ($name in $spec.tables.Keys) {
+        $table = $spec.tables[$name]
+        $columns = @([regex]::Matches($table.columns, '(?:^|, )([A-Za-z_][A-Za-z_0-9]*) ') | ForEach-Object { $_.Groups[1].Value })
+        $query = 'SELECT ' + (($columns | ForEach-Object { '`' + $_ + '`' }) -join ', ') + ' FROM `' + $name + '`'
+        $view = $database.OpenView($query); $view.Execute()
+        $actual = @()
+        while ($row = $view.Fetch()) {
+            $values = @(for ($i = 1; $i -le $columns.Count; $i++) { $row.StringData($i) })
+            $actual += ConvertTo-Json -InputObject $values -Compress
+        }
+        $view.Close()
+        $expected = @($table.rows | ForEach-Object { ConvertTo-Json -InputObject @($_ | ForEach-Object { [string]$_ }) -Compress })
+        if ((ConvertTo-Json -InputObject @($actual | Sort-Object) -Compress) -cne (ConvertTo-Json -InputObject @($expected | Sort-Object) -Compress)) { throw "MSI_TABLE_ROUNDTRIP_FAILED:$name" }
+    }
     'NATIVE_MSI_SQL_ROUNDTRIP_PASS'
 } finally {
     [Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) | Out-Null

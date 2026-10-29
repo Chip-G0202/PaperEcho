@@ -27,7 +27,7 @@ export function installerTables(files, productCode, packageCode = productCode) {
     Property: { columns: 'Property CHAR(72) NOT NULL, Value CHAR(0) LOCALIZABLE', key: 'Property', rows: Object.entries({ ProductCode: productCode,
       UpgradeCode: '{7395EC5E-338E-4E71-92A2-579BD64EE6E4}', ProductName: 'PaperEcho TEST ONLY', ProductVersion: appVersion,
       ProductLanguage: '1033', Manufacturer: 'PaperEcho contributors', INSTALLLEVEL: '1', ARPNOMODIFY: '1', ARPNOREPAIR: '1', PaperEchoPackageId: packageCode,
-      SecureCustomProperties: 'OLDERPRODUCTS;NEWERPRODUCTS' }) },
+      SecureCustomProperties: 'OLDERPRODUCTS;NEWERPRODUCTS', DefaultUIFont: 'PaperEchoFont', ErrorDialog: 'ErrorDlg' }) },
     AppSearch: { columns: 'Property CHAR(72) NOT NULL, Signature_ CHAR(72) NOT NULL', key: 'Property, Signature_', rows: [['PAPERECHO_INSTALLED_PACKAGE', 'InstalledPackage']] },
     // AppSearch queries this schema even for a raw registry locator; no file signature is required.
     Signature: { columns: 'Signature CHAR(72) NOT NULL, FileName CHAR(255) NOT NULL LOCALIZABLE, MinVersion CHAR(20), MaxVersion CHAR(20), MinSize LONG, MaxSize LONG, MinDate LONG, MaxDate LONG, Languages CHAR(255)', key: 'Signature', rows: [] },
@@ -53,8 +53,54 @@ export function installerTables(files, productCode, packageCode = productCode) {
       ['NOT Installed OR REMOVE = "ALL" OR (PAPERECHO_INSTALLED_PACKAGE AND PAPERECHO_INSTALLED_PACKAGE = PaperEchoPackageId)', 'PAPERECHO_PACKAGE_REPLACEMENT_BLOCKED: Maintenance requires the original installed package; uninstall remains available.'],
       ['NOT PATCH AND NOT MSIPATCHREMOVE', 'PAPERECHO_PATCH_UNSUPPORTED: MSI patch updates are not supported.']] },
     InstallExecuteSequence: { columns: 'Action CHAR(72) NOT NULL, Condition CHAR(255), Sequence SHORT', key: 'Action', rows: [] },
-    InstallUISequence: { columns: 'Action CHAR(72) NOT NULL, Condition CHAR(255), Sequence SHORT', key: 'Action', rows: [['AppSearch', null, 25], ['FindRelatedProducts', null, 50], ['LaunchConditions', null, 100], ['CostInitialize', null, 800], ['FileCost', null, 900], ['CostFinalize', null, 1000], ['ExecuteAction', null, 1300]] },
+    InstallUISequence: { columns: 'Action CHAR(72) NOT NULL, Condition CHAR(255), Sequence SHORT', key: 'Action', rows: [['AppSearch', null, 25], ['FindRelatedProducts', null, 50], ['LaunchConditions', null, 100], ['CostInitialize', null, 800], ['FileCost', null, 900], ['CostFinalize', null, 1000],
+      ['Welcome', 'UILevel = 5 AND NOT Installed', 1100], ['Progress', 'UILevel = 5 AND NOT Installed', 1250], ['ExecuteAction', null, 1300],
+      ['Exit', 'UILevel = 5 AND NOT Installed', -1], ['UserExit', 'UILevel = 5 AND NOT Installed', -2], ['FatalError', 'UILevel = 5 AND NOT Installed', -3]] },
+    TextStyle: { columns: 'TextStyle CHAR(72) NOT NULL, FaceName CHAR(32) NOT NULL, Size SHORT NOT NULL, Color LONG, StyleBits SHORT', key: 'TextStyle', rows: [['PaperEchoFont', 'Segoe UI', 9, null, 0]] },
+    Dialog: { columns: 'Dialog CHAR(72) NOT NULL, HCentering SHORT NOT NULL, VCentering SHORT NOT NULL, Width SHORT NOT NULL, Height SHORT NOT NULL, Attributes LONG, Title CHAR(128) LOCALIZABLE, Control_First CHAR(50) NOT NULL, Control_Default CHAR(50), Control_Cancel CHAR(50)', key: 'Dialog', rows: [] },
+    Control: { columns: 'Dialog_ CHAR(72) NOT NULL, Control CHAR(50) NOT NULL, Type CHAR(20) NOT NULL, X SHORT NOT NULL, Y SHORT NOT NULL, Width SHORT NOT NULL, Height SHORT NOT NULL, Attributes LONG, Property CHAR(72), Text CHAR(0) LOCALIZABLE, Control_Next CHAR(50), Help CHAR(50) LOCALIZABLE', key: 'Dialog_, Control', rows: [] },
+    ControlEvent: { columns: 'Dialog_ CHAR(72) NOT NULL, Control_ CHAR(50) NOT NULL, Event CHAR(50) NOT NULL, Argument CHAR(255) NOT NULL, Condition CHAR(255), Ordering SHORT', key: 'Dialog_, Control_, Event, Argument, Condition', rows: [] },
+    EventMapping: { columns: 'Dialog_ CHAR(72) NOT NULL, Control_ CHAR(50) NOT NULL, Event CHAR(50) NOT NULL, Attribute CHAR(50) NOT NULL', key: 'Dialog_, Control_, Event', rows: [['Progress', 'Bar', 'SetProgress', 'Progress'], ['Progress', 'Status', 'ActionText', 'Text']] },
+    ActionText: { columns: 'Action CHAR(72) NOT NULL, Description CHAR(0) LOCALIZABLE, Template CHAR(0) LOCALIZABLE', key: 'Action', rows: [
+      ['InstallFiles', 'Installing application files...', null], ['WriteRegistryValues', 'Registering the current-user application...', null], ['CreateShortcuts', 'Creating application shortcuts...', null], ['InstallFinalize', 'Finishing the installation...', null]] },
   };
+  // Native MSI UI only. ExecuteAction and the unchanged execute sequence own all transactions.
+  // https://learn.microsoft.com/en-us/windows/win32/msi/dialog-boxes
+  const dialog = (name, first, cancel = first, attributes = 3) => tables.Dialog.rows.push([name, 50, 50, 370, 270, attributes, '[ProductName] Setup', first, first, cancel]);
+  const text = (name, control, value, y = 35, height = 100) => tables.Control.rows.push([name, control, 'Text', 20, y, 330, height, 3, null, value, null, null]);
+  const button = (name, control, label, x, next = control) => tables.Control.rows.push([name, control, 'PushButton', x, 235, 70, 20, 3, null, label, next, null]);
+  const event = (name, control, kind, argument) => tables.ControlEvent.rows.push([name, control, kind, argument, '1', 1]);
+  dialog('Welcome', 'Next', 'Cancel');
+  text('Welcome', 'Message', 'Welcome to [ProductName] [ProductVersion]. This unsigned TEST ONLY package is not a production release.');
+  button('Welcome', 'Next', 'Next', 200, 'Cancel'); button('Welcome', 'Cancel', 'Cancel', 280, 'Next');
+  event('Welcome', 'Next', 'NewDialog', 'Ready');
+  dialog('Ready', 'Install', 'Cancel');
+  text('Ready', 'Message', 'Install for the current Windows user only, in the fixed local application folder. User research data is separate. Click Install to begin, or Cancel to leave without installing.');
+  button('Ready', 'Back', 'Back', 120, 'Install'); button('Ready', 'Install', 'Install', 200, 'Cancel'); button('Ready', 'Cancel', 'Cancel', 280, 'Back');
+  event('Ready', 'Back', 'NewDialog', 'Welcome'); event('Ready', 'Install', 'EndDialog', 'Return');
+  dialog('Progress', 'Cancel', 'Cancel', 1); // Modeless: sequencing continues to ExecuteAction.
+  text('Progress', 'Message', 'Installing PaperEcho TEST ONLY. Windows Installer manages the transaction.');
+  text('Progress', 'Status', 'Preparing installation...', 140, 35);
+  tables.Control.rows.push(['Progress', 'Bar', 'ProgressBar', 20, 195, 330, 15, 1, null, null, null, null]);
+  button('Progress', 'Cancel', 'Cancel', 280);
+  for (const name of ['Welcome', 'Ready', 'Progress']) event(name, 'Cancel', 'SpawnDialog', 'CancelConfirm');
+  dialog('CancelConfirm', 'No', 'No'); text('CancelConfirm', 'Message', 'Cancel this installation? Windows Installer will stop the transaction. Cancellation is not installation success.');
+  button('CancelConfirm', 'Yes', 'Yes', 200, 'No'); button('CancelConfirm', 'No', 'No', 280, 'Yes');
+  event('CancelConfirm', 'Yes', 'EndDialog', 'Exit'); event('CancelConfirm', 'No', 'EndDialog', 'Return');
+  for (const [name, message] of [
+    ['Exit', 'PaperEcho TEST ONLY installation completed. The application has not been started.'],
+    ['UserExit', 'Installation was cancelled. Installation success has not been reported.'],
+    ['FatalError', 'Installation failed. Keep the installer log for diagnosis; installation success has not been reported.'],
+  ]) {
+    dialog(name, 'Finish'); text(name, 'Message', message); button(name, 'Finish', 'Close', 280); event(name, 'Finish', 'EndDialog', 'Return');
+  }
+  // ErrorDialog has reserved ErrorText/response semantics; MSI chooses the visible buttons.
+  // https://learn.microsoft.com/en-us/windows/win32/msi/error-dialog
+  dialog('ErrorDlg', 'ErrorText', null, 65539);
+  text('ErrorDlg', 'ErrorText', '[ErrorText]');
+  for (const response of ['Abort', 'Cancel', 'Ignore', 'No', 'Ok', 'Retry', 'Yes']) {
+    button('ErrorDlg', response, response, 200, null); event('ErrorDlg', response, 'EndDialog', 'Error' + response);
+  }
   const directories = new Map([['.', 'INSTALLROOT']]);
   function directory(name) {
     if (directories.has(name)) return directories.get(name);
