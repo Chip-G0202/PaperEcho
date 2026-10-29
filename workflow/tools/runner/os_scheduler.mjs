@@ -3,21 +3,21 @@ import { taskOperations } from '../lib/windows_task_scheduler.mjs';
 
 export const schedulerCommands = Object.freeze(['--schedule-preflight', '--schedule-dry-run', ...taskOperations.map(x => '--schedule-' + x)]);
 
-export async function schedulerMain(argv, { env = process.env, cwd, stdout = process.stdout, schedulerAdapter } = {}) {
+export async function schedulerMain(argv, { env = process.env, cwd, stdout = process.stdout, schedulerAdapter, schedulerInspect = inspectOsSchedule } = {}) {
   if (argv.length !== 1 || !schedulerCommands.includes(argv[0])) {
     stdout.write('{"schemaVersion":1,"status":"FAIL","code":"SCHEDULER_ARGUMENT_INVALID","osMutation":false}\n'); return 3;
   }
   if (!['--schedule-preflight', '--schedule-dry-run'].includes(argv[0])) {
     try {
       const { manageOsSchedule } = await import('../lib/os_scheduler_management.mjs');
-      const report = await manageOsSchedule(argv[0].slice('--schedule-'.length), { env, applicationRoot: cwd, adapter: schedulerAdapter });
-      stdout.write(JSON.stringify(report) + '\n'); return 0;
+      const report = await manageOsSchedule(argv[0].slice('--schedule-'.length), { env, applicationRoot: cwd, adapter: schedulerAdapter, inspect: schedulerInspect });
+      stdout.write(JSON.stringify(report) + '\n'); return report.status === 'UNKNOWN' ? 3 : 0;
     } catch (error) {
       const code = /^SCHEDULER_[A-Z_]+$/.test(error.message) ? error.message : 'SCHEDULER_OPERATION_FAILED';
       stdout.write(JSON.stringify({ schemaVersion: 1, status: 'FAIL', code, osMutation: 'not-confirmed' }) + '\n'); return 2;
     }
   }
-  const report = await inspectOsSchedule({ env, applicationRoot: cwd });
+  const report = await schedulerInspect({ env, applicationRoot: cwd });
   const { spec, definition, ...safe } = report;
   safe.runtime = { embedded: Boolean(process.versions.electron), node: process.versions.node, browserProcess: process.type === 'browser', pid: process.pid };
   if (spec) {

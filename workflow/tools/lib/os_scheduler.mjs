@@ -114,7 +114,7 @@ export async function inspectOsSchedule({ env = process.env, applicationRoot, pl
       add('scheduler.runnerDecision', ['recovery_required', 'resume'].includes(selection.status) ? 'FAIL' : 'PASS');
     }
     if (platform === 'darwin') add('scheduler.platform', 'UNKNOWN');
-    if (platform === 'darwin' && Intl.DateTimeFormat().resolvedOptions().timeZone !== spec.timezone) add('scheduler.hostTimezone', 'FAIL');
+    if (platform === 'darwin') add('scheduler.hostTimezone', Intl.DateTimeFormat().resolvedOptions().timeZone === spec.timezone ? 'PASS' : 'FAIL');
     // clock is only for deterministic report timestamps, never a workflow trigger.
     definition = scheduleDefinition(spec);
     return { schemaVersion: 1, status: checks.some(c => c.status === 'FAIL') ? 'FAIL' : checks.some(c => c.status === 'UNKNOWN') ? 'UNKNOWN' : 'PASS',

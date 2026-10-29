@@ -21,8 +21,8 @@ export function validateMacScheduleSpec(spec) {
 }
 function content(spec) { return scheduleDefinition(spec).content + marker + Buffer.from(JSON.stringify(spec)).toString('base64') + ' -->\n'; }
 
-// Independent explicit adapter. CLI registration stays blocked until Mac packaged
-// preflight/launchd acceptance exists; never register during ordinary startup.
+// Explicit adapter. Management requires local safety checks independently of
+// platform release acceptance; never register during ordinary startup.
 export class MacLaunchAgent {
   constructor({ fsApi = fs, execute = nativeExec, platform = process.platform, identity = () => os.userInfo(), timezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone } = {}) {
     Object.assign(this, { fs: fsApi, command: execute, platform, identity, timezone });

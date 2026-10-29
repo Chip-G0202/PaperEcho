@@ -148,5 +148,5 @@ test('unsafe ancestor, forged spec and concurrent management cannot mutate a for
   const g = fixture(); await g.run('register'); g.add(g.file + '.lock', false, 'foreign lock');
   await assert.rejects(g.run('delete'), /SCHEDULER_MANAGEMENT_BUSY/); assert.equal(g.nodes.get(g.file + '.lock').text, 'foreign lock');
   await assert.rejects(g.run('register', { ...g.spec, executable: '/bin/sh', secret: 'private-test-key' }), /^Error: SCHEDULER_SPEC_INVALID$/);
-  await assert.rejects(manageOsSchedule('register', { inspect: async () => ({ status: 'UNKNOWN', spec: g.spec }), adapter: { execute: () => assert.fail('Mac CLI gate must not be bypassed') } }), /SCHEDULER_WINDOWS_SPEC_REQUIRED/);
+  await assert.rejects(manageOsSchedule('register', { inspect: async () => ({ status: 'UNKNOWN', spec: g.spec }), adapter: { execute: () => assert.fail('Incomplete Mac safety checks must not be bypassed') } }), /SCHEDULER_PREFLIGHT_BLOCKED/);
 });
