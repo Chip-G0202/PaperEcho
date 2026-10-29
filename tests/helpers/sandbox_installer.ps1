@@ -201,12 +201,8 @@ try {
     $code = $_.Exception.Message
     if ($code -notmatch '^[A-Z][A-Z0-9_]+$') { $code = 'GUEST_TEST_EXCEPTION' }
     $report = @{ schemaVersion = 1; runId = $manifest.runId; stage = $reportStage; status = 'FAIL'; guestIdentityVerified = $identityVerified; failedStep = $stage; code = $code; line = $_.InvocationInfo.ScriptLineNumber; hresult = $_.Exception.HResult; childExit = $script:lastChildExit; childCodes = $script:lastChildCodes; msiCodes = $script:lastMsiCodes; lastMsiAction = $script:lastMsiAction; installerServiceAtTimeout = $script:installerServiceAtTimeout; steps = $steps.ToArray(); trace = $runTrace.ToArray() }
-    if ($identityVerified -and $product -match '^\{[A-F0-9-]{36}\}$') {
-        try {
-            Assert-InstallerGuest
-            if ($installer.ProductState($product) -eq 5) { $cleanup = Run $msiexec ('/x ' + $product + ' /qn /norestart'); $report.cleanupExit = $cleanup.code }
-        } catch { $report.cleanupExit = 'CLEANUP_UNCONFIRMED' }
-    }
+    # Preserve the failure state for diagnosis; cleanup requires a separate authorized operation.
+    $report.cleanupExit = 'NOT_ATTEMPTED_EVIDENCE_PRESERVED'
 }
 if ($identityVerified) {
     $file = Join-Path $outputRoot 'installer-result.json'

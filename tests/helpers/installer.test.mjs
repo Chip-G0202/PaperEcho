@@ -48,6 +48,40 @@ test('installer identity-only probe rejects the host before reaching any MSI ope
       { timeout: 15000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), error => error.status !== 0 && error.stderr.includes('INSTALLER_GUEST_PATH_REQUIRED'));
   }
 });
+test('installer failure catch preserves diagnostics without cleanup; successful uninstall flow remains', () => {
+  const pwsh = process.env.PWSH_PATH; assert.ok(pwsh && path.isAbsolute(pwsh), 'APPROVED_PWSH_7_REQUIRED');
+  const command = String.raw`
+$ErrorActionPreference='Stop'
+if($PSVersionTable.PSVersion.Major -lt 7 -or $PSVersionTable.PSEdition -ne 'Core'){throw 'PS7_REQUIRED'}
+$errors=$null;$tokens=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER_SOURCE,[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'HELPER_PARSE_FAILED'}
+$main=@($ast.EndBlock.Statements | Where-Object {$_ -is [Management.Automation.Language.TryStatementAst]})
+if($main.Count -ne 1 -or $main[0].CatchClauses.Count -ne 1){throw 'EXACT_FAILURE_CATCH_REQUIRED'}
+$body=$main[0].CatchClauses[0].Body
+if(@($body.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst]},$true)).Count){throw 'FAILURE_CATCH_COMMAND_FORBIDDEN'}
+$identityVerified=$true;$product='{F195CE9A-D022-5105-AF9C-5CB52C0636ED}'
+$manifest=@{runId='synthetic-failure'};$reportStage='HYPERV_INSTALLER';$stage='install'
+$steps=[Collections.Generic.List[object]]::new();$steps.Add(@{step='prior-step'})
+$runTrace=[Collections.Generic.List[object]]::new();$runTrace.Add(@{kind='msiexec';pid=123;timedOut=$false})
+$script:lastChildExit=1603;$script:lastChildCodes=@('ERR_DUMMY');$script:lastMsiCodes=@(1402)
+$script:lastMsiAction='InstallFiles';$script:installerServiceAtTimeout='Running'
+$script:cleanupCalls=0
+function Run { $script:cleanupCalls++; throw 'MSI_EXECUTION_FORBIDDEN' }
+# Exercise only the parsed catch, never the Guest entry or any real installer.
+$invoke=[scriptblock]::Create('try { throw "DUMMY_INSTALL_FAILED" } catch '+$body.Extent.Text+'; $report')
+$report=& $invoke
+if($script:cleanupCalls -ne 0){throw 'FAILURE_CLEANUP_ATTEMPTED'}
+if($report.status -cne 'FAIL' -or $report.code -cne 'DUMMY_INSTALL_FAILED' -or $report.failedStep -cne 'install' -or $report.cleanupExit -cne 'NOT_ATTEMPTED_EVIDENCE_PRESERVED'){throw 'FAILURE_REPORT_CHANGED'}
+if($report.childExit -ne 1603 -or $report.childCodes[0] -cne 'ERR_DUMMY' -or $report.msiCodes[0] -ne 1402 -or $report.lastMsiAction -cne 'InstallFiles' -or $report.installerServiceAtTimeout -cne 'Running' -or $report.trace.Count -ne 1 -or $report.steps.Count -ne 1 -or -not $report.line -or -not $report.hresult){throw 'DIAGNOSTICS_LOST'}
+if(@([regex]::Matches($main[0].Body.Extent.Text,'Run \$msiexec \(''/x ')).Count -ne 2){throw 'SUCCESS_UNINSTALL_FLOW_CHANGED'}
+[Console]::Out.Write('FAILURE_EVIDENCE_PRESERVED')`;
+  const output = execFileSync(pwsh, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+    timeout: 15000, encoding: 'utf8', windowsHide: true, env: { ...process.env, TEST_INSTALLER_SOURCE: path.resolve('tests/helpers/sandbox_installer.ps1') },
+  });
+  assert.equal(output, 'FAILURE_EVIDENCE_PRESERVED');
+});
+
 test('native installer is per-user, data-free and uses standard transactional actions', () => {
   const t = installerTables(files, product);
   assert.equal(t.Property.rows.some(([key]) => key === 'ALLUSERS'), false);
