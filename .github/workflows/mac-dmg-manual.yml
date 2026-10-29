@@ -24,7 +24,7 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npm ci --ignore-scripts --no-audit --no-fund --prefix desktop/electron-poc
-      - name: Build and verify unsigned arm64 TEST-ONLY DMG
+      - name: Build, verify signature and smoke native headless arm64 TEST-ONLY DMG
         run: npm run package:dmg:mac --prefix desktop/electron-poc
       - name: Upload only verified DMG and summary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
