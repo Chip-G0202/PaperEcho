@@ -12,6 +12,61 @@ import { ResearchEvaluationService } from '../tools/lib/research_evaluation_serv
 import { RuleSuggestionService } from '../tools/lib/control_rule_suggestion_service.mjs';
 import { createRunRecoveryCoordinator } from '../tools/recovery/run_recovery.mjs';
 import { blockMigrationNetwork } from '../../tests/helpers/upgrade_migration_process.mjs';
+import { writeUpgradeFixture } from '../../tests/helpers/upgrade_fixture.mjs';
+import { sha256 } from '../tools/lib/backup_format.mjs';
+import { parseRssItems } from '../tools/stage1/retrieval_step.mjs';
+import { getReviewDisplayMetadata } from '../tools/lib/review_display_metadata.mjs';
+import { exportAllResearchOsXlsxWithNodeFallback } from '../tools/stage4/spreadsheet_adapter.mjs';
+
+test('schema5 upgrade preserves RSS publication provenance and shared UI/XLSX venue semantics', async t => {
+  const network = blockMigrationNetwork();
+  t.after(() => { network.restore(); assert.equal(network.calls, 0); });
+  const sources = [
+    { name: 'Item metadata feed', url: 'https://example.invalid/a', publicationTitle: 'Configured Lower Priority Journal', enabled: true },
+    { name: 'Single journal feed', url: 'https://example.invalid/b', publicationTitle: 'Configured Journal', enabled: true },
+    { name: 'Combined research feed', url: 'https://example.invalid/c', enabled: true },
+    { name: 'Unknown source', url: 'https://example.invalid/d', enabled: true },
+  ];
+  const feeds = sources.map((source, i) => `<rss xmlns:prism="http://prismstandard.org/namespaces/basic/2.0/"><channel><title>${i === 2 ? 'Neuroscience Research Roundup' : source.name}</title><item><title>Synthetic RSS paper ${i}</title><link>https://example.invalid/paper/${i}</link>${i === 0 ? '<prism:publicationName>Trusted Article Journal</prism:publicationName>' : ''}</item></channel></rss>`);
+  const parse = config => sources.flatMap((source, i) => parseRssItems(feeds[i], source.url, config.rss.sources[i]).map(item => ({ ...item, grade: 'B', semantic_grade: 'B', semantic_stage_status: 'completed', final_grade: 'B' })));
+  const relative = 'review_results/pipeline/rss-compat/triaged_items.json';
+  const expected = ['Trusted Article Journal', 'Configured Journal', '', ''];
+  const f = await migrationFixture(t, { schema: 5, prepareSource: async source => {
+    source.config.rss = { sources };
+    await writeUpgradeFixture(source.context.configPath, source.config);
+    source.context.backupConfigHash = sha256(await fs.readFile(source.context.configPath));
+    await writeUpgradeFixture(path.join(source.data, relative), parse(source.config));
+  } });
+  const original = await fs.readFile(path.join(f.data, relative));
+  const archive = await fs.readFile(f.backup);
+  const before = await upgradeFileHashes(f.data);
+  const display = async (items, label) => {
+    const metadata = items.map(item => getReviewDisplayMetadata(item));
+    assert.deepEqual(metadata.map(item => item.journal), expected);
+    assert.ok(metadata.every(item => item.source === 'RSS'));
+    assert.equal(metadata[2].rawSourceLabel, 'Neuroscience Research Roundup');
+    const dir = path.join(f.root, label), sourcePath = path.join(dir, 'export.json');
+    await writeUpgradeFixture(sourcePath, { triaged: items });
+    await exportAllResearchOsXlsxWithNodeFallback({ sourcePath, reviewRootDir: dir, reviewWeekDir: dir, reviewDayDir: dir });
+    const { default: ExcelJS } = await import('exceljs');
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(path.join(dir, '周报.xlsx'));
+    const sheet = workbook.getWorksheet('每日反馈');
+    assert.equal(sheet.rowCount, 5);
+    assert.deepEqual(items.map((_, i) => sheet.getRow(i + 2).getCell(6).value), expected.map(venue => venue || 'RSS'));
+    return metadata;
+  };
+  const originalDisplay = await display(JSON.parse(original), 'display-before');
+  const result = await f.execute();
+  assert.equal(result.status, 'committed'); assert.equal(result.reactivatedClaims, false); assert.equal(result.doctor.canRun, false);
+  const migrated = JSON.parse(await fs.readFile(path.join(f.target, 'config/paperecho.config.json')));
+  assert.equal(migrated.schemaVersion, 6); assert.deepEqual(migrated.rss, f.config.rss);
+  const history = await fs.readFile(path.join(f.target, relative));
+  assert.deepEqual(history, original);
+  assert.deepEqual(await display(JSON.parse(history), 'display-after'), originalDisplay);
+  assert.deepEqual(parse(migrated), JSON.parse(original));
+  assert.deepEqual(await upgradeFileHashes(f.data), before); assert.deepEqual(await fs.readFile(f.backup), archive);
+  assert.ok(!JSON.stringify(result).includes('dummy-upgrade-local-secret')); assert.equal(network.calls, 0);
+});
 
 test('schema5 upgrade preserves prepared/published feedback fingerprints and reviewed history without replay', async t => {
   const network = blockMigrationNetwork();
