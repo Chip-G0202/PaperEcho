@@ -161,23 +161,111 @@ function Get-FullUiProductState([string]$product) {
     $engine = New-Object -ComObject WindowsInstaller.Installer
     try { return $engine.ProductState($product) } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($engine) | Out-Null }
 }
-function Wait-FullUiObservation($process, [string]$directory, $binding, $steps, [int]$index, $watch, [int]$budget = 1200) {
-    $phase = $steps[$index]
-    Write-FullUiJson (Join-Path $directory 'installer-progress.json') ($binding + @{phase=$phase;status='STARTED';stepIndex=$index}) -Replace
-    $file = Join-Path $directory ($phase+'.json')
-    while ($watch.Elapsed.TotalSeconds -lt $budget) {
-        if (Test-Path -LiteralPath $file) {
-            Assert-FullUiPath $file; Require ((Get-Item -LiteralPath $file).Length -le 4096) 'FULL_UI_SIGNAL_INVALID'
-            $signal = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
-            $action = if ($phase -ceq 'msi-cancel') {'clicked-cancel'} elseif ($phase -ceq 'msi-install') {'clicked-install'} else {'observed'}
-            Require ($signal.runId -ceq $binding.runId -and $signal.scenario -ceq $binding.scenario -and $signal.msiSha256 -ceq $binding.msiSha256 -and $signal.contextSha256 -ceq $binding.contextSha256 -and $signal.step -ceq $phase -and $signal.stepIndex -eq $index -and $signal.action -ceq $action) 'FULL_UI_SIGNAL_INVALID'
-            return @{step=$phase;action=$action;source='manual-observation'}
+function Enter-FullUiEvidenceLock([string]$directory, [long]$deadline) {
+    $path = Join-Path $directory 'ui-evidence.lock'
+    Assert-FullUiPath $directory
+    if (Test-Path -LiteralPath $path) { Assert-FullUiPath $path }
+    do {
+        try { return [IO.File]::Open($path, 'OpenOrCreate', 'ReadWrite', 'None') }
+        catch [IO.IOException] {
+            if (($_.Exception.HResult -band 65535) -notin @(32,33)) { throw }
+            $remaining=$deadline-[Environment]::TickCount64
+            if ($remaining -le 0) { throw 'FULL_UI_TIMEOUT' }
+            Start-Sleep -Milliseconds ([int][Math]::Min(10,$remaining))
         }
+    } while ([Environment]::TickCount64 -lt $deadline)
+    throw 'FULL_UI_TIMEOUT'
+}
+function Get-FullUiExitEvidence($process, [long]$deadline) {
+    $evidence = @{status='EXIT_CODE_UNVERIFIED';exitCode=$null}
+    try {
+        $remaining = $deadline-[Environment]::TickCount64
+        if ($remaining -lt 0) { $remaining=0 } elseif ($remaining -gt 120000) { $remaining=120000 }
+        if ($process.HasExited -or $process.WaitForExit([int]$remaining)) {
+            $evidence.status='EXIT_CODE_VERIFIED'; $evidence.exitCode=$process.ExitCode
+        }
+    } catch { $evidence.error='ORIGINAL_PROCESS_EXIT_UNAVAILABLE' }
+    return $evidence
+}
+function Get-FullUiContextRows([string]$product, [string]$sid) {
+    if (-not ('PaperEchoMsiContext' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public sealed class PaperEchoMsiContextRow {
+ public uint Code, Context;
+ public bool ProductMatches, SidMatches;
+}
+public static class PaperEchoMsiContext {
+ [DllImport("msi.dll",EntryPoint="MsiEnumProductsExW",CharSet=CharSet.Unicode,ExactSpelling=true)]
+ private static extern uint Enum(string product,string sid,uint context,uint index,[Out] StringBuilder code,out uint actual,[Out] StringBuilder owner,ref uint size);
+ public static PaperEchoMsiContextRow[] Query(string product,string sid) {
+  var rows=new List<PaperEchoMsiContextRow>();
+  foreach(uint mask in new uint[]{1,2,4}) {
+   for(uint i=0;i<4;i++) {
+    uint actual,size=256;var code=new StringBuilder(39);var owner=new StringBuilder(256);
+    // Keep the machine NULL inside C#: PowerShell converts null string arguments to empty strings.
+    uint rc=Enum(product,mask==4?null:sid,mask,i,code,out actual,owner,ref size);
+    rows.Add(new PaperEchoMsiContextRow{Code=rc,Context=actual,ProductMatches=String.Equals(product,code.ToString(),StringComparison.OrdinalIgnoreCase),SidMatches=String.Equals(sid,owner.ToString(),StringComparison.Ordinal)});
+    if(rc==259) break;
+    if(rc!=0 || i==3) return rows.ToArray();
+   }
+  }
+  return rows.ToArray();
+ }
+}
+'@
+    }
+    return [PaperEchoMsiContext]::Query($product,$sid)
+}
+function Get-FullUiInstallScope([string]$product) {
+    try {
+        Require ($product -cmatch '^\{[A-F0-9-]{36}\}$') 'PRODUCT_ID_INVALID'
+        $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        $rows=@(Get-FullUiContextRows $product $sid)
+        Require ($rows.Count -ge 3 -and @($rows|Where-Object Code -EQ 259).Count -eq 3) 'CONTEXT_QUERY_INCOMPLETE'
+        Require (@($rows|Where-Object { $_.Code -notin @(0,259) }).Count -eq 0) 'CONTEXT_QUERY_FAILED'
+        $installed=@($rows|Where-Object Code -EQ 0)
+        foreach ($row in $installed) { Require ($row.ProductMatches -and ($row.Context -eq 4 -or ($row.Context -in @(1,2) -and $row.SidMatches))) 'CONTEXT_IDENTITY_MISMATCH' }
+        if (-not $installed.Count) { return 'UNREGISTERED' }
+        if ($installed.Count -ne 1) { return 'INSTALL_SCOPE_UNVERIFIED' }
+        if ($installed[0].Context -eq 4) { return 'INSTALL_SCOPE_MACHINE' }
+        return 'INSTALL_SCOPE_USER'
+    } catch { return 'INSTALL_SCOPE_UNVERIFIED' }
+}
+
+function Wait-FullUiObservation($process, [string]$directory, $binding, $steps, [int]$index, $watch, [int]$budget = 1080) {
+    $phase = $steps[$index]
+    $deadline = if ($binding.signalDeadlineTick) { [long]$binding.signalDeadlineTick } else { [Environment]::TickCount64+[long][Math]::Max(0,($budget-$watch.Elapsed.TotalSeconds)*1000) }
+    $lock = Enter-FullUiEvidenceLock $directory $deadline
+    try {
+        Require ($watch.Elapsed.TotalSeconds -lt $budget -and [Environment]::TickCount64 -lt $deadline) 'FULL_UI_TIMEOUT'
+        Write-FullUiJson (Join-Path $directory 'installer-progress.json') ($binding + @{phase=$phase;status='STARTED';stepIndex=$index}) -Replace
+    } finally { $lock.Dispose() }
+    $file = Join-Path $directory ($phase+'.json')
+    while ($watch.Elapsed.TotalSeconds -lt $budget -and [Environment]::TickCount64 -lt $deadline) {
+        $lock = Enter-FullUiEvidenceLock $directory $deadline
+        try {
+            if (Test-Path -LiteralPath $file) {
+                Assert-FullUiPath $file; Require ((Get-Item -LiteralPath $file).Length -le 4096) 'FULL_UI_SIGNAL_INVALID'
+                $signal = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+                $action = if ($phase -ceq 'msi-cancel') {'clicked-cancel'} elseif ($phase -ceq 'msi-install') {'clicked-install'} else {'observed'}
+                Require ($signal.runId -ceq $binding.runId -and $signal.scenario -ceq $binding.scenario -and $signal.msiSha256 -ceq $binding.msiSha256 -and $signal.contextSha256 -ceq $binding.contextSha256 -and $signal.step -ceq $phase -and $signal.stepIndex -eq $index -and $signal.action -ceq $action) 'FULL_UI_SIGNAL_INVALID'
+                # Publication AND acceptance must finish before the cutoff; equality is late.
+                Require ([Environment]::TickCount64 -lt $deadline -and $watch.Elapsed.TotalSeconds -lt $budget) 'FULL_UI_TIMEOUT'
+                if ($binding.signalDeadlineTick) { Require ($signal.publishedTick -ge $binding.startedTick -and $signal.publishedTick -lt $deadline) 'FULL_UI_SIGNAL_INVALID' }
+                return @{step=$phase;action=$action;source='manual-observation'}
+            }
+        } finally { $lock.Dispose() }
         Require (-not $process.HasExited) 'FULL_UI_OBSERVATION_INCOMPLETE'
-        Start-Sleep -Milliseconds 250
+        $remaining=$deadline-[Environment]::TickCount64
+        if ($remaining -gt 0) { Start-Sleep -Milliseconds ([int][Math]::Min(250,$remaining)) }
     }
     throw 'FULL_UI_TIMEOUT'
 }
+
 function Get-FullUiOutcome([string]$scenario, [int]$exitCode, [int]$productState, [bool]$transactionStarted, [bool]$transactionFinished) {
     if ($scenario -ceq 'CancelBeforeInstall' -and $exitCode -eq 1602 -and $productState -eq -1 -and -not $transactionStarted) { return 'USER_CANCELLED' }
     if ($scenario -ceq 'Install' -and $exitCode -eq 0 -and $productState -eq 5 -and $transactionStarted -and $transactionFinished) { return 'INSTALL_PASS' }
@@ -217,18 +305,28 @@ function Invoke-FullUiScenario {
     $msi = Join-Path $work 'PaperEcho-TEST-ONLY.msi'; Copy-Item -LiteralPath $source -Destination $msi
     Require ((Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash -ieq $manifest.msiSha256) 'LOCAL_MSI_HASH_INVALID'
     $binding = @{schemaVersion=1;runId=$manifest.runId;scenario=$FullUiScenario;msiSha256=$manifest.msiSha256;contextSha256=$HyperVContextSha256}
+    # 18 minutes for manual evidence; reserve at most 2 minutes for the original process.
+    $binding.startedTick=[Environment]::TickCount64
+    $binding.signalDeadlineTick=$binding.startedTick+1080000
+    $binding.totalDeadlineTick=$binding.startedTick+1200000
+    $binding.signalDeadlineUtc=[DateTime]::UtcNow.AddMinutes(18).ToString('o')
     Write-FullUiJson (Join-Path $directory 'binding.json') $binding
     $beforeData = Get-FullUiSnapshot $data; $log = Join-Path $directory 'msi-verbose.log'; $process = $null
     $report = $binding + @{status='UNKNOWN';productStateBefore=$beforeState;automaticCleanupPerformed=$false;log='msi-verbose.log';observationEvidence='MANUAL_SIGNALS_REQUIRE_VISUAL_REVIEW';observations=@()}
+    $reportFrozen=$false; $handleAcquired=$false; $exitDeadline=$null
     try {
         Assert-InstallerGuest; Assert-FullUiDesktop
         # Manual GUI interaction only. Never call the silent Run(): it has a different timeout policy.
         $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList ('/i "'+$msi+'" /qf /norestart /l*vx! "'+$log+'"') -WorkingDirectory $work -PassThru -WindowStyle Normal
         $report.pid = $process.Id; $watch = [Diagnostics.Stopwatch]::StartNew()
+        $null=$process.Handle; $handleAcquired=$true
+        $report.processStartedUtc=$process.StartTime.ToUniversalTime().ToString('o')
         $phases = if ($FullUiScenario -ceq 'CancelBeforeInstall') { @('msi-welcome','msi-ready','msi-cancel','msi-user-exit') } else { @('msi-welcome','msi-ready','msi-install','msi-progress','msi-exit') }
         for ($i = 0; $i -lt $phases.Count; $i++) { $report.observations += Wait-FullUiObservation $process $directory $binding $phases $i $watch }
-        Require ($process.WaitForExit([Math]::Max(1,1200000-[int]$watch.ElapsedMilliseconds))) 'FULL_UI_TIMEOUT'
-        $report.exitCode = $process.ExitCode; $report.productStateAfter = Get-FullUiProductState $identity.ProductCode
+        $exitDeadline=[Math]::Min($binding.totalDeadlineTick,([Environment]::TickCount64+120000))
+        $exitEvidence=Get-FullUiExitEvidence $process $exitDeadline
+        Require ($exitEvidence.status -ceq 'EXIT_CODE_VERIFIED') 'FULL_UI_TIMEOUT'
+        $report.exitCode = $exitEvidence.exitCode; $report.exitCodeEvidence='ORIGINAL_PROCESS_HANDLE'; $report.productStateAfter = Get-FullUiProductState $identity.ProductCode
         Assert-FullUiPath $log
         $started = $false; $finished = $false; $welcome = $false; $progress = $false; $exit = $false
         foreach ($line in [IO.File]::ReadLines($log)) {
@@ -243,7 +341,10 @@ function Invoke-FullUiScenario {
         Require ($report.status -ne 'FAIL') 'FULL_UI_RESULT_MISMATCH'
         Require ((Get-FullUiSnapshot $data) -ceq $beforeData) 'FULL_UI_DATA_CHANGED'
         Require ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ieq $manifest.msiSha256) 'FULL_UI_INPUT_CHANGED'
-        Require (-not (Test-Path -LiteralPath ('HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\'+$identity.ProductCode)) -and -not (Test-Path -LiteralPath ('HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\'+$identity.ProductCode))) 'MACHINE_REGISTRATION_REMAINS'
+        $report.installScope=Get-FullUiInstallScope $identity.ProductCode
+        Require ($report.installScope -cne 'INSTALL_SCOPE_UNVERIFIED') 'INSTALL_SCOPE_UNVERIFIED'
+        $expectedScope=if($FullUiScenario -ceq 'Install'){'INSTALL_SCOPE_USER'}else{'UNREGISTERED'}
+        Require ($report.installScope -ceq $expectedScope) 'INSTALL_SCOPE_MISMATCH'
         if ($FullUiScenario -ceq 'Install') {
             Require ($progress -and $exit) 'FULL_UI_LOG_EVIDENCE_MISSING'
             foreach ($entry in $manifest.payload) { $file = Join-Path $app $entry.path; Assert-FullUiPath $file; Require ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ieq $entry.sha256) 'INSTALLED_PAYLOAD_HASH_INVALID' }
@@ -253,9 +354,18 @@ function Invoke-FullUiScenario {
     } catch {
         $report.status = 'FAIL'; $report.code = if ($_.Exception.Message -cmatch '^[A-Z][A-Z0-9_]+$') { $_.Exception.Message } else { 'FULL_UI_CHECK_FAILED' }
         if ($process -and -not $process.HasExited) { $report.status='UNKNOWN';$report.processState='RUNNING';$report.manualInspectionRequired=$true }
-    }
-    Write-FullUiJson (Join-Path $directory 'installer-progress.json') ($binding + @{status=$report.status;phase='finished'}) -Replace
-    Write-FullUiJson (Join-Path $directory 'full-ui-result.json') $report
+        # Freeze failure before collecting supplementary exit evidence. Never upgrade this result.
+        Write-FullUiJson (Join-Path $directory 'full-ui-result.json') $report; $reportFrozen=$true
+        $supplement=@{status='EXIT_CODE_UNVERIFIED';exitCode=$null}
+        if ($handleAcquired) {
+            if ($null -eq $exitDeadline) { $exitDeadline=[Math]::Min($binding.totalDeadlineTick,([Environment]::TickCount64+120000)) }
+            $supplement=Get-FullUiExitEvidence $process $exitDeadline
+        }
+        Write-FullUiJson (Join-Path $directory 'exit-evidence.json') ($binding+@{originalStatus=$report.status;originalCode=$report.code;evidence=$supplement;guiAcceptance='UNCONFIRMED'})
+    } finally { if ($process) { $process.Dispose() } }
+    $lock=Enter-FullUiEvidenceLock $directory $binding.totalDeadlineTick
+    try { Write-FullUiJson (Join-Path $directory 'installer-progress.json') ($binding + @{status=$report.status;phase='finished'}) -Replace } finally { $lock.Dispose() }
+    if (-not $reportFrozen) { Write-FullUiJson (Join-Path $directory 'full-ui-result.json') $report }
     if ($report.status -notin @('USER_CANCELLED','INSTALL_PASS')) { throw 'FULL_UI_INSPECTION_REQUIRED' }
 }
 if ($FullUiScenario) { Invoke-FullUiScenario; return }

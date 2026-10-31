@@ -109,7 +109,7 @@ test('Full UI safe substitutes distinguish cancellation, installation and runnin
 $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER_SOURCE,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'PARSE_FAILED'}
-foreach($fn in $ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -in @('Require','Assert-FullUiPath','Write-FullUiJson','Get-FullUiSnapshot','Get-FullUiOutcome','Wait-FullUiObservation','Invoke-FullUiScenario')}){Invoke-Expression $fn.Extent.Text}
+foreach($fn in $ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -in @('Require','Assert-FullUiPath','Write-FullUiJson','Get-FullUiSnapshot','Get-FullUiOutcome','Wait-FullUiObservation','Enter-FullUiEvidenceLock','Get-FullUiExitEvidence','Invoke-FullUiScenario')}){Invoke-Expression $fn.Extent.Text}
 foreach($case in @(@('CancelBeforeInstall',1602,-1,$false,$false,'USER_CANCELLED'),@('CancelBeforeInstall',0,5,$true,$true,'FAIL'),@('CancelBeforeInstall',1602,-1,$true,$false,'FAIL'),@('Install',0,5,$true,$true,'INSTALL_PASS'),@('Install',1603,5,$true,$false,'FAIL'),@('Install',0,-1,$true,$true,'FAIL'))){$arguments=@($case[0..4]);if((Get-FullUiOutcome @arguments) -cne $case[5]){throw 'OUTCOME_INVALID'}}
 $waiter=(Get-Item -LiteralPath 'Function:\Wait-FullUiObservation').ScriptBlock
 $desktopFn=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Assert-FullUiDesktop'},$true)[0]
@@ -121,7 +121,8 @@ function Get-CimInstance {return @()}
 function Test-Path {param([string]$LiteralPath) if($LiteralPath -match '^HK[CL]'){return $false};Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath}
 function Read-FullUiPackage {return @{ProductName='PaperEcho TEST ONLY';ProductVersion='2.6.0';ProductCode='{11111111-1111-4111-8111-111111111111}';PackageCode='{22222222-2222-4222-8222-222222222222}';UpgradeCode='{7395EC5E-338E-4E71-92A2-579BD64EE6E4}'}}
 function Get-FullUiProductState {if($script:stateReads++ -eq 0){return -1};if($FullUiScenario -ceq 'Install'){return 5};return -1}
-function Wait-FullUiObservation {param($process,$directory,$binding,$steps,$index,$watch) return @{step=$steps[$index];source='OFFLINE_MOCK_ONLY'}}
+function Get-FullUiInstallScope {if($FullUiScenario -ceq 'Install'){return 'INSTALL_SCOPE_USER'};return 'UNREGISTERED'}
+function Wait-FullUiObservation {param($process,$directory,$binding,$steps,$index,$watch) if($script:observationTimeout){throw 'FULL_UI_TIMEOUT'};return @{step=$steps[$index];source='OFFLINE_MOCK_ONLY'}}
 function Start-Process {
  param($FilePath,$ArgumentList,$WorkingDirectory,[switch]$PassThru,$WindowStyle)
  if($script:identityCalls -lt 2 -or $script:desktopCalls -lt 2 -or $WindowStyle -cne 'Normal' -or $ArgumentList -notmatch '/qf /norestart /l\*vx!' -or $ArgumentList -match '/qn|/qb|/x |ALLUSERS' -or [IO.Path]::GetFileName($FilePath) -ine 'msiexec.exe'){throw 'UNSAFE_START'}
@@ -133,14 +134,15 @@ function Start-Process {
   $lines+=@('Action start 10:00:00: Progress.','Action start 10:00:00: InstallInitialize.','Action ended 10:00:00: InstallFinalize. Return value 1.','Action start 10:00:00: Exit.')
  }
  $lines|Set-Content -LiteralPath (Join-Path (Split-Path -Parent $WorkingDirectory) 'msi-verbose.log')
- $p=[pscustomobject]@{Id=4242;HasExited=$false;ExitCode=$(if($FullUiScenario -ceq 'Install'){0}else{1602})}
- $p|Add-Member ScriptMethod WaitForExit {param($budget) if($script:timeout){return $false};$this.HasExited=$true;return $true}
+ $p=[pscustomobject]@{Id=4242;Handle=123;StartTime=[DateTime]::Now;HasExited=$false;ExitCode=$(if($FullUiScenario -ceq 'Install'){0}else{1602})}
+ $p|Add-Member ScriptMethod WaitForExit {param($budget) if($script:timeout -and -not $script:observationTimeout){return $false};$this.HasExited=$true;return $true}
+ $p|Add-Member ScriptMethod Dispose {}
  $p|Add-Member ScriptMethod Kill {$script:kills++;throw 'KILL_FORBIDDEN'}
  return $p
 }
 $HyperVContextSha256='b'*64;$script:kills=0;$script:starts=0
-foreach($case in @('CancelBeforeInstall','Install','Timeout')){
- $script:timeout=$case -ceq 'Timeout';$FullUiScenario=if($script:timeout){'CancelBeforeInstall'}else{$case}
+foreach($case in @('CancelBeforeInstall','Install','Timeout','ObservationTimeoutExit')){
+ $script:observationTimeout=$case -ceq 'ObservationTimeoutExit';$script:timeout=$case -in @('Timeout','ObservationTimeoutExit');$FullUiScenario=if($script:timeout){'CancelBeforeInstall'}else{$case}
  $run=[guid]::NewGuid().ToString();$inputRoot=Join-Path $env:TEST_ROOT ('input-'+$run);$outputRoot=Join-Path $env:TEST_ROOT ('output-'+$run)
  $env:LOCALAPPDATA=Join-Path $env:TEST_ROOT ('profile-'+$run)
  $null=New-Item -ItemType Directory -Path $inputRoot,$outputRoot
@@ -154,6 +156,13 @@ foreach($case in @('CancelBeforeInstall','Install','Timeout')){
  $expected=if($script:timeout){'UNKNOWN'}elseif($case -ceq 'Install'){'INSTALL_PASS'}else{'USER_CANCELLED'}
  if($report.status -cne $expected -or $report.automaticCleanupPerformed -ne $false -or $report.runId -cne $run -or $script:kills -ne 0){throw 'MOCK_REPORT_INVALID'}
  if($script:timeout -and (-not $caught -or $report.processState -cne 'RUNNING' -or $report.code -cne 'FULL_UI_TIMEOUT')){throw 'TIMEOUT_LOST'}
+ if($script:timeout){
+  if($report.exitCode -ne $null){throw 'FAILURE_RESULT_MUTATED'}
+  $supplement=Get-Content -LiteralPath (Join-Path $directory 'exit-evidence.json') -Raw|ConvertFrom-Json
+  $expectedEvidence=if($script:observationTimeout){'EXIT_CODE_VERIFIED'}else{'EXIT_CODE_UNVERIFIED'}
+  if($supplement.evidence.status -cne $expectedEvidence -or $supplement.originalCode -cne 'FULL_UI_TIMEOUT' -or $supplement.guiAcceptance -cne 'UNCONFIRMED'){throw 'EXIT_SUPPLEMENT_INVALID'}
+  if($script:observationTimeout -and $supplement.evidence.exitCode -ne 1602){throw 'REAL_MOCK_EXIT_LOST'}
+ }
  if(-not $script:timeout){$denied=$false;try{Invoke-FullUiScenario}catch{$denied=$true};if(-not $denied){throw 'RUN_REUSE_ACCEPTED'}}
  if($script:timeout){
   $script:fullUiManifest.runId=[guid]::NewGuid().ToString();$denied=$false
@@ -163,7 +172,7 @@ foreach($case in @('CancelBeforeInstall','Install','Timeout')){
 }
 $binding=@{runId=$run;scenario='CancelBeforeInstall';msiSha256=('a'*64);contextSha256=('b'*64)}
 $denied=$false;try{& $waiter ([pscustomobject]@{HasExited=$false}) $directory $binding @('msi-welcome') 0 ([pscustomobject]@{Elapsed=[timespan]::FromSeconds(1201)})}catch{if($_.Exception.Message -cne 'FULL_UI_TIMEOUT'){throw};$denied=$true}
-if(-not $denied -or $script:starts -ne 3 -or $script:kills -ne 0){throw 'WAIT_SIDE_EFFECT'}
+if(-not $denied -or $script:starts -ne 4 -or $script:kills -ne 0){throw 'WAIT_SIDE_EFFECT'}
 [Console]::Out.Write('FULL_UI_OFFLINE_MOCK_PASS')`;
   const output = execFileSync(process.env.PWSH_PATH, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', timeout: 20000, windowsHide: true,
     env: { ...process.env, TEST_ROOT: root, TEST_INSTALLER_SOURCE: path.resolve('tests/helpers/sandbox_installer.ps1') } });
@@ -299,4 +308,112 @@ test('native MSI database roundtrips Unicode, apostrophes and NULL fields', asyn
   await fs.writeFile(spec, JSON.stringify({ tables, msi: path.join(root, 'fixture.msi'), payload, packageCode: product }));
   const result = execFileSync(pwsh, ['-NoProfile', '-NonInteractive', '-File', path.resolve('tests/helpers/installer_sql.ps1'), '-Specification', spec], { timeout: 30000, encoding: 'utf8' });
   assert.match(result, /NATIVE_MSI_SQL_ROUNDTRIP_PASS/);
+});
+
+test('Full UI recorder cutoff, reserved exit evidence and native scope stay fail closed', async t => {
+  const root = await fs.mkdtemp(path.resolve('tests/runs/recorder-boundary-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const script = String.raw`$ErrorActionPreference='Stop'
+$ast=[Management.Automation.Language.Parser]::ParseFile($env:SOURCE,[ref]$null,[ref]$null)
+foreach($f in $ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -in @('Require','Assert-FullUiPath','Write-FullUiJson','Enter-FullUiEvidenceLock','Wait-FullUiObservation','Get-FullUiExitEvidence','Get-FullUiInstallScope')}){Invoke-Expression $f.Extent.Text}
+$dir=$env:FIXTURE;$run=[guid]::NewGuid().ToString();$now=[Environment]::TickCount64
+$binding=@{runId=$run;scenario='Install';msiSha256=('a'*64);contextSha256=('b'*64);startedTick=$now-100;signalDeadlineTick=$now+5000;totalDeadlineTick=$now+125000}
+$signal=$binding+@{step='msi-welcome';stepIndex=0;action='observed';publishedTick=$now}
+Write-FullUiJson (Join-Path $dir 'msi-welcome.json') $signal
+$process=[pscustomobject]@{HasExited=$false}
+$observed=Wait-FullUiObservation $process $dir $binding @('msi-welcome') 0 ([pscustomobject]@{Elapsed=[timespan]::FromSeconds(1079)})
+if($observed.step -cne 'msi-welcome'){throw 'EARLY_SIGNAL_LOST'}
+$rejected=$false;try{Wait-FullUiObservation $process $dir $binding @('msi-welcome') 0 ([pscustomobject]@{Elapsed=[timespan]::FromSeconds(1080)})}catch{if($_.Exception.Message -cne 'FULL_UI_TIMEOUT'){throw};$rejected=$true}
+if(-not $rejected){throw 'EQUALITY_ACCEPTED'}
+$binding.signalDeadlineTick=[Environment]::TickCount64-1
+$rejected=$false;try{Wait-FullUiObservation $process $dir $binding @('msi-welcome') 0 ([pscustomobject]@{Elapsed=[timespan]::Zero})}catch{if($_.Exception.Message -cne 'FULL_UI_TIMEOUT'){throw};$rejected=$true}
+if(-not $rejected){throw 'LATE_SIGNAL_ACCEPTED'}
+$p=[pscustomobject]@{HasExited=$false;ExitCode=0;WaitBudget=-1}
+$p|Add-Member ScriptMethod WaitForExit {param($n)$this.WaitBudget=$n;$this.HasExited=$true;return $true}
+$e=Get-FullUiExitEvidence $p ([Environment]::TickCount64+50)
+if($e.status -cne 'EXIT_CODE_VERIFIED' -or $e.exitCode -ne 0 -or $p.WaitBudget -gt 50){throw 'EXIT_BUDGET_OR_CODE_LOST'}
+$p.HasExited=$false;$p|Add-Member -Force ScriptMethod WaitForExit {param($n)$this.WaitBudget=$n;return $false}
+$e=Get-FullUiExitEvidence $p ([Environment]::TickCount64-1)
+if($e.status -cne 'EXIT_CODE_UNVERIFIED' -or $null -ne $e.exitCode -or $p.WaitBudget -ne 0){throw 'HARD_LIMIT_EXTENDED'}
+function Get-FullUiContextRows {param($product,$sid) return $script:rows}
+$end=@(@{Code=259},@{Code=259},@{Code=259})
+$script:rows=$end+@(@{Code=0;Context=2;ProductMatches=$true;SidMatches=$true})
+# HKLM ARP presence is deliberately true and must never determine MSI context.
+function Test-Path {return $true}
+$product='{11111111-1111-4111-8111-111111111111}'
+if((Get-FullUiInstallScope $product) -cne 'INSTALL_SCOPE_USER'){throw 'HKLM_FALSE_MACHINE_SCOPE'}
+$script:rows=$end+@(@{Code=0;Context=4;ProductMatches=$true;SidMatches=$false})
+if((Get-FullUiInstallScope $product) -cne 'INSTALL_SCOPE_MACHINE'){throw 'MACHINE_CONTEXT_LOST'}
+$script:rows+=@{Code=0;Context=2;ProductMatches=$true;SidMatches=$true}
+if((Get-FullUiInstallScope $product) -cne 'INSTALL_SCOPE_UNVERIFIED'){throw 'CONTEXT_CONFLICT_ACCEPTED'}
+$script:rows=$end+@(@{Code=0;Context=2;ProductMatches=$true;SidMatches=$false})
+if((Get-FullUiInstallScope $product) -cne 'INSTALL_SCOPE_UNVERIFIED'){throw 'FOREIGN_IDENTITY_ACCEPTED'}
+$script:rows=@(@{Code=87})
+if((Get-FullUiInstallScope $product) -cne 'INSTALL_SCOPE_UNVERIFIED'){throw 'QUERY_ERROR_ACCEPTED'}
+[Console]::Out.Write('RECORDER_BOUNDARY_PASS')`;
+  const file = path.join(root, 'test.ps1'); await fs.writeFile(file, script);
+  const out = execFileSync(process.env.PWSH_PATH, ['-NoLogo','-NoProfile','-NonInteractive','-File',file], {
+    encoding:'utf8',timeout:15000,windowsHide:true,
+    env:{...process.env,SOURCE:path.resolve('tests/helpers/sandbox_installer.ps1'),FIXTURE:root}
+  });
+  assert.equal(out, 'RECORDER_BOUNDARY_PASS');
+  const source = await fs.readFile('tests/helpers/sandbox_installer.ps1','utf8');
+  assert.match(source, /totalDeadlineTick=\$binding.startedTick\+1200000/);
+  assert.match(source, /signalDeadlineTick=\$binding.startedTick\+1080000/);
+  const fullStart=source.indexOf('function Invoke-FullUiScenario');
+  const dispatch=source.indexOf('if ($FullUiScenario) { Invoke-FullUiScenario; return }',fullStart);
+  assert.ok(fullStart >= 0 && dispatch > fullStart);
+  const full=source.slice(fullStart,dispatch);
+  const scope=source.slice(source.indexOf('function Get-FullUiInstallScope'),source.indexOf('function Wait-FullUiObservation'));
+  const native=source.slice(source.indexOf('function Get-FullUiContextRows'),source.indexOf('function Get-FullUiInstallScope'));
+  assert.match(full, /Get-FullUiInstallScope \$identity\.ProductCode/);
+  assert.match(scope, /\$sid=\[Security\.Principal\.WindowsIdentity\]::GetCurrent\(\)\.User\.Value/);
+  assert.match(scope, /Get-FullUiContextRows \$product \$sid/);
+  assert.match(native, /foreach\(uint mask in new uint\[\]\{1,2,4\}\)/);
+  assert.match(native, /Enum\(product,mask==4\?null:sid,mask,i,/);
+  assert.doesNotMatch(full, /MACHINE_REGISTRATION_REMAINS|HKLM:[^\n]*Uninstall/);
+  assert.match(source.slice(dispatch), /MACHINE_REGISTRATION_REMAINS/);
+});
+
+test('Full UI recorder serializes publication against finished and rejects deadline replay', async t => {
+  const root=await fs.mkdtemp(path.resolve('tests/runs/recorder-publication-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const script=String.raw`$ErrorActionPreference='Stop'
+$dir=$env:FIXTURE;$run=[guid]::NewGuid().ToString();$tick=[Environment]::TickCount64
+$binding=@{runId=$run;scenario='Install';msiSha256=('a'*64);contextSha256=('b'*64);startedTick=$tick;signalDeadlineTick=$tick+10000}
+$binding|ConvertTo-Json|Set-Content (Join-Path $dir 'binding.json')
+$progress=$binding+@{status='STARTED';phase='msi-welcome';stepIndex=0}
+$progress|ConvertTo-Json|Set-Content (Join-Path $dir 'installer-progress.json')
+$lock=[IO.File]::Open((Join-Path $dir 'ui-evidence.lock'),'OpenOrCreate','ReadWrite','None')
+$childFile=Join-Path $dir 'child.ps1'
+@'
+$ErrorActionPreference='Stop'
+[IO.File]::WriteAllText((Join-Path $env:FIXTURE 'ready'),'READY')
+& $env:SIGNAL -Directory $env:FIXTURE -Step msi-welcome -Scenario Install -RunId $env:RUN -Action observed
+'@|Set-Content $childFile
+$psi=[Diagnostics.ProcessStartInfo]::new($env:APPROVED_PWSH);$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardError=$true;$psi.RedirectStandardOutput=$true
+foreach($arg in @('-NoLogo','-NoProfile','-NonInteractive','-File',$childFile)){$psi.ArgumentList.Add($arg)}
+$psi.Environment['RUN']=$run
+$child=[Diagnostics.Process]::Start($psi)
+try {
+ $until=[Environment]::TickCount64+4000
+ while(-not(Test-Path (Join-Path $dir 'ready')) -and [Environment]::TickCount64 -lt $until){Start-Sleep -Milliseconds 10}
+ if(-not(Test-Path (Join-Path $dir 'ready'))){throw 'CHILD_NOT_READY'}
+ $progress.status='UNKNOWN';$progress.phase='finished';$progress|ConvertTo-Json|Set-Content (Join-Path $dir 'installer-progress.json')
+} finally {$lock.Dispose()}
+if(-not $child.WaitForExit(6000)){throw 'CHILD_WAIT_BOUND_EXCEEDED'}
+$stderr=$child.StandardError.ReadToEnd();if($child.ExitCode -eq 0 -or $stderr -notmatch 'UI_PHASE_CHANGED'){throw 'STALE_PUBLICATION_ACCEPTED'};$child.Dispose()
+if(Test-Path (Join-Path $dir 'msi-welcome.json')){throw 'LATE_SIGNAL_CREATED'}
+$binding.signalDeadlineTick=[Environment]::TickCount64-1
+$binding|ConvertTo-Json|Set-Content (Join-Path $dir 'binding.json')
+$progress=$binding+@{status='STARTED';phase='msi-welcome';stepIndex=0};$progress|ConvertTo-Json|Set-Content (Join-Path $dir 'installer-progress.json')
+$rejected=$false;try{& $env:SIGNAL -Directory $dir -Step msi-welcome -Scenario Install -RunId $run -Action observed}catch{if($_.Exception.Message -cne 'SIGNAL_DEADLINE_EXCEEDED'){throw};$rejected=$true}
+if(-not $rejected -or (Test-Path (Join-Path $dir 'msi-welcome.json'))){throw 'DEADLINE_REPLAY_ACCEPTED'}
+[Console]::Out.Write('RECORDER_PUBLICATION_PASS')`;
+  const file=path.join(root,'test.ps1');await fs.writeFile(file,script);
+  const out=execFileSync(process.env.PWSH_PATH,['-NoLogo','-NoProfile','-NonInteractive','-File',file],{
+    encoding:'utf8',timeout:15000,windowsHide:true,
+    env:{...process.env,FIXTURE:root,SIGNAL:path.resolve('tests/helpers/hyperv_ui_signal.ps1'),APPROVED_PWSH:process.env.PWSH_PATH}
+  });
+  assert.equal(out,'RECORDER_PUBLICATION_PASS');
 });

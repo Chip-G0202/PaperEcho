@@ -16,6 +16,18 @@ function Read-SignalJson([string]$file){
 }
 $fullUi=$Step.StartsWith('msi-')
 if(-not $fullUi -and $Step -cnotmatch '^(negative|full)-(login-screen|password-field|desktop)$'){throw 'SIGNAL_STEP_INVALID'}
+$publicationLock=$null
+try {
+if($fullUi){
+ $initialBinding=Read-SignalJson (Join-Path $dir 'binding.json')
+ $lockFile=Join-Path $dir 'ui-evidence.lock'
+ if(Test-Path -LiteralPath $lockFile){$item=Get-Item -LiteralPath $lockFile;if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.LinkType){throw 'SIGNAL_FILE_UNSAFE'}}
+ $lockDeadline=if($initialBinding.signalDeadlineTick){[long]$initialBinding.signalDeadlineTick}else{[Environment]::TickCount64+5000}
+ while(-not $publicationLock){
+  if([Environment]::TickCount64 -ge $lockDeadline){throw 'SIGNAL_DEADLINE_EXCEEDED'}
+  try{$publicationLock=[IO.File]::Open($lockFile,'OpenOrCreate','ReadWrite','None')}catch [IO.IOException]{if(($_.Exception.HResult -band 65535) -notin @(32,33)){throw};Start-Sleep -Milliseconds 10}
+ }
+}
 $progress=Read-SignalJson (Join-Path $dir 'installer-progress.json')
 if($progress.phase -cne $Step -or $progress.status -cne 'STARTED' -or $progress.runId -cnotmatch '^[a-f0-9-]{36}$'){throw 'UI_PHASE_CHANGED'}
 $signal=@{schemaVersion=1;runId=$progress.runId;step=$Step}
@@ -32,14 +44,19 @@ if($fullUi){
  }
  $expected=if($Step -ceq 'msi-cancel'){'clicked-cancel'}elseif($Step -ceq 'msi-install'){'clicked-install'}else{'observed'}
  if($Action -cne $expected){throw 'SIGNAL_ACTION_INVALID'}
+ if($binding.signalDeadlineTick -and ($progress.signalDeadlineTick -ne $binding.signalDeadlineTick -or [Environment]::TickCount64 -ge $binding.signalDeadlineTick)){throw 'SIGNAL_DEADLINE_EXCEEDED'}
  $signal.scenario=$Scenario;$signal.stepIndex=$index;$signal.msiSha256=$progress.msiSha256;$signal.contextSha256=$progress.contextSha256;$signal.action=$Action
 } elseif($Scenario -or $RunId -or $HyperVContextSha256){throw 'SIGNAL_SCENARIO_INVALID'}
 elseif($Step.EndsWith('-login-screen')){if($Action -cnotin @('dismiss-lockscreen','password-ready')){throw 'SIGNAL_ACTION_REQUIRED'};$signal.action=$Action}
 elseif($Action){throw 'SIGNAL_ACTION_INVALID'}
 $file=Join-Path $dir ($Step+'.json');$temp=Join-Path $dir ([guid]::NewGuid().ToString()+'.tmp');$created=$false
 try{
+ if($fullUi -and $binding.signalDeadlineTick){$signal.publishedTick=[Environment]::TickCount64}
  $stream=[IO.File]::Open($temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$created=$true
  try{$bytes=[Text.Encoding]::UTF8.GetBytes(($signal|ConvertTo-Json -Compress));$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
  # The ready name becomes visible only after the exclusive writer has closed.
+ if($fullUi -and $binding.signalDeadlineTick -and [Environment]::TickCount64 -ge $binding.signalDeadlineTick){throw 'SIGNAL_DEADLINE_EXCEEDED'}
  [IO.File]::Move($temp,$file)
 }finally{if($created -and (Test-Path -LiteralPath $temp)){Remove-Item -LiteralPath $temp}}
+
+}finally{if($publicationLock){$publicationLock.Dispose()}}
