@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveCapabilityInput } from './application_config.mjs';
+import { modelCredentials } from './model_credentials.mjs';
 import { fileURLToPath } from "node:url";
 import { createServiceConcurrencyController, parseServerDelayMs } from "./adaptive_concurrency.mjs";
 import { registerEphemeral } from "./ephemeral_registry.mjs";
@@ -209,7 +210,8 @@ function resolveTranslationConfig({ env = process.env } = {}) {
 
   return {
     enabled: coerceBoolean(env.TITLE_TRANSLATION_ENABLED ?? fileConfig.enabled, DEFAULT_CONFIG.enabled),
-    apiKeyConfigured: Boolean(normalizeSecretValue(env.TITLE_TRANSLATION_API_KEY)),
+    apiKeyConfigured: Boolean(normalizeSecretValue(modelCredentials(env).translation)),
+    apiKey: normalizeSecretValue(modelCredentials(env).translation),
     endpoint: normalizeEndpointValue(env.TITLE_TRANSLATION_ENDPOINT)
       || normalizeEndpointValue(fileConfig.endpoint)
       || "",
@@ -547,6 +549,7 @@ function buildTranslationRequestBody(runtime, prompt, { maxOutputTokens, stream 
 }
 
 async function fetchTranslation(runtime, prompt, { maxOutputTokens, stream = runtime.stream } = {}) {
+  if (runtime.enabled === false) throw new Error('translation_disabled');
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error("translation_timeout")), runtime.timeout_ms);
   try {
@@ -554,7 +557,7 @@ async function fetchTranslation(runtime, prompt, { maxOutputTokens, stream = run
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${String(process.env.TITLE_TRANSLATION_API_KEY || "")}`,
+        Authorization: `Bearer ${runtime.apiKey ?? normalizeSecretValue(modelCredentials(process.env).translation)}`,
       },
       body: JSON.stringify(buildTranslationRequestBody(runtime, prompt, { maxOutputTokens, stream })),
       signal: controller.signal,
@@ -596,6 +599,7 @@ async function translateWithRuntime(title, {
   concurrencyController = null,
 } = {}) {
   const q = String(title || "").trim();
+  if (runtime.enabled === false) return { ok: false, zh: q, reason: 'disabled' };
   if (!q) return { ok: false, zh: q, reason: "empty" };
   if (!runtime.apiKeyConfigured) {
     return runtime.fallback_to_english

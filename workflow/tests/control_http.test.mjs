@@ -48,9 +48,9 @@ test('System application version reads packaged code metadata, never workspace o
   const metadata = path.join(app.root, 'package.json');
   await app.write(metadata, { name: 'paperecho-core', version: '2.6.0' });
   assert.equal(await readControlCenterVersion(metadata), '2.6.0');
-  assert.deepEqual((await app.get('/api/version')).json, { version: null }); // Development code has no application version metadata.
+  assert.deepEqual((await app.get('/api/version')).json, { version: '2.6.0' }); // Development and packaged code share the release version.
   assert.equal((await app.request('/api/version')).status, 403);
-  for (const value of [{ name: 'paperecho', version: '2.5.0' }, { name: 'paperecho-core', version: 'invalid' }, {}]) {
+  for (const value of [{ name: 'paperecho-compat', version: '2.5.0' }, { name: 'paperecho-core', version: 'invalid' }, {}]) {
     await app.write(metadata, value); assert.equal(await readControlCenterVersion(metadata), null);
   }
   await app.write(metadata, '{'); assert.equal(await readControlCenterVersion(metadata), null);

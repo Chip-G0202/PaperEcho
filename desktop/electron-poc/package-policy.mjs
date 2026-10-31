@@ -1,6 +1,7 @@
 import { FuseVersion, FuseV1Options as F } from '@electron/fuses';
 
-export const appVersion = '2.6.0';
+import { readFileSync } from 'node:fs';
+export const appVersion = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 export const fuseConfig = Object.freeze({ version: FuseVersion.V1, strictlyRequireAllFuses: true,
   [F.RunAsNode]: true, [F.EnableCookieEncryption]: true,
   [F.EnableNodeOptionsEnvironmentVariable]: false, [F.EnableNodeCliInspectArguments]: false,

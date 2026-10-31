@@ -1,5 +1,6 @@
 {
   "name": "paperecho",
+  "version": "2.6.0",
   "scripts": {
     "check": "node -e \"const fs=require('node:fs');const path=require('node:path');const cp=require('node:child_process');function walk(dir){let out=[];for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const file=path.join(dir,entry.name);if(entry.isDirectory())out=out.concat(walk(file));else if(file.endsWith('.mjs'))out.push(file);}return out;}const files=['workflow/tools','workflow/tests'].flatMap(walk);for(const file of files){const r=cp.spawnSync(process.execPath,['--check',file],{stdio:'inherit'});if(r.status)process.exit(r.status);}console.log('Checked '+files.length+' .mjs files.');\"",
     "test": "node --test workflow/tests/*.test.mjs",

@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { resolveCapabilityInput } from './application_config.mjs';
+import { resolveCapabilityInput, readDomainConfig } from './application_config.mjs';
+import { modelCredentials } from './model_credentials.mjs';
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -139,10 +140,19 @@ export function getPreferenceLearningConfig({ env = process.env } = {}) {
   const fallbackOrder = Array.isArray(fileConfig.api_key_env_fallback_order)
     ? fileConfig.api_key_env_fallback_order
     : DEFAULT_CONFIG.api_key_env_fallback_order;
-  const keyEnvName = fallbackOrder.find((name) => normalizeSecretValue(env[name])) || "";
+  const credentials = modelCredentials(env);
+  const legacyKeyName = fallbackOrder.find((name) => (credentials.compatible || name !== 'TITLE_TRANSLATION_API_KEY') && normalizeSecretValue(env[name])) || '';
+  const customLegacy = legacyKeyName && !['TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY'].includes(legacyKeyName);
+  const keyEnvName = credentials.sharedConfigured && credentials.compatible ? credentials.source : customLegacy ? legacyKeyName : credentials.source || legacyKeyName;
+  let preferenceEnabled = false;
+  try {
+    const rules = readDomainConfig(path.join(path.dirname(configPath), 'review-workflow-rules.json'), { env }).value?.llm_review;
+    preferenceEnabled = rules?.enabled !== false && rules?.preference_learning_enabled !== false;
+  } catch { /* Unknown preference switch state must not initiate API calls. */ }
 
   return {
     configPath,
+    preferenceEnabled,
     endpoint: normalizeCompletionsEndpoint(env.PREFERENCE_LEARNING_ENDPOINT)
       || normalizeCompletionsEndpoint(fileConfig.endpoint)
       || normalizeCompletionsEndpoint(env.TITLE_TRANSLATION_ENDPOINT),
@@ -308,6 +318,7 @@ async function fetchPreferenceLearning(runtime, prompt) {
 }
 
 export async function understandPreferenceEvaluation(payload, { runtime = getPreferenceLearningConfig(), llmClient = null } = {}) {
+  if (runtime.preferenceEnabled === false) return { ok: false, blocker: 'preference_disabled', output: null, ...safeRawResponseMetadata(''), request_would_have_been_sent: false };
   const llmMode = String(runtime.llm_mode || "real").trim().toLowerCase();
   if (llmMode === "disabled") {
     return { ok: false, blocker: "llm_disabled", output: null, ...safeRawResponseMetadata(""), request_would_have_been_sent: false };

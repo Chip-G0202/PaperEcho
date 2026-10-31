@@ -13,6 +13,7 @@ import { RuntimeLog } from './runtime_logging.mjs';
 import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
 import { getPublicationVenue } from './journal_name_cleaner.mjs';
 import { isValidRssPublicationTitle } from './application_config.mjs';
+import { modelConfigurationIssues } from './model_credentials.mjs';
 
 // One registered run, bounded reads and at most 500 RSS candidates; never all-history coverage.
 async function rssVenueSummary(review, config, root) {
@@ -215,6 +216,9 @@ export class DoctorService {
       if (state.lastError) add('logging.lastError', state.recovered ? 'PASS' : 'WARN', state.recovered ? '最近一次可确定的日志错误后已恢复写入' : '最近一次可确定的日志写入失败', `${state.lastError}；其他进程未留下证据的历史错误无法推断。`);
     });
     const status = overall(checks);
-    return { schemaVersion: 1, status, summary: labels[status], canRun: checks.some(x => x.blocking && x.status === 'FAIL') ? false : checks.some(x => x.blocking && x.status === 'UNKNOWN') ? null : true, checks };
+    let configurationIssues;
+    try { configurationIssues = modelConfigurationIssues(await this.config.list(), await this.secrets.list()); }
+    catch { configurationIssues = [{ checkId: 'model.configuration', status: 'UNKNOWN', summary: '无法确认模型配置', actionableHint: '请在设置中检查配置读取状态。' }]; }
+    return { schemaVersion: 1, status, summary: labels[status], canRun: checks.some(x => x.blocking && x.status === 'FAIL') ? false : checks.some(x => x.blocking && x.status === 'UNKNOWN') ? null : true, checks, configurationIssues };
   }
 }

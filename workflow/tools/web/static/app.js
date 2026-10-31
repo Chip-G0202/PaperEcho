@@ -18,7 +18,7 @@ const setupDraft = new Map(); // Non-secret unsaved fields only; no browser pers
 const notificationChannelIds = ['email', 'qq', 'wechat', 'feishu', 'wecom'];
 const decisionReceipts = new Map();
 const pageNames = { home: '概览 · Overview', weekly: '文献 · Literature', feedback: '反馈 · Feedback', settings: '设置 · Settings', system: '系统 · System', setup: '首次配置 · Setup' };
-const errorMessages = { SETTING_VALUE_INVALID: '请检查字段格式或允许范围，原设置未改变。', SEARCH_KEYWORD_OWNER_REQUIRED: '请使用检索词分组修改检索式。', CREDENTIAL_VALUE_INVALID: '请输入有效单行凭据（最多 4096 字符）；请勿同时包含两种引号。', CREDENTIAL_EXTERNALLY_MANAGED: '该凭据由外部环境管理，请在原入口修改。', CREDENTIAL_WRITE_FAILED: '凭据未保存，请检查本地配置权限后重试。', CREDENTIAL_ENV_FORMAT_UNSUPPORTED: '凭据文件格式无法安全编辑，原文件未改变。', WEEKLY_CHANGED_RELOAD: '当前文献已更新，请刷新页面后重试。' };
+const errorMessages = { SHARED_MODEL_PROVIDER_MISMATCH: '两项服务不兼容，请先在模型设置中统一服务地址；旧密钥未改变。', SETTING_VALUE_INVALID: '请检查字段格式或允许范围，原设置未改变。', SEARCH_KEYWORD_OWNER_REQUIRED: '请使用检索词分组修改检索式。', CREDENTIAL_VALUE_INVALID: '请输入有效单行凭据（最多 4096 字符）；请勿同时包含两种引号。', CREDENTIAL_EXTERNALLY_MANAGED: '该凭据由外部环境管理，请在原入口修改。', CREDENTIAL_WRITE_FAILED: '凭据未保存，请检查本地配置权限后重试。', CREDENTIAL_ENV_FORMAT_UNSUPPORTED: '凭据文件格式无法安全编辑，原文件未改变。', WEEKLY_CHANGED_RELOAD: '当前文献已更新，请刷新页面后重试。' };
 // Keep the existing API/canonical values; the stored learning action is unchanged.
 Object.assign(errorMessages, { SESSION_REQUIRED: '会话已失效，请刷新页面后重试。', CSRF_REQUIRED: '安全校验未通过，请刷新页面后重试。', ORIGIN_REJECTED: '请求来源未通过安全校验。', CREDENTIAL_ACL_UNSAFE: '文件权限无法安全确认，凭据未保存，请在原配置入口检查权限。', CREDENTIAL_CONCURRENT_CHANGE: '凭据文件已被其他操作更改，请重新读取后重试。', CREDENTIAL_RECOVERY_REQUIRED: '凭据恢复未完成，请通过原配置入口检查后再继续。', CREDENTIAL_KEY_NOT_ALLOWED: '此凭据字段不允许修改。' });
 const feedbackLabels = { highly_relevant: '升级', relevant: '不变', maybe: '降级', irrelevant: '排除', do_not_recommend_similar: '排除（原强负反馈）' };
@@ -285,7 +285,7 @@ async function system() {
   const { version } = await api('/api/version');
   for (const [name, value] of [['应用版本', version ? `PaperEcho v${version}` : 'PaperEcho（版本未标定）'], ['本地服务', '已响应 · 仅本机访问']]) facts.append(el('dt', name), el('dd', value));
   main.append(facts);
-  const support = el('section', undefined, 'settings-section');
+  const support = el('section', undefined, 'settings-section system-support');
   const supportState = el('p', '尚未导出。', 'meta'); supportState.setAttribute('role', 'status'); supportState.setAttribute('aria-live', 'polite'); supportState.dataset.supportStatus = 'idle';
   const exportButton = button('导出诊断包', async () => {
     if (supportExportBusy) return;
@@ -307,18 +307,31 @@ async function system() {
     results.setAttribute('aria-busy', 'true');
     try {
       const report = await api('/api/doctor'); results.replaceChildren();
-      const labels = { PASS: '正常', WARN: '建议处理', FAIL: '立即阻塞', UNKNOWN: '无法确认' };
+      const labels = { WARN: '建议处理', FAIL: '需要处理', UNKNOWN: '待确认' };
       results.dataset.doctorStatus = report.status;
-      results.append(el('h3', `总体状态：${labels[report.status] || labels.UNKNOWN}`), el('p', report.canRun === true ? '本地必需运行条件满足；外部服务未实测。' : report.canRun === false ? '存在阻止正式工作流运行的问题。' : '关键条件尚无法确认，请先检查下列提示。'));
-      for (const check of report.checks) {
-        const item = el('article', undefined, 'doctor-check'); item.dataset.checkId = check.checkId;
-        item.append(el('h4', `${labels[check.status] || labels.UNKNOWN} · ${check.summary}`));
-        if (check.actionableHint) item.append(el('p', check.actionableHint, 'meta'));
-        results.append(item);
+      const checks = report.checks.filter(check => check.status !== 'PASS' && (!check.checkId.startsWith('secret.') || ['FAIL', 'UNKNOWN'].includes(check.status)) && (!['preflight.optional', 'runtime.platform'].includes(check.checkId) || check.blocking || check.status === 'FAIL'));
+      const groups = [['配置问题', report.configurationIssues || []], ['运行与数据', checks]];
+      const count = groups.reduce((n, [, rows]) => n + rows.length, 0);
+      results.append(el('h3', count ? `需要关注 ${count} 项` : '未发现需要处理的问题'), el('p', '仅检查本地状态；外部服务未实测。', 'meta'));
+      for (const [title, rows] of groups) {
+        if (!rows.length) continue;
+        const group = el('section', undefined, 'doctor-group'); group.append(el('h4', title));
+        const grid = el('div', undefined, 'doctor-grid');
+        for (const check of rows) {
+          const item = el('article', undefined, 'doctor-check'); item.dataset.checkId = check.checkId;
+          item.append(el('h4', `${labels[check.status] || '待确认'} · ${check.summary}`));
+          if (check.actionableHint) item.append(el('p', check.actionableHint, 'meta'));
+          if (check.summary.length > 32 || (check.actionableHint || '').length > 36) {
+            const details = el('details'); details.append(el('summary', '查看完整说明'), el('p', check.summary), el('p', check.actionableHint || ''));
+            item.append(details);
+          }
+          grid.append(item);
+        }
+        group.append(grid); results.append(group);
       }
     } finally { results.setAttribute('aria-busy', 'false'); }
   });
-  main.append(refresh, results);
+  refresh.className = 'system-refresh'; main.append(refresh, results);
   results.append(el('p', '点击检查按钮获取当前状态；页面不会后台轮询。'));
 }
 async function feedback() {
@@ -637,7 +650,7 @@ function settingValue(setting, input) {
   return input.value;
 }
 function appendCredentialEditor(section, item, onStatusChange = () => {}) {
-  const names = { TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', SEMANTIC_SCHOLAR_API_KEY: 'Semantic Scholar API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key', QQ_BOT_APP_SECRET: 'QQ 机器人 AppSecret', WXPUSHER_APP_TOKEN: 'WxPusher appToken', WECOM_WEBHOOK_URL: '企业微信群机器人 Webhook', FEISHU_WEBHOOK_URL: '飞书机器人 Webhook', FEISHU_SIGNING_SECRET: '飞书签名密钥（可选；开启签名校验时必填）' };
+  const names = { PAPERECHO_MODEL_API_KEY: '共享 API Key', TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', SEMANTIC_SCHOLAR_API_KEY: 'Semantic Scholar API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key', QQ_BOT_APP_SECRET: 'QQ 机器人 AppSecret', WXPUSHER_APP_TOKEN: 'WxPusher appToken', WECOM_WEBHOOK_URL: '企业微信群机器人 Webhook', FEISHU_WEBHOOK_URL: '飞书机器人 Webhook', FEISHU_SIGNING_SECRET: '飞书签名密钥（可选；开启签名校验时必填）' };
   if (!item || !Object.hasOwn(names, item.id)) return null;
   const writable = () => item.writable === true && ['local-managed', 'unconfigured'].includes(item.storageClass);
   const row = el('div', undefined, 'setting credential-setting'); row.dataset.credential = item.id;
@@ -752,6 +765,46 @@ async function appendLoginStartup(container) {
   section.append(button('重新读取系统状态', refresh));
   await refresh();
 }
+async function appendModelSettings(container, data, credentials) {
+  const section = el('section', undefined, 'settings-section section model-settings');
+  section.append(el('h3', '翻译与偏好功能'));
+  const shared = credentials.find(row => row.id === 'PAPERECHO_MODEL_API_KEY');
+  const state = el('p', '', 'meta'); state.setAttribute('role', 'status');
+  const describe = () => !shared?.compatible ? '两项服务地址不同或无法确认兼容性，暂不能共享 Key；旧配置保持不变，请先统一服务地址。' : shared.conflict && !shared.configured ? '检测到两个不同的旧 Key，原值保持不变。明确保存新的共享 Key 后，两项功能才改用它；不会删除旧值。' : shared.effectiveConfigured ? '两项功能可共用现有 Key。密钥原值不回显；清除共享项也不会删除旧 Key。' : '尚未配置共享 Key。请填写服务提供商签发的 API Key。';
+  state.textContent = describe(); section.append(state);
+  if (shared) appendCredentialEditor(section, shared, async () => { state.textContent = describe(); });
+  const controls = [];
+  for (const [id, title] of [['translation.enabled', '启用翻译'], ['preference.enabled', '启用偏好功能']]) {
+    const item = data.find(row => row.id === id);
+    const label = el('label', title, 'model-toggle'); const input = el('input'); input.type = 'checkbox';
+    const master = data.find(row => row.id === 'review.master');
+    input.checked = id === 'translation.enabled' ? item?.value === true : item?.value === true && master?.value === true;
+    const before = input.checked; label.prepend(input); section.append(label); controls.push({ id, input, before });
+  }
+  const missingHint = () => controls.filter(c => c.input.checked).map(c => {
+    const name = c.id === 'translation.enabled' ? 'translation' : 'preference';
+    const own = credentials.find(row => row.id === (name === 'translation' ? 'TITLE_TRANSLATION_API_KEY' : 'PREFERENCE_LEARNING_API_KEY'));
+    const missing = [!String(data.find(row => row.id === `${name}.model`)?.value || '').trim() && '模型名称', !String(data.find(row => row.id === `${name}.endpoint`)?.value || '').trim() && 'API 地址', !(shared?.effectiveConfigured || own?.configured) && 'API Key'].filter(Boolean);
+    return missing.length ? `${name === 'translation' ? '翻译' : '偏好功能'}仍需配置：${missing.join('、')}` : '';
+  }).filter(Boolean).join('；');
+  const status = el('p', missingHint(), 'meta'); status.setAttribute('role', 'status');
+  section.append(button('保存功能开关', async () => {
+    const updates = controls.filter(c => c.input.checked !== c.before).flatMap(c => {
+      const rows = [{ id: c.id, value: c.input.checked }];
+      if (c.id === 'preference.enabled' && c.input.checked && data.find(row => row.id === 'review.master')?.value !== true) {
+        rows.push({ id: 'review.master', value: true });
+        // Preserve the effective grade-review state when enabling its shared master.
+        if (data.find(row => row.id === 'review.enabled')?.value === true) rows.push({ id: 'review.enabled', value: false });
+      }
+      return rows;
+    });
+    if (!updates.length) { status.textContent = '开关未改变。'; return; }
+    await api('/api/settings', { updates }); controls.forEach(c => { c.before = c.input.checked; });
+    for (const update of updates) { const item = data.find(row => row.id === update.id); if (item) item.value = update.value; }
+    status.textContent = `开关已保存，下次工作流生效。${missingHint()}`;
+  }), status);
+  container.append(section);
+}
 async function settings(group = settingsGroup, view = settingsView) {
   clearCredentialInputs();
   settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common';
@@ -838,17 +891,12 @@ async function settings(group = settingsGroup, view = settingsView) {
   };
   const active = (views.find(([key]) => key === settingsView) || settingViews[settingsGroup][0]);
   if (settingsGroup === 'review') {
-    const title = settingsView === 'translation' ? '标题翻译' : '偏好学习';
-    const entries = settingsView === 'translation'
-      ? (() => { const rows = data.filter((entry) => entry.category === 'Models' && entry.id.startsWith('translation.')); return rows.some((entry) => entry.id === 'translation.enabled') ? rows : [{ category: 'Models', available: true, ownerPresent: false, id: 'translation.enabled', description: '启用标题翻译', type: 'boolean', value: true, validation: {} }, ...rows]; })()
-      : (() => { const master = data.find((entry) => entry.id === 'review.master'); const preference = data.find((entry) => entry.id === 'preference.enabled'); const review = data.find((entry) => entry.id === 'review.enabled'); const states = [master, preference, review].filter(Boolean).map((entry) => entry.value); const combined = { ...(preference || {}), category: 'Models', available: true, ownerPresent: Boolean(master?.ownerPresent && preference?.ownerPresent && review?.ownerPresent), id: 'review-learning.combined', description: '启用智能评审与偏好学习', type: 'boolean', validation: {}, value: states.length === 3 && states.every((value) => value === true), mixed: states.length > 1 && new Set(states).size > 1, synthetic: true, changed: false, writeIds: ['review.master', 'review.enabled', 'preference.enabled'] }; return [combined, ...data.filter((entry) => entry.id.startsWith('preference.') && entry.id !== 'preference.enabled' && visibleSetting(entry))]; })();
-    const requiredIds = settingsView === 'translation' ? ['translation.model', 'translation.endpoint'] : ['preference.model', 'preference.endpoint'];
-    const credentialId = settingsView === 'translation' ? 'TITLE_TRANSLATION_API_KEY' : 'PREFERENCE_LEARNING_API_KEY';
-    const credential = credentials.find((entry) => entry.id === credentialId);
-    const capabilityStatus = () => { const missing = requiredIds.filter((id) => !String(entries.find((entry) => entry.id === id)?.value || '').trim()).map((id) => id.endsWith('.model') ? '模型名称' : 'API 地址'); if (!credential?.configured) missing.push('API 密钥'); return missing.length ? `功能已开启时，还需要完成以下配置：${missing.join('、')}。` : '必要参数已配置；真实可用性仍由运行前检查确认。'; };
-    const section = el('section', undefined, 'settings-section section');
-    section.append(el('h3', settingsView === 'translation' ? '标题翻译' : '智能评审与偏好学习', 'section-header'), el('p', settingsView === 'translation' ? '开启后使用配置的模型生成中文标题；关闭不会清空已有配置。' : '一个开关同时控制等级复审与 LLM 偏好学习；关闭不会清空已有配置。', 'meta'));
-    appendSettingsControls(section, entries, title, `保存${title}`, settingsView === 'translation' ? ['translation.enabled'] : ['review-learning.combined'], { statusText: capabilityStatus, credentials: credential ? [credential] : [] });
+    await appendModelSettings(body, data, credentials);
+    const title = settingsView === 'translation' ? '翻译服务参数' : '偏好服务参数';
+    const prefix = settingsView === 'translation' ? 'translation.' : 'preference.';
+    const entries = data.filter(entry => entry.id.startsWith(prefix) && !entry.id.endsWith('.enabled') && visibleSetting(entry));
+    const section = el('section', undefined, 'settings-section section'); section.append(el('h3', title));
+    appendSettingsControls(section, entries, title, '保存服务参数');
     body.append(section); return;
   }
   if (settingsGroup === 'runtime') {
@@ -874,7 +922,7 @@ async function settings(group = settingsGroup, view = settingsView) {
         if (spec.required && !String(entry.value || '').trim()) input.required = true;
         currentValue = el('p', `当前：${currentSettingText(entry)}`, 'setting-current');
         row.append(currentValue, label(`${entry.description}${spec.required ? '（必填；留空保持现值）' : '（选填；留空不变）'}`, input));
-        if (id === 'web.userId') row.append(el('small', 'Zotero 数字 User ID，不是用户名或邮箱。PaperEcho v2.5 的 Web 路径使用个人文库。'));
+        if (id === 'web.userId') row.append(el('small', 'Zotero 数字 User ID，不是用户名或邮箱。PaperEcho 的 Web 路径使用个人文库。'));
         panel.append(row); records.push({ pathName, entry, input, currentValue, required: spec.required, row });
       }
       if (pathName === 'web') {
@@ -1022,7 +1070,7 @@ async function settings(group = settingsGroup, view = settingsView) {
     appendSettingsControls(section, entries, groupTitle);
     if (group === 'Credentials') {
       section.append(el('p', '凭据是敏感操作，仍需逐项明确替换或清除；原值永不回显。', 'meta'));
-      for (const item of credentials.filter((entry) => entry.id !== 'ZOTERO_API_KEY')) appendCredentialEditor(section, item);
+      for (const item of credentials.filter((entry) => !['ZOTERO_API_KEY', 'TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY'].includes(entry.id))) appendCredentialEditor(section, item);
       section.append(el('p', '已配置不代表连接成功。暂无可复用的安全连接测试入口；连接测试尚未开放。', 'muted'));
     }
     if (entries.length || group === 'Credentials') body.append(section);
@@ -1095,9 +1143,10 @@ async function setup() {
   } else if (setupStep === 3) {
     section.append(el('p', '密钥原值永不回显，也不会请求外部服务验证。可稍后配置；缺少运行必需凭据时，完成页仍会显示“仍需配置”。'));
     const credentials = await api('/api/credentials');
-    const ids = ['TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY'];
+    const ids = [];
     if (entries.find(x => x.id === 'runtime.mode')?.value === 'web') ids.unshift('ZOTERO_API_KEY');
     for (const id of ids) appendCredentialEditor(section, credentials.find(x => x.id === id));
+    await appendModelSettings(section, entries, credentials);
   } else {
     section.append(el('h3', state.canRun ? '本地检查通过' : '仍需配置，尚不能正式运行'), el('p', '仅进行了本地配置与环境检查；密钥、网络连接及真实外部服务尚未验证。'), el('p', state.persisted ? '基础配置已持久保存。' : '基础配置尚未保存。'));
     section.append(contextCard('已保存配置摘要', [`运行路径：${runtimePaths[state.mode]?.title || '仍需选择'}`, `用户数据目录：${state.roots.userDataRoot}`, `当前服务路径：${runtimePaths[state.roots.activeMode]?.title || '未选择'}`]));
@@ -1165,7 +1214,10 @@ window.addEventListener('hashchange', route);
 window.addEventListener('pagehide', () => clearCredentialInputs());
 window.addEventListener('pageshow', () => clearCredentialInputs());
 api('/api/session').then(async session => {
-  csrf = session.token; setupState = await api('/api/setup');
+  csrf = session.token;
+  const { version } = await api('/api/version');
+  document.querySelector('#app-version').textContent = version ? `PaperEcho v${version}` : 'PaperEcho（版本未标定）';
+  setupState = await api('/api/setup');
   if (setupState.needsSetup) history.replaceState(null, '', '#setup');
   if (setupState.restoreRequired || setupState.recoveryRequired) history.replaceState(null, '', '#system');
   return route();

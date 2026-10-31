@@ -16,7 +16,7 @@ export const CONTROL_CENTER_ROOT = path.resolve(here, '../../..');
 export async function readControlCenterVersion(metadataUrl = new URL('../../../package.json', import.meta.url)) {
   try {
     const metadata = JSON.parse(await fs.readFile(metadataUrl, 'utf8'));
-    return metadata.name === 'paperecho-core' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(metadata.version) ? metadata.version : null;
+    return ['paperecho-core', 'paperecho'].includes(metadata.name) && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(metadata.version) ? metadata.version : null;
   } catch { return null; }
 }
 export function controlCenterInstance(root, context = {}) {

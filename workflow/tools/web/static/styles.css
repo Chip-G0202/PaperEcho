@@ -65,3 +65,17 @@ input[role=switch]{appearance:none;width:48px;height:28px;border-radius:20px;bac
 .setup-wizard input, .setup-wizard select { max-width: 100%; }
 .setup-wizard dd, .setup-wizard code { overflow-wrap: anywhere; }
 .wizard-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+
+/* System-only spacing and compact responsive diagnostics. */
+.system-support,.doctor-results{padding:20px;min-width:0}
+.system-support>button{margin:12px 0 4px}
+.system-refresh{margin:16px 0}
+.doctor-group{margin-top:16px;min-width:0}
+.doctor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.doctor-check{padding:14px;border:1px solid var(--border);border-radius:var(--radius,12px);min-width:0;overflow-wrap:anywhere}
+.doctor-check h4,.doctor-check p{margin:0}.doctor-check p{margin-top:6px}
+.doctor-check>h4,.doctor-check>p{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.doctor-check details{margin-top:8px}.doctor-check summary{cursor:pointer;color:var(--primary)}
+.model-settings .model-toggle{display:flex;align-items:center;gap:10px;margin:12px 0}
+.model-toggle input{width:auto}
+@media(max-width:760px){.doctor-grid{grid-template-columns:minmax(0,1fr)}.system-support,.doctor-results{padding:16px}}

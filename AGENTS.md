@@ -96,7 +96,8 @@ Cadence defaults:
 - Do not use Google Scholar/CNKI/IEEE/ACM in this workflow.
 - Do not fabricate references, page numbers, doses, stats, or experimental outcomes.
 - PDF acquisition is out of automation scope. Users handle PDFs manually in Zotero.
-- Title translation secrets must come only from `TITLE_TRANSLATION_API_KEY` in the environment, a local `.env`, or injected automation secret storage.
+- Translation and preference can share `PAPERECHO_MODEL_API_KEY` through the existing environment / local `.env` / injected secret storage. Shared use requires compatible service endpoints; never send a shared key to a different provider.
+- Preserve legacy `TITLE_TRANSLATION_API_KEY` and `PREFERENCE_LEARNING_API_KEY`. Reuse a single/equal legacy key only for compatible endpoints; distinct keys remain intact until the user explicitly saves a shared key. Never migrate by overwriting legacy values.
 - Non-secret title translation parameters live in `config/title_translation.config.json`.
 - The default translation model lives in `config/title_translation.config.json`, and `TITLE_TRANSLATION_MODEL` can override it.
 - The title translation prompt lives in `config/prompt-title-translation.md` and uses `${sourceText}` substitution.

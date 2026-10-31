@@ -6,6 +6,7 @@ import { writeAtomicText, withAtomicJsonLock, renameWithTransientRetry } from '.
 import { CONTROL_SECRET_NAMES, credentialOrigin, markLocalCredential, redactSecrets, secretValues } from './credential_registry.mjs';
 import { secureCredentialFile, credentialSecurityRuntimeAvailable } from './credential_file_security.mjs';
 import { resolveRuntimePaths, assertRuntimeDataPath } from './runtime_config.mjs';
+import { modelCredentials, SHARED_MODEL_KEY } from './model_credentials.mjs';
 export { CONTROL_SECRET_NAMES } from './credential_registry.mjs';
 export { inspect as inspectCredentialText };
 
@@ -55,9 +56,14 @@ export class SecretService {
   async list() {
     let state; let reason;
     try { state = await this.#read(); } catch { reason = '本地凭据文件不可安全编辑；请通过现有环境配置入口检查格式和权限。'; }
+    const modelEnv = { ...this.#env };
+    for (const id of [SHARED_MODEL_KEY, 'TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY']) modelEnv[id] = this.#value(id, state) || '';
+    let sharedState;
+    try { sharedState = modelCredentials(modelEnv); } catch { sharedState = { compatible: false }; }
     return CONTROL_SECRET_NAMES.map((id) => {
       const origin = this.#origin(id, state);
       return { id, configured: Boolean(this.#value(id, state)), storageClass: origin.kind, writable: Boolean(state) && origin.writable, testAvailable: false,
+        ...(id === SHARED_MODEL_KEY ? { compatible: sharedState.compatible, conflict: sharedState.conflict, effectiveConfigured: sharedState.effectiveShared } : {}),
         reason: reason || origin.reason || '', reload: '已保存到本地；当前凭据服务读取新值。新 workflow 启动时加载；已运行的进程需重启，外部环境仍优先。' };
     });
   }
@@ -113,6 +119,7 @@ export class SecretService {
     try {
       return await withAtomicJsonLock(this.#file, async () => {
         const before = await this.#read();
+        if (id === SHARED_MODEL_KEY && !clear && !modelCredentials(this.#env).compatible) throw new Error('SHARED_MODEL_PROVIDER_MISMATCH');
         if (!this.#origin(id, before).writable) throw new Error('CREDENTIAL_EXTERNALLY_MANAGED');
         this.#seen.add(value);
         const quote = value.includes('"') ? "'" : '"';
@@ -135,7 +142,7 @@ export class SecretService {
       }, { timeoutMs: 15000, staleMs: Infinity }); // Never steal a credential lock from a slow live writer.
     } catch (error) {
       const allowed = ['CREDENTIAL_EXTERNALLY_MANAGED', 'CREDENTIAL_ENV_FORMAT_UNSUPPORTED', 'CREDENTIAL_ENV_PATH_UNSAFE', 'CREDENTIAL_VALUE_INVALID', 'CREDENTIAL_ACL_UNSAFE', 'CREDENTIAL_ACL_RUNTIME_UNAVAILABLE', 'CREDENTIAL_ACL_CHECK_FAILED', 'CREDENTIAL_CONCURRENT_CHANGE', 'CREDENTIAL_RECOVERY_REQUIRED'];
-      throw new Error(allowed.includes(error.message) ? error.message : 'CREDENTIAL_WRITE_FAILED');
+      throw new Error(allowed.includes(error.message) || error.message === 'SHARED_MODEL_PROVIDER_MISMATCH' ? error.message : 'CREDENTIAL_WRITE_FAILED');
     }
   }
   async #save(next, before) {
