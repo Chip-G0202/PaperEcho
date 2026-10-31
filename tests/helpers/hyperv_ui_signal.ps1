@@ -1,12 +1,14 @@
 param([Parameter(Mandatory)][string]$Directory,[Parameter(Mandatory)][string]$Step,[string]$Action,
- [ValidateSet('CancelBeforeInstall','Install')][string]$Scenario,[string]$RunId,[string]$HyperVContextSha256)
+ [ValidateSet('CancelBeforeInstall','Install')][string]$Scenario,[string]$RunId,[string]$HyperVContextSha256,[switch]$ProfileIsolated)
 $ErrorActionPreference='Stop'
 if($PSVersionTable.PSVersion.Major -lt 7 -or $PSVersionTable.PSEdition -ne 'Core'){throw 'PS7_REQUIRED'}
 $root=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../runs'))
 $dir=[IO.Path]::GetFullPath($Directory)
-if($Step.StartsWith('msi-') -and $dir -ieq ('C:\PaperEchoLab\Output\'+$RunId)){
+$guestOutput=if($ProfileIsolated){Join-Path $env:LOCALAPPDATA ('PaperEchoFullUiTests\Output\'+$RunId)}else{'C:\PaperEchoLab\Output\'+$RunId}
+if($ProfileIsolated -and (-not $Step.StartsWith('msi-') -or $dir -ine $guestOutput)){throw 'PROFILE_SIGNAL_PATH_REQUIRED'}
+if($Step.StartsWith('msi-') -and $dir -ieq $guestOutput){
  if($RunId -cnotmatch '^[a-f0-9-]{36}$' -or -not $Scenario -or $HyperVContextSha256 -cnotmatch '^[a-fA-F0-9]{64}$'){throw 'SIGNAL_GUEST_BINDING_REQUIRED'}
- & (Join-Path $PSScriptRoot 'installer-test.ps1') -IdentityOnly -FullUiScenario $Scenario -HyperVContextSha256 $HyperVContextSha256
+ & (Join-Path $PSScriptRoot 'installer-test.ps1') -IdentityOnly -FullUiScenario $Scenario -HyperVContextSha256 $HyperVContextSha256 -ProfileIsolated:$ProfileIsolated
 } elseif(-not $dir.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'SIGNAL_WORKSPACE_REQUIRED'}
 for($item=Get-Item -LiteralPath $dir;$item;$item=$item.Parent){if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'SIGNAL_LINK_REJECTED'}}
 function Read-SignalJson([string]$file){

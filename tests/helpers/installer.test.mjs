@@ -109,7 +109,7 @@ test('Full UI safe substitutes distinguish cancellation, installation and runnin
 $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER_SOURCE,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'PARSE_FAILED'}
-foreach($fn in $ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -in @('Require','Assert-FullUiPath','Write-FullUiJson','Get-FullUiSnapshot','Get-FullUiOutcome','Wait-FullUiObservation','Enter-FullUiEvidenceLock','Get-FullUiExitEvidence','Invoke-FullUiScenario')}){Invoke-Expression $fn.Extent.Text}
+foreach($fn in $ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -in @('Require','Assert-FullUiPath','Write-FullUiJson','Get-FullUiSnapshot','Get-FullUiOutcome','Wait-FullUiObservation','Enter-FullUiEvidenceLock','Get-FullUiExitEvidence','Assert-FullUiProfileFreshInstall','Invoke-FullUiScenario')}){Invoke-Expression $fn.Extent.Text}
 foreach($case in @(@('CancelBeforeInstall',1602,-1,$false,$false,'USER_CANCELLED'),@('CancelBeforeInstall',0,5,$true,$true,'FAIL'),@('CancelBeforeInstall',1602,-1,$true,$false,'FAIL'),@('Install',0,5,$true,$true,'INSTALL_PASS'),@('Install',1603,5,$true,$false,'FAIL'),@('Install',0,-1,$true,$true,'FAIL'))){$arguments=@($case[0..4]);if((Get-FullUiOutcome @arguments) -cne $case[5]){throw 'OUTCOME_INVALID'}}
 $waiter=(Get-Item -LiteralPath 'Function:\Wait-FullUiObservation').ScriptBlock
 $desktopFn=$ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Assert-FullUiDesktop'},$true)[0]
@@ -118,15 +118,16 @@ $compile=$desktopFn.FindAll({param($n) $n -is [Management.Automation.Language.Co
 function Assert-InstallerGuest {$script:identityCalls++}
 function Assert-FullUiDesktop {$script:desktopCalls++}
 function Get-CimInstance {return @()}
-function Test-Path {param([string]$LiteralPath) if($LiteralPath -match '^HK[CL]'){return $false};Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath}
+function Test-Path {param([string]$LiteralPath) if($LiteralPath -match '^HK[CL]' -or -not $LiteralPath.StartsWith($env:TEST_ROOT,[StringComparison]::OrdinalIgnoreCase)){return $false};Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath}
+function Get-NetAdapter {return @()}
 function Read-FullUiPackage {return @{ProductName='PaperEcho TEST ONLY';ProductVersion='2.6.0';ProductCode='{11111111-1111-4111-8111-111111111111}';PackageCode='{22222222-2222-4222-8222-222222222222}';UpgradeCode='{7395EC5E-338E-4E71-92A2-579BD64EE6E4}'}}
 function Get-FullUiProductState {if($script:stateReads++ -eq 0){return -1};if($FullUiScenario -ceq 'Install'){return 5};return -1}
-function Get-FullUiInstallScope {if($FullUiScenario -ceq 'Install'){return 'INSTALL_SCOPE_USER'};return 'UNREGISTERED'}
+function Get-FullUiInstallScope {if($script:launched -and $FullUiScenario -ceq 'Install'){return 'INSTALL_SCOPE_USER'};return 'UNREGISTERED'}
 function Wait-FullUiObservation {param($process,$directory,$binding,$steps,$index,$watch) if($script:observationTimeout){throw 'FULL_UI_TIMEOUT'};return @{step=$steps[$index];source='OFFLINE_MOCK_ONLY'}}
 function Start-Process {
  param($FilePath,$ArgumentList,$WorkingDirectory,[switch]$PassThru,$WindowStyle)
  if($script:identityCalls -lt 2 -or $script:desktopCalls -lt 2 -or $WindowStyle -cne 'Normal' -or $ArgumentList -notmatch '/qf /norestart /l\*vx!' -or $ArgumentList -match '/qn|/qb|/x |ALLUSERS' -or [IO.Path]::GetFileName($FilePath) -ine 'msiexec.exe'){throw 'UNSAFE_START'}
- $script:starts++
+ $script:starts++;$script:launched=$true
  $lines=@('Action start 10:00:00: Welcome.')
  if($FullUiScenario -ceq 'Install'){
   $null=New-Item -ItemType Directory -Path (Join-Path $env:LOCALAPPDATA 'Programs\PaperEcho') -Force
@@ -141,8 +142,9 @@ function Start-Process {
  return $p
 }
 $HyperVContextSha256='b'*64;$script:kills=0;$script:starts=0
-foreach($case in @('CancelBeforeInstall','Install','Timeout','ObservationTimeoutExit')){
- $script:observationTimeout=$case -ceq 'ObservationTimeoutExit';$script:timeout=$case -in @('Timeout','ObservationTimeoutExit');$FullUiScenario=if($script:timeout){'CancelBeforeInstall'}else{$case}
+foreach($case in @('CancelBeforeInstall','Install','ProfileCancel','ProfileInstall','Timeout','ObservationTimeoutExit')){
+ $ProfileIsolated=$case -clike 'Profile*'
+ $script:observationTimeout=$case -ceq 'ObservationTimeoutExit';$script:timeout=$case -in @('Timeout','ObservationTimeoutExit');$FullUiScenario=if($script:timeout -or $case -ceq 'ProfileCancel'){'CancelBeforeInstall'}elseif($case -ceq 'ProfileInstall'){'Install'}else{$case}
  $run=[guid]::NewGuid().ToString();$inputRoot=Join-Path $env:TEST_ROOT ('input-'+$run);$outputRoot=Join-Path $env:TEST_ROOT ('output-'+$run)
  $env:LOCALAPPDATA=Join-Path $env:TEST_ROOT ('profile-'+$run)
  $null=New-Item -ItemType Directory -Path $inputRoot,$outputRoot
@@ -150,11 +152,12 @@ foreach($case in @('CancelBeforeInstall','Install','Timeout','ObservationTimeout
  $payload=Join-Path $inputRoot 'dummy-payload';[IO.File]::WriteAllText($payload,'DUMMY_PAYLOAD')
  $hash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
  $script:fullUiManifest=@{runId=$run;msiSha256=$hash;productCode='{11111111-1111-4111-8111-111111111111}';files=@(@{path='PaperEcho-TEST-ONLY.msi';sha256=$hash});payload=@(@{path='PaperEcho.exe';sha256=(Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash})}
- $script:fullUiContext=@{};$script:stateReads=0;$script:identityCalls=0;$script:desktopCalls=0
+ $script:fullUiContext=@{};$script:stateReads=0;$script:identityCalls=0;$script:desktopCalls=0;$script:launched=$false
  $caught=$false;try{Invoke-FullUiScenario}catch{if(-not $script:timeout -or $_.Exception.Message -cne 'FULL_UI_INSPECTION_REQUIRED'){throw};$caught=$true}
  $directory=Join-Path $outputRoot $run;$report=Get-Content -LiteralPath (Join-Path $directory 'full-ui-result.json') -Raw|ConvertFrom-Json
- $expected=if($script:timeout){'UNKNOWN'}elseif($case -ceq 'Install'){'INSTALL_PASS'}else{'USER_CANCELLED'}
+ $expected=if($script:timeout){'UNKNOWN'}elseif($FullUiScenario -ceq 'Install'){'INSTALL_PASS'}else{'USER_CANCELLED'}
  if($report.status -cne $expected -or $report.automaticCleanupPerformed -ne $false -or $report.runId -cne $run -or $script:kills -ne 0){throw 'MOCK_REPORT_INVALID'}
+ if($ProfileIsolated -and ($report.testScope -cne 'PROFILE_ISOLATED_TEST_ONLY' -or $report.checkpointRestoreVerified -ne $false -or $report.machineCleanClaim -ne $false)){throw 'FALSE_PROFILE_SCOPE_CLAIM'}
  if($script:timeout -and (-not $caught -or $report.processState -cne 'RUNNING' -or $report.code -cne 'FULL_UI_TIMEOUT')){throw 'TIMEOUT_LOST'}
  if($script:timeout){
   if($report.exitCode -ne $null){throw 'FAILURE_RESULT_MUTATED'}
@@ -172,11 +175,123 @@ foreach($case in @('CancelBeforeInstall','Install','Timeout','ObservationTimeout
 }
 $binding=@{runId=$run;scenario='CancelBeforeInstall';msiSha256=('a'*64);contextSha256=('b'*64)}
 $denied=$false;try{& $waiter ([pscustomobject]@{HasExited=$false}) $directory $binding @('msi-welcome') 0 ([pscustomobject]@{Elapsed=[timespan]::FromSeconds(1201)})}catch{if($_.Exception.Message -cne 'FULL_UI_TIMEOUT'){throw};$denied=$true}
-if(-not $denied -or $script:starts -ne 4 -or $script:kills -ne 0){throw 'WAIT_SIDE_EFFECT'}
+if(-not $denied -or $script:starts -ne 6 -or $script:kills -ne 0){throw 'WAIT_SIDE_EFFECT'}
 [Console]::Out.Write('FULL_UI_OFFLINE_MOCK_PASS')`;
   const output = execFileSync(process.env.PWSH_PATH, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', timeout: 20000, windowsHide: true,
     env: { ...process.env, TEST_ROOT: root, TEST_INSTALLER_SOURCE: path.resolve('tests/helpers/sandbox_installer.ps1') } });
   assert.equal(output, 'FULL_UI_OFFLINE_MOCK_PASS');
+});
+
+test('profile Full UI requires explicit scoped authorization without claiming a checkpoint', async t => {
+  const root=await fs.mkdtemp(path.resolve('tests/runs/profile-authorization-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const source = await fs.readFile('tests/helpers/sandbox_installer.ps1', 'utf8');
+  for (const guard of ['PROFILE_FULL_UI_CONTEXT_REQUIRED', 'PROFILE_RUN_PATH_REQUIRED', 'LOCAL_STANDARD_PROFILE_REQUIRED', 'personalProfilesExcluded', 'noAutomaticRecovery']) assert.ok(source.includes(guard));
+  const command = String.raw`$ErrorActionPreference='Stop'
+$t=$null;$e=$null;$ast=[Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER_SOURCE,[ref]$t,[ref]$e)
+if($e.Count){throw 'PARSE_FAILED'}
+$fn=$ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq 'Assert-FullUiProfileAuthorization'}
+Invoke-Expression $fn.Extent.Text
+$run=[guid]::NewGuid().ToString()
+$inputRoot=Join-Path $env:PROFILE_FIXTURE ('PaperEchoFullUiTests\'+$run+'\Input');$outputRoot=Join-Path $env:PROFILE_FIXTURE 'PaperEchoFullUiTests\Output'
+$null=New-Item -ItemType Directory -Path $inputRoot,$outputRoot
+function Get-FullUiProfileIdentity {return @{sid='S-1-5-21-1-2-3-1001';vmId='11111111-1111-4111-8111-111111111111';localStandard=$true;localAppData=$env:PROFILE_FIXTURE}}
+function Get-Acl {$acl=[Security.AccessControl.DirectorySecurity]::new();$sid=[Security.Principal.SecurityIdentifier]::new('S-1-5-21-1-2-3-1001');$acl.SetOwner($sid);$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow'));return $acl}
+$good=@{testScope='PROFILE_ISOLATED_TEST_ONLY';runId=$run;profileBaselineVerified=$true;personalProfilesExcluded=$true;profileSyntheticData=$true;noSnapshotAuthorized=$true;noAutomaticRecovery=$true;checkpointId=$null;checkpointRestoreVerified=$false;userSid='S-1-5-21-1-2-3-1001';vmId='11111111-1111-4111-8111-111111111111'}
+Assert-FullUiProfileAuthorization ([pscustomobject]$good) $run
+foreach($key in @('testScope','runId','profileBaselineVerified','personalProfilesExcluded','profileSyntheticData','noSnapshotAuthorized','noAutomaticRecovery','checkpointRestoreVerified')){
+ $bad=$good.Clone();$bad.Remove($key);$denied=$false
+ try{Assert-FullUiProfileAuthorization ([pscustomobject]$bad) $run}catch{$denied=$true}
+ if(-not $denied){throw 'MISSING_PROFILE_GUARD_ACCEPTED'}
+}
+foreach($key in @('checkpointId','checkpointRestoreVerified')){
+ $bad=$good.Clone();$bad[$key]=if($key -eq 'checkpointId'){[guid]::NewGuid().ToString()}else{$true};$denied=$false
+ try{Assert-FullUiProfileAuthorization ([pscustomobject]$bad) $run}catch{$denied=$true}
+ if(-not $denied){throw 'FALSE_RECOVERY_CLAIM_ACCEPTED'}
+}
+[Console]::Out.Write('PROFILE_AUTHORIZATION_PASS')`;
+  const output = execFileSync(process.env.PWSH_PATH, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+    encoding: 'utf8', timeout: 10000, windowsHide: true, env: { ...process.env, TEST_INSTALLER_SOURCE: path.resolve('tests/helpers/sandbox_installer.ps1'),PROFILE_FIXTURE:root },
+  });
+  assert.equal(output, 'PROFILE_AUTHORIZATION_PASS');
+  assert.throws(() => execFileSync(process.env.PWSH_PATH, ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', path.resolve('tests/helpers/sandbox_installer.ps1'), '-ProfileIsolated'], { stdio: 'pipe', windowsHide: true, timeout: 10000 }));
+  assert.throws(() => execFileSync(process.env.PWSH_PATH, ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', path.resolve('tests/helpers/hyperv_ui_signal.ps1'), '-ProfileIsolated', '-Directory', path.resolve('tests/runs'), '-Step', 'msi-welcome'], { stdio: 'pipe', windowsHide: true, timeout: 10000 }));
+});
+
+test('profile Full UI isolates measured SIDs while preserving same-user failed history and fresh-install gates', async t => {
+  const root=await fs.mkdtemp(path.resolve('tests/runs/profile-isolation-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const script=String.raw`$ErrorActionPreference='Stop'
+$ast=[Management.Automation.Language.Parser]::ParseFile($env:SOURCE,[ref]$null,[ref]$null)
+foreach($f in $ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -in @('Require','Assert-FullUiPath','Assert-FullUiProfileAuthorization','Assert-FullUiProfileFreshInstall')}){Invoke-Expression $f.Extent.Text}
+$invoke=$ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq 'Invoke-FullUiScenario'}
+$history=$invoke.Body.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.ForEachStatementAst] -and $_.Variable.VariablePath.UserPath -ceq 'prior'}
+if(@($history).Count -ne 1){throw 'HISTORY_OWNER_NOT_FOUND'}
+function Get-FullUiProfileIdentity {return $script:identity}
+function Get-Acl {$acl=[Security.AccessControl.DirectorySecurity]::new();$sid=[Security.Principal.SecurityIdentifier]::new($script:identity.sid);$acl.SetOwner($sid);$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow'));if($script:sharedWrite){$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'),'Write','Allow'))};return $acl}
+function Denied($action,[string]$code){$caught=$false;try{& $action}catch{if($_.Exception.Message -cne $code){throw};$caught=$true};if(-not $caught){throw 'UNSAFE_ACTION_ACCEPTED'}}
+$vm='11111111-1111-4111-8111-111111111111';$oldRun=[guid]::NewGuid().ToString()
+$context=@{testScope='PROFILE_ISOLATED_TEST_ONLY';runId=$oldRun;profileBaselineVerified=$true;personalProfilesExcluded=$true;profileSyntheticData=$true;noSnapshotAuthorized=$true;noAutomaticRecovery=$true;checkpointId=$null;checkpointRestoreVerified=$false;userSid='S-1-5-21-1-2-3-1001';vmId=$vm}
+$script:identity=@{sid=$context.userSid;vmId=$vm;localStandard=$true;localAppData=(Join-Path $env:FIXTURE 'sid-1001')}
+$inputRoot=Join-Path $identity.localAppData ('PaperEchoFullUiTests\'+$oldRun+'\Input');$outputRoot=Join-Path $identity.localAppData 'PaperEchoFullUiTests\Output'
+$null=New-Item -ItemType Directory -Path $inputRoot,$outputRoot
+Assert-FullUiProfileAuthorization ([pscustomobject]$context) $oldRun
+$oldOutput=$outputRoot;$oldDir=Join-Path $oldOutput $oldRun;$null=New-Item -ItemType Directory -Path $oldDir
+$oldFile=Join-Path $oldDir 'full-ui-result.json';@{runId=$oldRun;status='UNKNOWN';code='FULL_UI_TIMEOUT';contextSha256=('a'*64)}|ConvertTo-Json|Set-Content $oldFile
+$oldHash=(Get-FileHash -LiteralPath $oldFile).Hash
+$newRun=[guid]::NewGuid().ToString();$context.runId=$newRun;$inputRoot=Join-Path $identity.localAppData ('PaperEchoFullUiTests\'+$newRun+'\Input');$null=New-Item -ItemType Directory -Path $inputRoot
+Assert-FullUiProfileAuthorization ([pscustomobject]$context) $newRun
+Denied {Invoke-Expression $history.Extent.Text} 'FULL_UI_PREVIOUS_RUN_UNRESOLVED'
+$context.userSid='S-1-5-21-1-2-3-1002';$identity.sid=$context.userSid;$identity.localAppData=Join-Path $env:FIXTURE 'sid-1002'
+$inputRoot=Join-Path $identity.localAppData ('PaperEchoFullUiTests\'+$newRun+'\Input');$outputRoot=Join-Path $identity.localAppData 'PaperEchoFullUiTests\Output';$null=New-Item -ItemType Directory -Path $inputRoot,$outputRoot
+Assert-FullUiProfileAuthorization ([pscustomobject]$context) $newRun
+Invoke-Expression $history.Extent.Text
+$context.userSid='S-1-5-21-1-2-3-1001';Denied {Assert-FullUiProfileAuthorization ([pscustomobject]$context) $newRun} 'LOCAL_STANDARD_PROFILE_REQUIRED';$context.userSid=$identity.sid
+$identity.vmId='22222222-2222-4222-8222-222222222222';Denied {Assert-FullUiProfileAuthorization ([pscustomobject]$context) $newRun} 'PROFILE_VM_ID_UNVERIFIED';$identity.vmId=$vm
+$newOutput=$outputRoot;$outputRoot=$oldOutput;Denied {Assert-FullUiProfileAuthorization ([pscustomobject]$context) $newRun} 'PROFILE_ROOT_UNVERIFIED';$outputRoot=$newOutput
+$context.profileBaselineVerified=$false;Denied {Assert-FullUiProfileAuthorization ([pscustomobject]$context) $newRun} 'PROFILE_AUTHORIZATION_REQUIRED';$context.profileBaselineVerified=$true
+$script:sharedWrite=$true;Denied {Assert-FullUiProfileAuthorization ([pscustomobject]$context) $newRun} 'PROFILE_DIRECTORY_SHARED_WRITE_REJECTED';$script:sharedWrite=$false
+if((Get-FileHash -LiteralPath $oldFile).Hash -cne $oldHash){throw 'OLD_HISTORY_CHANGED'}
+$env:LOCALAPPDATA=$identity.localAppData
+function Get-FullUiInstallScope {return $script:scope}
+function Get-NetAdapter {return @()}
+$script:blocked=$null
+function Test-Path {param($LiteralPath) return ($script:blocked -and $LiteralPath -ceq $script:blocked)}
+$script:scope='INSTALL_SCOPE_UNVERIFIED';Denied {Assert-FullUiProfileFreshInstall '{11111111-1111-4111-8111-111111111111}'} 'PROFILE_INSTALL_SCOPE_UNVERIFIED'
+foreach($scope in @('INSTALL_SCOPE_USER','INSTALL_SCOPE_MACHINE')){Denied {Assert-FullUiProfileFreshInstall '{11111111-1111-4111-8111-111111111111}'} 'PROFILE_FRESH_CONTEXT_REQUIRED'}
+$script:scope='UNREGISTERED';$script:blocked='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\InProgress';Denied {Assert-FullUiProfileFreshInstall '{11111111-1111-4111-8111-111111111111}'} 'PROFILE_SHARED_OR_RECOVERY_STATE_PRESENT'
+$script:blocked=$null;Assert-FullUiProfileFreshInstall '{11111111-1111-4111-8111-111111111111}'
+[Console]::Out.Write('PROFILE_ISOLATION_PASS')`;
+  const file=path.join(root,'test.ps1');await fs.writeFile(file,script);
+  assert.equal(execFileSync(process.env.PWSH_PATH,['-NoLogo','-NoProfile','-NonInteractive','-File',file],{
+    encoding:'utf8',timeout:15000,windowsHide:true,env:{...process.env,SOURCE:path.resolve('tests/helpers/sandbox_installer.ps1'),FIXTURE:root}
+  }),'PROFILE_ISOLATION_PASS');
+});
+
+test('profile Full UI rejects tampered context and input before any installer operation', async t => {
+  const root=await fs.mkdtemp(path.resolve('tests/runs/profile-binding-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const script=String.raw`$ErrorActionPreference='Stop'
+$ast=[Management.Automation.Language.Parser]::ParseFile($env:SOURCE,[ref]$null,[ref]$null)
+$owner=$ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq 'Assert-InstallerGuest'}
+$guard=$owner.Body.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.IfStatementAst] -and $_.Extent.Text.StartsWith('if ($HyperVContextSha256)')}
+if(@($guard).Count -ne 1){throw 'BINDING_OWNER_NOT_FOUND'}
+function Get-CimInstance {return @{UUID='11111111-1111-4111-8111-111111111111'}}
+$ProfileIsolated=$true;$inputRoot=$env:FIXTURE
+foreach($case in @('ContextHash','InputHash','MsiHash','SID')){
+ $run=[guid]::NewGuid().ToString();$manifest=Join-Path $inputRoot 'test-manifest.json';$file=Join-Path $inputRoot 'guest-context.json'
+ @{testOnly=$true;runId=$run;msiSha256=('a'*64)}|ConvertTo-Json|Set-Content $manifest
+ $context=@{schemaVersion=1;kind='HYPERV_INSTALLER';vmId='11111111-1111-4111-8111-111111111111';biosGuid='11111111-1111-4111-8111-111111111111';runId=$run;manifestSha256=(Get-FileHash $manifest).Hash;msiSha256=('a'*64);userSid='S-1-5-21-1-2-3-1001'}
+ if($case -ceq 'InputHash'){$context.manifestSha256='b'*64};if($case -ceq 'MsiHash'){$context.msiSha256='b'*64}
+ $context|ConvertTo-Json|Set-Content $file;$HyperVContextSha256=(Get-FileHash $file).Hash;if($case -ceq 'ContextHash'){$HyperVContextSha256='c'*64}
+ $expected=if($case -ceq 'MsiHash'){'HYPERV_HANDOFF_INVALID'}elseif($case -ceq 'SID'){'HYPERV_GUEST_IDENTITY_REQUIRED'}else{'HYPERV_CONTEXT_INVALID'}
+ $rejected=$false;try{Invoke-Expression $guard.Extent.Text}catch{if($_.Exception.Message -cne $expected){throw};$rejected=$true};if(-not $rejected){throw 'BAD_BINDING_ACCEPTED'}
+}
+[Console]::Out.Write('PROFILE_BINDING_PASS')`;
+  const file=path.join(root,'test.ps1');await fs.writeFile(file,script);
+  assert.equal(execFileSync(process.env.PWSH_PATH,['-NoLogo','-NoProfile','-NonInteractive','-File',file],{
+    encoding:'utf8',timeout:15000,windowsHide:true,env:{...process.env,SOURCE:path.resolve('tests/helpers/sandbox_installer.ps1'),FIXTURE:root}
+  }),'PROFILE_BINDING_PASS');
 });
 
 test('installer failure catch preserves diagnostics without cleanup; successful uninstall flow remains', () => {

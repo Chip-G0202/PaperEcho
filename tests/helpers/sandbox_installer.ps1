@@ -1,14 +1,58 @@
 param([switch]$NegativeOnly, [switch]$IdentityOnly, [string]$HyperVContextSha256,
-    [ValidateSet('CancelBeforeInstall','Install')][string]$FullUiScenario)
+    [ValidateSet('CancelBeforeInstall','Install')][string]$FullUiScenario, [switch]$ProfileIsolated)
 # Guest only. Fixed paths, immutable input, no commands or code from the output mapping.
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'POWERSHELL_7_REQUIRED' }
 if ($FullUiScenario -and ($NegativeOnly -or $HyperVContextSha256 -cnotmatch '^[a-fA-F0-9]{64}$')) { throw 'FULL_UI_HYPERV_CONTEXT_REQUIRED' }
 $inputRoot = 'C:\PaperEchoLab\Input'; $outputRoot = 'C:\PaperEchoLab\Output'
+if ($ProfileIsolated) {
+    if (-not $FullUiScenario -or $NegativeOnly -or $HyperVContextSha256 -cnotmatch '^[a-fA-F0-9]{64}$') { throw 'PROFILE_FULL_UI_CONTEXT_REQUIRED' }
+    $profileRunId = Split-Path (Split-Path $PSScriptRoot -Parent) -Leaf
+    if ($profileRunId -cnotmatch '^[a-f0-9-]{36}$') { throw 'PROFILE_RUN_PATH_REQUIRED' }
+    $localAppData = [Environment]::GetFolderPath('LocalApplicationData')
+    if (-not $localAppData -or [IO.Path]::GetFullPath($env:LOCALAPPDATA) -ine [IO.Path]::GetFullPath($localAppData)) { throw 'PROFILE_ROOT_UNVERIFIED' }
+    $profileRoot = Join-Path $localAppData 'PaperEchoFullUiTests'
+    $inputRoot = Join-Path $profileRoot ($profileRunId+'\Input')
+    $outputRoot = Join-Path $profileRoot 'Output'
+}
 $work = 'C:\PaperEchoLab\Workspace'; $steps = [Collections.Generic.List[object]]::new()
 $stage = 'identity'; $ownedPids = [Collections.Generic.List[int]]::new(); $identityVerified = $false
 $runTrace = [Collections.Generic.List[object]]::new()
 $reportStage = 'SANDBOX_INSTALLER'
+function Get-FullUiProfileIdentity {
+    try {
+        $who=[Security.Principal.WindowsIdentity]::GetCurrent()
+        $account=Get-LocalUser -SID $who.User -ErrorAction Stop
+        $vmId=Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters' -Name VirtualMachineId -ErrorAction Stop
+        return @{sid=$who.User.Value;vmId=$vmId;localStandard=($account.PrincipalSource.ToString() -ceq 'Local' -and -not ($who.Groups.Value -contains 'S-1-5-32-544'));localAppData=[Environment]::GetFolderPath('LocalApplicationData')}
+    } catch { throw 'PROFILE_IDENTITY_UNVERIFIED' }
+}
+function Assert-FullUiProfileAuthorization($context, [string]$runId) {
+    if ($context.testScope -cne 'PROFILE_ISOLATED_TEST_ONLY' -or $context.runId -cne $runId -or
+        $context.profileBaselineVerified -ne $true -or $context.personalProfilesExcluded -ne $true -or
+        $context.profileSyntheticData -ne $true -or $context.noSnapshotAuthorized -ne $true -or
+        $context.noAutomaticRecovery -ne $true -or $context.checkpointId -or
+        $context.checkpointRestoreVerified -isnot [bool] -or $context.checkpointRestoreVerified) { throw 'PROFILE_AUTHORIZATION_REQUIRED' }
+    $identity=Get-FullUiProfileIdentity
+    if (-not $identity.localStandard -or $identity.sid -cne $context.userSid) { throw 'LOCAL_STANDARD_PROFILE_REQUIRED' }
+    if ($identity.vmId -notmatch '^[{]?[a-fA-F0-9-]{36}[}]?$' -or [guid]$identity.vmId -ne [guid]$context.vmId) { throw 'PROFILE_VM_ID_UNVERIFIED' }
+    if (-not $identity.localAppData) { throw 'PROFILE_ROOT_UNVERIFIED' }
+    $root=Join-Path $identity.localAppData 'PaperEchoFullUiTests'
+    if ($inputRoot -ine (Join-Path $root ($runId+'\Input')) -or $outputRoot -ine (Join-Path $root 'Output')) { throw 'PROFILE_ROOT_UNVERIFIED' }
+    foreach ($dir in @($inputRoot,$outputRoot)) {
+        for ($item=Get-Item -LiteralPath $dir; $item; $item=$item.Parent) {
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.LinkType) { throw 'PROFILE_DIRECTORY_LINK_REJECTED' }
+        }
+        $acl=Get-Acl -LiteralPath $dir -ErrorAction Stop
+        $trusted=@($identity.sid,'S-1-5-18','S-1-5-32-544')
+        if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trusted) { throw 'PROFILE_DIRECTORY_OWNER_UNVERIFIED' }
+        $rules=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+        if (-not $rules.Count) { throw 'PROFILE_DIRECTORY_ACL_UNVERIFIED' }
+        foreach ($rule in $rules) {
+            if ($rule.AccessControlType.ToString() -ceq 'Allow' -and ([int]$rule.FileSystemRights -band (2 -bor 4 -bor 16 -bor 64 -bor 256 -bor 65536 -bor 262144 -bor 524288)) -ne 0 -and $rule.IdentityReference.Value -notin ($trusted+@('S-1-3-0'))) { throw 'PROFILE_DIRECTORY_SHARED_WRITE_REJECTED' }
+        }
+    }
+}
 function Assert-InstallerGuest {
     if ($PSScriptRoot -ine $inputRoot) { throw 'INSTALLER_GUEST_PATH_REQUIRED' }
     $computer = Get-CimInstance Win32_ComputerSystem
@@ -20,13 +64,16 @@ function Assert-InstallerGuest {
         if ($info.Length -gt 8192 -or ($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ine $HyperVContextSha256) { throw 'HYPERV_CONTEXT_INVALID' }
         $context = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
         $manifestFile = Join-Path $inputRoot 'test-manifest.json'
-        if ($context.schemaVersion -ne 1 -or $context.kind -cne 'HYPERV_INSTALLER' -or $context.vmId -notmatch '^[a-f0-9-]{36}$' -or $context.checkpointId -notmatch '^[a-f0-9-]{36}$' -or (Get-FileHash -LiteralPath $manifestFile -Algorithm SHA256).Hash -ine $context.manifestSha256) { throw 'HYPERV_CONTEXT_INVALID' }
+        if ($context.schemaVersion -ne 1 -or $context.kind -cne 'HYPERV_INSTALLER' -or $context.vmId -notmatch '^[a-f0-9-]{36}$' -or (-not $ProfileIsolated -and $context.checkpointId -notmatch '^[a-f0-9-]{36}$') -or (Get-FileHash -LiteralPath $manifestFile -Algorithm SHA256).Hash -ine $context.manifestSha256) { throw 'HYPERV_CONTEXT_INVALID' }
         $handoff = Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json
         if ($handoff.testOnly -ne $true -or $context.runId -cne $handoff.runId -or $context.msiSha256 -ine $handoff.msiSha256) { throw 'HYPERV_HANDOFF_INVALID' }
         if ([guid](Get-CimInstance Win32_ComputerSystemProduct).UUID -ne [guid]$context.biosGuid -or [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne $context.userSid) { throw 'HYPERV_GUEST_IDENTITY_REQUIRED' }
         if (([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'UNELEVATED_INSTALLER_TEST_REQUIRED' }
         if ($FullUiScenario) {
-            if ($context.fullUiAuthorized -ne $true -or $context.fullUiScenario -cne $FullUiScenario -or $context.syntheticData -ne $true -or $context.networkIsolated -ne $true -or $context.checkpointRestoreVerified -ne $true -or $handoff.runId -cnotmatch '^[a-f0-9-]{36}$') { throw 'FULL_UI_AUTHORIZATION_REQUIRED' }
+            if ($context.fullUiAuthorized -ne $true -or $context.fullUiScenario -cne $FullUiScenario -or $context.networkIsolated -ne $true -or $handoff.runId -cnotmatch '^[a-f0-9-]{36}$') { throw 'FULL_UI_AUTHORIZATION_REQUIRED' }
+            if ($ProfileIsolated) {
+                Assert-FullUiProfileAuthorization $context $profileRunId
+            } elseif ($context.syntheticData -ne $true -or $context.checkpointRestoreVerified -ne $true -or $context.testScope -eq 'PROFILE_ISOLATED_TEST_ONLY') { throw 'FULL_UI_AUTHORIZATION_REQUIRED' }
             $script:fullUiContext = $context; $script:fullUiManifest = $handoff
         }
         $script:reportStage = 'HYPERV_INSTALLER'
@@ -235,6 +282,20 @@ function Get-FullUiInstallScope([string]$product) {
         return 'INSTALL_SCOPE_USER'
     } catch { return 'INSTALL_SCOPE_UNVERIFIED' }
 }
+function Assert-FullUiProfileFreshInstall([string]$product) {
+    $scope=Get-FullUiInstallScope $product
+    Require ($scope -cne 'INSTALL_SCOPE_UNVERIFIED') 'PROFILE_INSTALL_SCOPE_UNVERIFIED'
+    Require ($scope -ceq 'UNREGISTERED') 'PROFILE_FRESH_CONTEXT_REQUIRED'
+    $paths=@((Join-Path $env:LOCALAPPDATA 'PaperEcho'),
+        (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'PaperEcho'),
+        (Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'PaperEcho'),
+        (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'PaperEcho'),
+        'HKLM:\SOFTWARE\PaperEcho',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\InProgress',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Installer\InProgress')
+    foreach ($path in $paths) { Require (-not (Test-Path -LiteralPath $path -ErrorAction Stop)) 'PROFILE_SHARED_OR_RECOVERY_STATE_PRESENT' }
+    Require (@(Get-NetAdapter -ErrorAction Stop|Where-Object Status -EQ 'Up').Count -eq 0) 'PROFILE_NETWORK_NOT_ISOLATED'
+}
 
 function Wait-FullUiObservation($process, [string]$directory, $binding, $steps, [int]$index, $watch, [int]$budget = 1080) {
     $phase = $steps[$index]
@@ -296,6 +357,7 @@ function Invoke-FullUiScenario {
     $identity = Read-FullUiPackage $source
     Require ($identity.ProductName -ceq 'PaperEcho TEST ONLY' -and $identity.ProductCode -ceq $manifest.productCode -and $identity.ProductCode -cmatch '^\{[A-F0-9-]{36}\}$' -and $identity.PackageCode -cmatch '^\{[A-F0-9-]{36}\}$' -and $identity.UpgradeCode -ceq '{7395EC5E-338E-4E71-92A2-579BD64EE6E4}' -and $identity.ProductVersion -ceq '2.6.0') 'FULL_UI_MSI_IDENTITY_INVALID'
     $beforeState = Get-FullUiProductState $identity.ProductCode; Require ($beforeState -eq -1) 'FRESH_PRODUCT_REQUIRED'
+    if ($ProfileIsolated) { Assert-FullUiProfileFreshInstall $identity.ProductCode }
     Require (@($manifest.payload).Count -gt 0) 'PAYLOAD_MANIFEST_REQUIRED'
     foreach ($entry in $manifest.payload) { Require ($entry.path -notmatch '(^|[\\/])\.\.($|[\\/])|[:\x00-\x1f]' -and -not [IO.Path]::IsPathRooted($entry.path)) 'PAYLOAD_PATH_INVALID' }
     $directory = Join-Path $outputRoot $manifest.runId
@@ -305,6 +367,7 @@ function Invoke-FullUiScenario {
     $msi = Join-Path $work 'PaperEcho-TEST-ONLY.msi'; Copy-Item -LiteralPath $source -Destination $msi
     Require ((Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash -ieq $manifest.msiSha256) 'LOCAL_MSI_HASH_INVALID'
     $binding = @{schemaVersion=1;runId=$manifest.runId;scenario=$FullUiScenario;msiSha256=$manifest.msiSha256;contextSha256=$HyperVContextSha256}
+    if ($ProfileIsolated) { $binding.userSid=$context.userSid; $binding.vmId=$context.vmId }
     # 18 minutes for manual evidence; reserve at most 2 minutes for the original process.
     $binding.startedTick=[Environment]::TickCount64
     $binding.signalDeadlineTick=$binding.startedTick+1080000
@@ -312,7 +375,7 @@ function Invoke-FullUiScenario {
     $binding.signalDeadlineUtc=[DateTime]::UtcNow.AddMinutes(18).ToString('o')
     Write-FullUiJson (Join-Path $directory 'binding.json') $binding
     $beforeData = Get-FullUiSnapshot $data; $log = Join-Path $directory 'msi-verbose.log'; $process = $null
-    $report = $binding + @{status='UNKNOWN';productStateBefore=$beforeState;automaticCleanupPerformed=$false;log='msi-verbose.log';observationEvidence='MANUAL_SIGNALS_REQUIRE_VISUAL_REVIEW';observations=@()}
+    $report = $binding + @{status='UNKNOWN';productStateBefore=$beforeState;automaticCleanupPerformed=$false;log='msi-verbose.log';observationEvidence='MANUAL_SIGNALS_REQUIRE_VISUAL_REVIEW';observations=@();testScope=$(if($ProfileIsolated){'PROFILE_ISOLATED_TEST_ONLY'}else{'SYNTHETIC_GUEST'});checkpointRestoreVerified=($context.checkpointRestoreVerified -eq $true);machineCleanClaim=$false}
     $reportFrozen=$false; $handleAcquired=$false; $exitDeadline=$null
     try {
         Assert-InstallerGuest; Assert-FullUiDesktop
