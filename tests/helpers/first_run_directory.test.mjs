@@ -9,14 +9,31 @@ import vm from 'node:vm';
 
 async function fixture(t) {
   const base = path.resolve('tests/runs/first-run-directory'); await fs.mkdir(base, { recursive: true });
-  const root = await fs.mkdtemp(path.join(base, '选择 空间-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  assert.equal(await fs.realpath(base), base, 'test base must not redirect outside the workspace');
+  const root = await fs.mkdtemp(path.join(base, '选择 空间-'));
+  const assertOwned = value => {
+    const relative = path.relative(root, value);
+    assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative), 'fixture path must stay inside its own directory');
+  };
+  t.after(async () => {
+    assert.equal(await fs.realpath(root), root, 'cleanup must not follow a redirected fixture');
+    assert.equal(path.dirname(root), base);
+    await fs.rm(root, { recursive: true, force: true });
+  });
   const applicationRoot = path.join(root, 'program'), target = path.join(root, '中文 数据');
   await fs.mkdir(applicationRoot); await fs.mkdir(target);
   const env = { LOCALAPPDATA: path.join(root, 'profile') };
-  const paths = prepareRuntimePaths(resolveRuntimePaths({ applicationRoot, env: { ...env, PAPERECHO_LAYOUT: 'installed', PAPERECHO_WORKSPACE_ID: 'default' } }));
+  // LOCALAPPDATA alone does not isolate macOS: its installed layout uses homeDir.
+  const preparePaths = env => {
+    const paths = resolveRuntimePaths({ applicationRoot, env, homeDir: path.join(root, 'home'), platform: process.platform === 'win32' ? 'win32' : 'darwin' });
+    for (const value of Object.values(paths)) if (typeof value === 'string' && path.isAbsolute(value)) assertOwned(value);
+    return prepareRuntimePaths(paths);
+  };
+  const paths = preparePaths({ ...env, PAPERECHO_LAYOUT: 'installed', PAPERECHO_WORKSPACE_ID: 'default' });
+  assertOwned(owner.startupLocationFile(env));
   let restarts = 0, dialogs = 0;
   const options = { paths, env, owner, choose: async () => { dialogs++; return { canceled: false, filePaths: [target] }; }, confirm: async () => true, restart: async () => { restarts++; } };
-  return { ...options, target, run: overrides => selectFirstRunDirectory({ ...options, ...overrides }), count: () => ({ restarts, dialogs }), record: owner.startupLocationFile(env) };
+  return { ...options, target, preparePaths, run: overrides => selectFirstRunDirectory({ ...options, ...overrides }), count: () => ({ restarts, dialogs }), record: owner.startupLocationFile(env) };
 }
 test('native bridge accepts only the actual main frame at its authenticated setup document', () => {
   const frame = { url: 'http://127.0.0.1:8765/#setup' }, contents = { mainFrame: frame };
@@ -37,18 +54,18 @@ test('native picker cancel and confirmation cancel never save or restart', async
 test('only persisted Phase A selection permits restart; cold resolution uses the selected directory', async t => {
   const f = await fixture(t);
   const result = await f.run({ restart: async () => {
-    const env = await owner.resolveStartupEnvironment({ applicationRoot: f.paths.applicationRoot, env: f.env });
+    const env = await owner.resolveStartupEnvironment({ applicationRoot: f.paths.applicationRoot, env: f.env, platform: 'win32' });
     assert.equal(env.PAPERECHO_DATA_ROOT, f.target);
   } });
   assert.equal(result.status, 'restarting'); assert.notEqual(result.status, 'ready');
-  const fresh = await owner.resolveStartupEnvironment({ applicationRoot: f.paths.applicationRoot, env: f.env });
-  const active = prepareRuntimePaths(resolveRuntimePaths({ applicationRoot: f.paths.applicationRoot, env: { ...fresh, PAPERECHO_LAYOUT: 'installed' } }));
+  const fresh = await owner.resolveStartupEnvironment({ applicationRoot: f.paths.applicationRoot, env: f.env, platform: 'win32' });
+  const active = f.preparePaths({ ...fresh, PAPERECHO_LAYOUT: 'installed' });
   assert.equal(active.userDataRoot, f.target); await fs.writeFile(active.configPath, '{}');
   await assert.rejects(fs.access(f.paths.configPath));
 });
 test('existing business state and explicit Portable never reach the native picker', async t => {
   const f = await fixture(t);
-  await fs.writeFile(path.join(f.paths.userDataRoot, '.env'), 'DUMMY=preserved');
+  await fs.writeFile(path.join(f.paths.userDataRoot, '.env'), 'DUMMY=preserved', { flag: 'wx' });
   await assert.rejects(f.run(), /STARTUP_DATA_PRESENT/);
   await assert.rejects(f.run({ env: { ...f.env, PAPERECHO_LAYOUT: 'portable' } }), /STARTUP_SELECTION_UNAVAILABLE/);
   assert.deepEqual(f.count(), { restarts: 0, dialogs: 0 });
