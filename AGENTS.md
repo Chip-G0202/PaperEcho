@@ -70,11 +70,11 @@ Cadence defaults:
 
 ## Git Version Control Rules
 
-- **Commit 习惯**：完成有意义的变更后，主动建议用户 commit。
-- **Commit 前检查**：先运行 `git status --short` 确认变更范围。
+- **Commit 习惯**：每完成一个独立任务或功能，且必要验证通过后，自动创建一个聚焦本次改动的 commit。
+- **Commit 前检查**：先运行 `git status --short` 确认变更范围，只提交本次任务的改动。
 - **Commit message 规范**：简洁说明改了什么，例如："新增跨平台支持"、"修复标题规范化"。
-- **不要自动 commit**：除非用户明确要求，否则不要自动执行 `git commit`。
-- **大变更分批 commit**：如果改动涉及多个独立功能，建议分多次 commit。
+- **失败时不 commit**：任务失败、阻塞或关键验证未通过、无法运行时，不执行 `git commit`。
+- **大变更分批 commit**：涉及多个独立功能时，每完成一个并通过必要验证，就分别 commit。
 - **Commit 后确认**：执行 commit 后，运行 `git log --oneline -1` 确认成功。
 
 ## Reproducibility Baseline
