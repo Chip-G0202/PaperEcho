@@ -3,7 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { sandboxWorkspace, acquireServer, allowedDocument, allowedSupportDownload, preferences, failurePage, trustedFirstRunFrame, selectFirstRunDirectory } from './shell.mjs';
+import { sandboxWorkspace, acquireServer, allowedDocument, allowedSupportDownload, preferences, failurePage, trustedFirstRunFrame, selectFirstRunDirectory, trustedDesktopSettingsFrame, loginStartup, startupDiagnostic } from './shell.mjs';
 let runtimeLog;
 let packagedPaths; let startupEnv;
 
@@ -71,6 +71,10 @@ export async function startShell({ root, show = true } = {}) {
   app.on('child-process-gone', () => { void runtimeLog?.write('GUI_CHILD_GONE', { subsystem: 'gui' }); });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   let origin;
+  ipcMain.handle('login-startup', (event, action, enabled) => {
+    if (!trustedDesktopSettingsFrame(event, window.webContents, origin) || !['status', 'set'].includes(action) || action === 'set' && typeof enabled !== 'boolean') return { available: false, error: 'LOGIN_STARTUP_UNAVAILABLE' };
+    return loginStartup(app, action === 'set' ? { enabled } : {});
+  });
   ipcMain.handle('first-run-directory', async (event, action) => {
     if (!app.isPackaged || process.platform !== 'win32' || !lease?.owned || !trustedFirstRunFrame(event, window.webContents, origin) || !['status', 'choose'].includes(action)) return { available: false, error: 'STARTUP_SELECTION_UNAVAILABLE' };
     if (selectingDirectory) return { available: false, error: 'STARTUP_SELECTION_BUSY' };
@@ -93,19 +97,25 @@ export async function startShell({ root, show = true } = {}) {
   for (const name of ['will-navigate', 'will-frame-navigate', 'will-redirect']) window.webContents.on(name, (event, url) => {
     if (!origin || !allowedDocument(event.url || url, origin)) event.preventDefault();
   });
+  let startupStage = 'service';
+  let errorPage = failurePage;
   try {
     lease = await acquireServer(root, app.isPackaged ? { env: process.env } : {});
     origin = new URL(lease.url).origin;
     partition.webRequest.onBeforeRequest((details, callback) => {
       // No remote network, file:, web sockets or alternate loopback listeners.
-      callback({ cancel: details.url !== failurePage && new URL(details.url).origin !== origin });
+      callback({ cancel: details.url !== errorPage && new URL(details.url).origin !== origin });
     });
+    startupStage = 'page';
     await window.loadURL(lease.url);
     await runtimeLog?.write('GUI_READY', { subsystem: 'gui' });
-  } catch {
+  } catch (error) {
+    const diagnostic = startupDiagnostic(error, startupStage);
+    errorPage = diagnostic.page;
+    process.stderr.write(JSON.stringify({ event: 'GUI_LOAD_FAILED', stage: startupStage, category: diagnostic.kind, code: diagnostic.detail }) + '\n');
     await runtimeLog?.write('GUI_LOAD_FAILED', { subsystem: 'gui' });
     await lease?.close(); lease = null;
-    await window.loadURL(failurePage);
+    await window.loadURL(errorPage);
   }
   return { window, lease, root };
 }

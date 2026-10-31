@@ -718,12 +718,47 @@ function emailDeliveryText(delivery) {
   const time = delivery.at && Number.isFinite(Date.parse(delivery.at)) ? ` · ${new Date(delivery.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}` : '';
   return `最近发送：${emailResultLabels[delivery.status] || '尚未发送'}${delivery.kind === 'test' ? '（测试通知）' : ''}${time}${delivery.error ? ` · ${emailErrorLabels[delivery.error] || '暂时无法发送'}` : ''}`;
 }
+async function appendLoginStartup(container) {
+  if (!window.paperEchoLoginStartup) return;
+  const section = el('section', undefined, 'settings-section section');
+  const label = el('label', '登录时启动 PaperEcho');
+  const input = el('input'); input.type = 'checkbox'; input.disabled = true;
+  label.prepend(input);
+  const notice = el('p', '正在读取系统登录项…', 'meta'); notice.setAttribute('role', 'status');
+  section.append(label, notice, el('p', '默认关闭，仅在当前用户登录后启动，可随时关闭。macOS 未公证应用可能需要系统批准，或无法注册。', 'meta'));
+  container.append(section);
+  const messages = {
+    LOGIN_STARTUP_APPROVAL_REQUIRED: '系统尚未批准。请在 macOS“系统设置 → 通用 → 登录项”中确认后重新读取。',
+    LOGIN_STARTUP_NOT_CONFIRMED: '系统未确认此设置。未公证的 macOS 应用可能无法注册；未报告成功。',
+    LOGIN_STARTUP_UNAVAILABLE: '当前运行方式不支持登录启动，请使用安装后的桌面应用。',
+    LOGIN_STARTUP_FAILED: '无法读取或修改系统登录项；请检查系统登录项设置。',
+  };
+  const show = state => {
+    input.indeterminate = typeof state.enabled !== 'boolean';
+    if (typeof state.enabled === 'boolean') input.checked = state.enabled;
+    input.disabled = state.available !== true || state.enabled === undefined;
+    notice.textContent = state.error ? (messages[state.error] || '系统登录项设置失败。') : state.enabled ? '系统已确认：登录时启动。' : state.status === 'requires-approval' ? messages.LOGIN_STARTUP_APPROVAL_REQUIRED : '系统已确认：登录时不启动。';
+  };
+  const refresh = async () => {
+    input.disabled = true;
+    try { show(await window.paperEchoLoginStartup.status()); }
+    catch { show({ error: 'LOGIN_STARTUP_FAILED' }); }
+  };
+  input.addEventListener('change', async () => {
+    const enabled = input.checked; input.disabled = true;
+    try { show(await window.paperEchoLoginStartup.set(enabled)); }
+    catch { await refresh(); notice.textContent = messages.LOGIN_STARTUP_FAILED; }
+  });
+  section.append(button('重新读取系统状态', refresh));
+  await refresh();
+}
 async function settings(group = settingsGroup, view = settingsView) {
   clearCredentialInputs();
   settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common';
   const requestedChannel = settingsGroup === 'connections' && notificationChannelIds.includes(view) ? view : null;
   settingsView = requestedChannel ? 'notifications' : view;
   main.append(pageIntro('工作空间设置', '这里只保留日常最常用的选项；检索词、检索式和底层参数继续由原配置维护。'));
+  if (settingsGroup === 'common') await appendLoginStartup(main);
   const data = await api('/api/settings');
   const credentials = await api('/api/credentials');
   const groupPath = { common: 'general', review: 'models', runtime: 'runtime', automation: 'automation', connections: 'connections' }[settingsGroup];
@@ -1002,6 +1037,7 @@ async function setup() {
   const go = async step => { setupStep = step; await render(); window.scrollTo?.(0, 0); main.focus({ preventScroll: true }); };
   if (setupStep === 0) {
     section.append(el('p', 'PaperEcho 在本机运行。向导不会自动检索、调用 AI、写入 Zotero、发送通知或创建计划任务。'), el('p', '已有配置和研究历史会保留；可选服务可以稍后在 Settings 中配置。'));
+    await appendLoginStartup(section);
   } else if (setupStep === 1) {
     section.append(contextCard('已选定的数据位置', [`部署模式：${{ installed: '安装模式（程序与数据分离）', portable: '可携带模式', dev: '开发模式' }[state.roots.layout] || state.roots.layout}`, `用户数据目录：${state.roots.userDataRoot}`, `缓存目录：${state.roots.cacheRoot}`]), el('p', '数据目录由启动时的路径契约确定。此处仅确认，不迁移数据，也不切换到其它工作空间。'));
     if (window.paperEchoFirstRun) {

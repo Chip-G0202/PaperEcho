@@ -10,6 +10,26 @@ export function trustedFirstRunFrame(event, contents, origin) {
   return Boolean(origin && event.sender === contents && event.senderFrame === contents.mainFrame
     && allowedDocument(event.senderFrame.url, origin) && new URL(event.senderFrame.url).hash === '#setup');
 }
+export function trustedDesktopSettingsFrame(event, contents, origin) {
+  if (!origin || event.sender !== contents || event.senderFrame !== contents.mainFrame || !allowedDocument(event.senderFrame.url, origin)) return false;
+  return /^#(?:setup|settings(?:\/.*)?)$/.test(new URL(event.senderFrame.url).hash);
+}
+// No cached preference: the OS is the source of truth. No registration on startup.
+export function loginStartup(app, { enabled, platform = process.platform, executable = process.execPath } = {}) {
+  if (!app.isPackaged || !['darwin', 'win32'].includes(platform)) return { available: false, error: 'LOGIN_STARTUP_UNAVAILABLE' };
+  const options = platform === 'win32' ? { path: executable, args: [] } : {};
+  try {
+    if (enabled !== undefined) {
+      if (typeof enabled !== 'boolean') return { available: true, error: 'LOGIN_STARTUP_INVALID' };
+      app.setLoginItemSettings({ ...options, openAtLogin: enabled, ...(platform === 'win32' ? { enabled } : {}) });
+    }
+    const actual = app.getLoginItemSettings(options);
+    const on = actual.openAtLogin === true && (platform === 'win32' ? actual.executableWillLaunchAtLogin === true : actual.status === 'enabled');
+    const state = { available: true, enabled: on, status: actual.status || (on ? 'enabled' : 'disabled') };
+    if (enabled !== undefined && (on !== enabled || !enabled && actual.openAtLogin)) state.error = actual.status === 'requires-approval' ? 'LOGIN_STARTUP_APPROVAL_REQUIRED' : 'LOGIN_STARTUP_NOT_CONFIRMED';
+    return state;
+  } catch { return { available: true, error: 'LOGIN_STARTUP_FAILED' }; }
+}
 export async function selectFirstRunDirectory({ paths, env, owner, choose, confirm, restart }) {
   if (owner.explicitStartupLocation(env)) throw new Error('STARTUP_SELECTION_UNAVAILABLE');
   await owner.assertFirstRunBlank(paths);
@@ -23,6 +43,16 @@ export async function selectFirstRunDirectory({ paths, env, owner, choose, confi
   catch { return { status: 'restart-required', error: 'STARTUP_RESTART_REQUIRED' }; }
 }
 export const failurePage = 'data:text/html;charset=utf-8,' + encodeURIComponent('<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'"><title>PaperEcho</title><p>PaperEcho 无法连接本地工作空间。请关闭窗口后重试。</p>');
+export function startupDiagnostic(error, stage) {
+  const code = String(error.code || error.message || '');
+  const kind = /EACCES|EPERM|PERMISSION/.test(code) ? 'PERMISSION'
+    : /MODULE_NOT_FOUND|ENOENT|RESOURCE/.test(code) ? 'RESOURCE'
+    : /TIMEOUT|TIMEDOUT/.test(code) ? 'TIMEOUT'
+    : stage === 'page' ? 'CONNECTION' : 'SERVICE';
+  const detail = /^[A-Z][A-Z_0-9]{1,80}$/.test(code) ? code : 'UNCLASSIFIED';
+  const descriptions = { PERMISSION: '权限检查失败', RESOURCE: '程序资源缺失', TIMEOUT: '本地服务响应超时', CONNECTION: '页面连接失败', SERVICE: '本地服务启动失败' };
+  return { kind, detail, page: 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'"><title>PaperEcho</title><p>PaperEcho 无法连接本地工作空间。</p><p>${descriptions[kind]}（${kind}/${detail}）。请保留此错误代码，关闭窗口后检查配置或反馈问题；工作空间未被清理。</p>`) };
+}
 export function allowedDocument(value, origin) {
   try { const u = new URL(value); return u.origin === origin && u.pathname === '/' && !u.search && !u.username && !u.password; } catch { return false; }
 }

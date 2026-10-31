@@ -14,7 +14,7 @@ export function setupConfiguration(output, filename) {
     appId: 'com.electron.paperecho', productName: 'PaperEcho', electronVersion: '44.7.2',
     directories: { output }, artifactName: filename, forceCodeSigning: false, publish: null,
     win: { target: ['nsis'], signAndEditExecutable: false },
-    nsis: { oneClick: false, perMachine: false, allowElevation: false, allowToChangeInstallationDirectory: false,
+    nsis: { oneClick: false, perMachine: false, allowElevation: false, allowToChangeInstallationDirectory: true,
       runAfterFinish: false, deleteAppDataOnUninstall: false, packElevateHelper: false,
       differentialPackage: false, include: fileURLToPath(new URL('./setup-guard.nsh', import.meta.url)) },
   };
