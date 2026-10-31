@@ -38,7 +38,7 @@ export function macOptions(stage, checksums, electronVersion) {
     // Preserve the existing digest policy; the complete bundle is signed after fuses.
     asarIntegrityDigest: false,
     extraResource: [path.join(stage, 'core')], out: path.join(stage, 'output'), tmpdir: path.join(stage, 'tmp'),
-    download: { cacheRoot: path.join(stage, 'electron-download'), checksums } };
+    download: { cacheRoot: path.join(repo, 'tests/runs/electron-cache'), checksums } };
 }
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const run = (file, args, options = {}) => execFileSync(file, args, { encoding: 'utf8', timeout: 300000, shell: false, ...options }).trim();
@@ -74,7 +74,10 @@ export async function buildTestDmg() {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('MACOS_ARM64_BUILD_REQUIRED');
   const gitCommit = run('git', ['rev-parse', 'HEAD'], { cwd: repo });
   if (process.env.GITHUB_SHA) assert.equal(gitCommit, process.env.GITHUB_SHA);
-  assert.equal(run('git', ['status', '--porcelain', '--', 'package.json', 'package-lock.json', 'workflow/tools', 'config', 'skills', 'desktop/electron-poc', '.github/workflows/mac-dmg-manual.yml'], { cwd: repo }), '', 'COMMITTED_BUILD_INPUTS_REQUIRED');
+  const dirty = Boolean(run('git', ['status', '--porcelain', '--', 'package.json', 'package-lock.json', 'workflow/tools', 'config', 'skills', 'desktop/electron-poc', '.github/workflows'], { cwd: repo }));
+  if (dirty && !process.argv.includes('--allow-dirty')) throw new Error('COMMITTED_BUILD_INPUTS_REQUIRED');
+  const distribution = process.argv.includes('--distribution');
+  const buildIdentity = { version: appVersion, platform: 'darwin', architecture: 'arm64', gitCommit, dirty };
   const base = path.join(repo, 'tests/runs/mac-dmg'); await fs.mkdir(base, { recursive: true });
   const stage = await fs.mkdtemp(path.join(base, 'build-'));
   const shell = path.join(stage, 'shell'), core = path.join(stage, 'core'); await fs.mkdir(shell); await fs.mkdir(core);
@@ -87,6 +90,8 @@ export async function buildTestDmg() {
     const target = path.join(core, source); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.copyFile(file, target);
   }
   const metadata = JSON.parse(await fs.readFile(path.join(repo, 'package.json'), 'utf8'));
+  await fs.writeFile(path.join(core, 'build-identity.json'), JSON.stringify({ ...buildIdentity,
+    sourceHashes: Object.fromEntries(await Promise.all(sources.map(async source => [source, sha256(await fs.readFile(path.join(core, source)))]))) }));
   await fs.writeFile(path.join(core, 'package.json'), JSON.stringify({ name: 'paperecho-core', version: appVersion, private: true, type: 'module', dependencies: metadata.dependencies }));
   // Reuse the Windows packager's installed-production-tree selection, not dev tools.
   const installed = run(process.execPath, [process.env.npm_execpath, 'ls', '--omit=dev', '--all', '--parseable'], { cwd: repo }).split(/\r?\n/).slice(1);
@@ -104,7 +109,10 @@ export async function buildTestDmg() {
   const checksums = JSON.parse(await fs.readFile(new URL('./node_modules/electron/checksums.json', import.meta.url), 'utf8'));
   const outputs = await packager(macOptions(stage, checksums, electron.version)); assert.equal(outputs.length, 1);
   const bundle = path.join(outputs[0], name + '.app');
-  const smoke = await finalizeMacBundle(bundle, stage, electron.version);
+  const smoke = await finalizeMacBundle(bundle, stage, electron.version, distribution ? { smoke: async bundle => {
+    run('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle]);
+    return { signature: 'AD_HOC_VERIFIED', runtime: 'NOT_RUN', headless: 'NOT_RUN', gui: 'NOT_TESTED' };
+  } } : {});
   const wire = await getCurrentFuseWire(bundle);
   for (const key of Object.values(F).filter(x => typeof x === 'number')) assert.equal(wire[key], fuseConfig[key] ? FuseState.ENABLE : FuseState.DISABLE);
   for (const required of ['Contents/Resources/app.asar', 'Contents/Resources/core/package.json', 'Contents/Resources/core/workflow/tools/runner/main.mjs', 'Contents/Resources/core/desktop/electron-poc/headless.mjs']) await fs.access(path.join(bundle, required));
@@ -112,8 +120,8 @@ export async function buildTestDmg() {
   const before = await bundleInventory(bundle);
   const disk = path.join(stage, 'disk'); await fs.mkdir(disk);
   await fs.rename(bundle, path.join(disk, name + '.app')); await fs.symlink('/Applications', path.join(disk, 'Applications'));
-  const artifact = path.join(base, 'artifact'); await fs.mkdir(artifact); // Refuse stale output or a second build.
-  const filename = `${name}-${appVersion}-darwin-arm64-TEST-ONLY.dmg`, dmg = path.join(artifact, filename);
+  const artifact = path.join(stage, 'artifact'); await fs.mkdir(artifact);
+  const filename = `${name}-${appVersion}-darwin-arm64-${gitCommit.slice(0, 8)}${dirty ? '-UNCOMMITTED' : ''}${distribution ? '' : '-TEST-ONLY'}.dmg`, dmg = path.join(artifact, filename);
   run('/usr/bin/hdiutil', ['create', '-volname', 'PaperEcho TEST ONLY', '-srcfolder', disk, '-format', 'UDZO', '-fs', 'HFS+', dmg]);
   run('/usr/bin/hdiutil', ['verify', dmg]);
   const mount = path.join(stage, 'verify-mount'); await fs.mkdir(mount);
@@ -125,10 +133,12 @@ export async function buildTestDmg() {
     assert.deepEqual(appMetadata(mounted), info); assert.deepEqual(await bundleInventory(mounted), before);
   } finally { run('/usr/bin/hdiutil', ['detach', mount]); }
   const bytes = await fs.readFile(dmg);
-  const validation = { testOnly: true, gitCommit, ...info, filename, bytes: bytes.length, sha256: sha256(bytes), files: Object.keys(before).length,
+  const validation = { ...buildIdentity, testOnly: !distribution || dirty, ...info, filename, bytes: bytes.length, sha256: sha256(bytes), files: Object.keys(before).length,
     sourceFiles: sources.length, electron: electron.version, dmgVerified: true, readonlyMountVerified: true, unmounted: true,
     ...macSigningStatus, signatureValidity: 'VERIFIED', nativeSmoke: smoke, guiAndGatekeeper: 'NOT_TESTED', releaseReady: false };
   await fs.writeFile(path.join(artifact, 'validation.json'), JSON.stringify(validation, null, 2), { flag: 'wx' });
+  await fs.writeFile(dmg + '.sha256', `${validation.sha256}  ${filename}\n`, { flag: 'wx' });
+  validation.outputPath = dmg;
   console.log(JSON.stringify(validation)); return validation;
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await buildTestDmg();

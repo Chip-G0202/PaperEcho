@@ -1,0 +1,45 @@
+name: Windows x64 Setup EXE (manual, no publishing)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  setup:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          clean: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install locked dependencies and build unsigned current-user NSIS installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          if ($PSVersionTable.PSVersion.Major -lt 7 -or $PSVersionTable.PSEdition -ne 'Core') { throw 'PS7_REQUIRED' }
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm ci --ignore-scripts --no-audit --no-fund --prefix desktop/electron-poc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run package:setup:win --prefix desktop/electron-poc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: PaperEcho-Windows-x64-Setup
+          path: |
+            tests/runs/phase2b/setup-*/artifact/*Setup.exe
+            tests/runs/phase2b/setup-*/artifact/*.sha256
+            tests/runs/phase2b/setup-*/artifact/setup-build.json
+          if-no-files-found: error
+          retention-days: 3

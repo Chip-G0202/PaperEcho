@@ -10,11 +10,14 @@
     "package:zip:win": "node package-zip.mjs",
     "package:dmg:mac": "node package-mac-dmg.mjs",
     "release:preflight": "node release.mjs",
-    "smoke:packaged": "node ../../tests/helpers/packaged_runner.mjs"
+    "smoke:packaged": "node ../../tests/helpers/packaged_runner.mjs",
+    "package:setup:win": "node package-setup.mjs",
+    "package:dmg": "node package-mac-dmg.mjs --distribution"
   },
   "devDependencies": {
     "@electron/fuses": "2.1.3",
     "@electron/packager": "20.3.0",
-    "electron": "44.7.2"
+    "electron": "44.7.2",
+    "electron-builder": "26.18.0"
   }
 }

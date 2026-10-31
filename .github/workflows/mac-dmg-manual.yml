@@ -1,4 +1,4 @@
-name: macOS TEST-ONLY DMG (manual)
+name: macOS DMG (manual, no publishing)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,6 @@ permissions:
 
 jobs:
   dmg:
-    if: github.event.repository.private == false && github.ref == 'refs/heads/codex/v2.6-development'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -24,14 +23,15 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npm ci --ignore-scripts --no-audit --no-fund --prefix desktop/electron-poc
-      - name: Build, verify signature and smoke native headless arm64 TEST-ONLY DMG
-        run: npm run package:dmg:mac --prefix desktop/electron-poc
+      - name: Build and verify arm64 DMG (ad-hoc only, no application execution)
+        run: npm run package:dmg --prefix desktop/electron-poc
       - name: Upload only verified DMG and summary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: PaperEcho-macOS-arm64-TEST-ONLY
+          name: PaperEcho-macOS-arm64
           path: |
-            tests/runs/mac-dmg/artifact/*.dmg
-            tests/runs/mac-dmg/artifact/validation.json
+            tests/runs/mac-dmg/build-*/artifact/*.dmg
+            tests/runs/mac-dmg/build-*/artifact/*.sha256
+            tests/runs/mac-dmg/build-*/artifact/validation.json
           if-no-files-found: error
           retention-days: 3
