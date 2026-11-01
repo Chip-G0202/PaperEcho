@@ -366,7 +366,7 @@ async function system() {
   const facts = el('dl', undefined, 'status-list');
   const { version } = await api('/api/version');
   for (const [name, value] of [['应用版本', version ? `PaperEcho v${version}` : 'PaperEcho（版本未标定）'], ['本地服务', '已响应 · 仅本机访问']]) facts.append(el('dt', name), el('dd', value));
-  main.append(facts);
+  const statusPanel = el('section', undefined, 'settings-section system-status'); statusPanel.append(facts); main.append(statusPanel);
   const support = el('section', undefined, 'settings-section system-support');
   const supportState = el('p', '尚未导出。', 'meta'); supportState.setAttribute('role', 'status'); supportState.setAttribute('aria-live', 'polite'); supportState.dataset.supportStatus = 'idle';
   const exportButton = button('导出诊断包', async () => {
@@ -421,8 +421,8 @@ async function system() {
     } catch { diagnosticState = 'unknown'; checkStatus.textContent = '诊断结果未知，保留上次问题；请稍后刷新。'; } finally { results.setAttribute('aria-busy', 'false'); }
   };
   const refresh = button('检查 / 刷新健康状态', () => refreshResults(true));
-  refresh.className = 'system-refresh'; main.append(refresh, results);
-  main.append(checkStatus); await refreshResults();
+  refresh.className = 'system-refresh'; statusPanel.append(refresh, checkStatus); main.append(results);
+  await refreshResults();
 }
 async function feedback() {
   const intro = { rating: ['文献评级', '核对系统评级；常规文献使用相对纠正，人工复核直接选择正确等级。'], research: ['研究方向反馈', '告诉 PaperEcho 最近推荐结果哪里与你的研究需求不一致。'], rules: ['规则建议', '核对由研究反馈生成的建议；安全校验始终生效。'] }[feedbackView];
