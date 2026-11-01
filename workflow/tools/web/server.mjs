@@ -100,6 +100,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       if (!equal(cookie, session)) return send(403, { error: 'SESSION_REQUIRED' });
       if (req.method === 'GET') {
         if (decoded === '/api/version') return send(200, { version });
+        if (decoded === '/api/doctor/configuration') return send(200, await services.doctor.configuration());
         if (decoded === '/api/doctor') return send(200, await services.doctor.status());
         if (decoded === '/api/setup') return send(200, await services.setup.status());
         if (decoded === '/api/schedule-status') return send(200, await services.schedule.status());

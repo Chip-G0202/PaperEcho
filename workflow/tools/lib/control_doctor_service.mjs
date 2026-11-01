@@ -66,6 +66,7 @@ export class DoctorService {
   constructor({ config, secrets, research, review, context, env, fsApi = fs, preflight = runPreflight, schedulerTransport, platform = process.platform }) {
     Object.assign(this, { config, secrets, research, review, context, env, fsApi, preflight, schedulerTransport, platform });
   }
+  async configuration() { return { configurationIssues: modelConfigurationIssues(await this.config.list(), await this.secrets.list()) }; }
   async status({ signal, queryOsScheduler = true } = {}) {
     const checks = [];
     const add = (checkId, status, summary, actionableHint = '', blocking = false) => checks.push({ checkId, status,

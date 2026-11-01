@@ -12,7 +12,7 @@ export function modelCredentials(env = process.env) {
     const value = input.env[name === 'translation' ? 'TITLE_TRANSLATION_ENDPOINT' : 'PREFERENCE_LEARNING_ENDPOINT'] || input.value?.endpoint;
     try { const url = new URL(value); return url.username || url.password || url.search || url.hash || url.protocol !== 'https:' ? null : url.href.replace(/\/+$/, '').replace(/\/chat\/completions$/, ''); } catch { return null; }
   };
-  const a = String(env.TITLE_TRANSLATION_API_KEY || '').trim(), b = String(env.PREFERENCE_LEARNING_API_KEY || '').trim();
+  const a = String(inputs.translation.env.TITLE_TRANSLATION_API_KEY || '').trim(), b = String(inputs.preference.env.PREFERENCE_LEARNING_API_KEY || '').trim();
   const shared = String(env[SHARED_MODEL_KEY] || '').trim();
   const compatible = Boolean(endpoint('translation') && endpoint('translation') === endpoint('preference'));
   const conflict = Boolean(a && b && a !== b);
@@ -30,8 +30,8 @@ export function modelConfigurationIssues(settings, credentials) {
     const enabled = name === 'translation' ? value('translation.enabled') === true : value('preference.enabled') === true && value('review.master') === true;
     if (!enabled) continue;
     const own = credentials.find(row => row.id === (name === 'translation' ? 'TITLE_TRANSLATION_API_KEY' : 'PREFERENCE_LEARNING_API_KEY'));
-    const missing = [!String(value(`${name}.endpoint`) || '').trim() && 'API 地址', !String(value(`${name}.model`) || '').trim() && '模型名称', !(shared?.effectiveConfigured || own?.configured) && 'API Key'].filter(Boolean);
-    if (missing.length) issues.push({ checkId: `model.${name}`, status: 'WARN', summary: `${name === 'translation' ? '翻译' : '偏好功能'}配置不完整`, actionableHint: `请在模型设置中补充：${missing.join('、')}。` });
+    const missing = [!String(value(`${name}.endpoint`) || '').trim() && 'API 地址', !String(value(`${name}.model`) || '').trim() && '模型名称', !(shared?.effectiveConfigured || (own?.effectiveConfigured ?? own?.configured)) && 'API Key'].filter(Boolean);
+    if (missing.length) issues.push({ checkId: `model.${name}`, status: 'WARN', summary: `${name === 'translation' ? '翻译' : '偏好功能'}配置不完整`, actionableHint: `请在统一 AI 配置中补充：${missing.join('、')}。`, settingTarget: missing.includes('API Key') ? 'ai.key' : missing.includes('API 地址') ? 'ai.endpoint' : 'ai.model' });
   }
   return issues;
 }

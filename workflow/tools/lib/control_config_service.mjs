@@ -32,8 +32,14 @@ for (const [capability, file] of [['translation', 'title_translation.config.json
   setting(`${capability}.model`, 'Models', file, 'model', 'string', `${capability} 模型名称`, { maxLength: 200 });
   setting(`${capability}.endpoint`, 'Models', file, 'endpoint', 'url', `${capability} API 地址`);
   setting(`${capability}.temperature`, 'Models', file, 'temperature', 'number', '采样温度', { min: 0, max: 2 });
+  for (const [key, type, title, rules] of [['top_p', 'number', 'Top P', { min: 0, max: 1 }], ['stream', 'boolean', '流式响应', {}], ['thinking', 'boolean', '思考模式', {}], ['max_retries', 'integer', '最大重试次数', { min: 0, max: 20 }]]) setting(`${capability}.${key}`, 'Models', file, key, type, title, rules);
   setting(`${capability}.timeout`, 'Advanced', file, 'timeout_ms', 'integer', '请求超时（毫秒）', { min: 1000, max: 600000 });
 }
+setting('ai.enabled', 'Models', 'title_translation.config.json', 'shared_service.enabled', 'boolean', '确认使用统一 AI 服务');
+for (const [key, type, title, rules] of [
+  ['endpoint', 'url', 'API 服务地址', {}], ['model', 'string', '模型名称', { maxLength: 200 }],
+  ['temperature', 'number', '采样温度', { min: 0, max: 2 }], ['timeout_ms', 'integer', '请求超时（毫秒）', { min: 1000, max: 120000 }], ['top_p', 'number', 'Top P', { min: 0, max: 1 }], ['stream', 'boolean', '流式响应', {}], ['thinking', 'boolean', '思考模式', {}], ['max_retries', 'integer', '最大重试次数', { min: 0, max: 20 }],
+]) setting(`ai.${key}`, 'Models', 'title_translation.config.json', `shared_service.${key}`, type, title, rules);
 setting('sources.domain', 'Sources', 'source_selection.json', 'research_domain', 'enum', '研究领域', { values: ['biomedical', 'non_biomedical_stem', 'education_social_science', 'mixed_biomedical_technical', 'unknown'] });
 setting('sources.override', 'Sources', 'source_selection.json', 'override_enabled_sources', 'list', '显式检索源', { values: ['rss', 'pubmed_pmc', 'openalex', 'semantic_scholar'] });
 for (const group of ['required', 'optional', 'negative']) setting(`pubmed.${group}`, 'Search', 'pubmed_pmc_search.json', `keyword_groups.${group}`, 'keywords', `${group} 检索词（修改后由现有 owner 生成检索式）`);
@@ -187,6 +193,13 @@ export class ConfigService {
       result.push({ ...publicDefinition, value: definition.id === 'wechat.uid' ? null : value, ...(definition.id === 'wechat.uid' ? { configured: Boolean(value) } : {}), available, ownerPresent, effectiveValue: definition.id === 'runtime.mode' ? this.runtimeMode || value : undefined });
     }
     result.push({ id: 'weekly.interval', category: 'Weekly', type: 'integer', value: Number(owners.get('paperecho.config.json')?.value?.weekly?.intervalDays || this.env.review_results_RUN_INTERVAL_DAYS || 7), default: 7, available: true, readOnly: true, description: '默认 7 天；由调度配置管理', validation: { min: 1 }, secret: false, advanced: true, reload: 'scheduler' });
+    if (result.find(row => row.id === 'ai.enabled')?.value === true) {
+      for (const name of ['translation', 'preference']) for (const key of ['endpoint', 'model', 'temperature', 'timeout', 'top_p', 'stream', 'thinking', 'max_retries']) {
+        const row = result.find(row => row.id === `${name}.${key}`);
+        row.legacyValue = row.value;
+        row.value = result.find(row => row.id === `ai.${key === 'timeout' ? 'timeout_ms' : key}`)?.value;
+      }
+    }
     return result;
   }
   async update(id, value) {
@@ -206,6 +219,7 @@ export class ConfigService {
       return { id, value, definition };
     });
     if (new Set(resolved.map((entry) => entry.id)).size !== resolved.length) throw new Error('SETTING_BATCH_INVALID');
+    if (resolved.some(row => row.id === 'ai.enabled' && row.value === true) && !['endpoint', 'model', 'temperature', 'timeout_ms', 'top_p', 'stream', 'thinking', 'max_retries'].every(key => resolved.some(row => row.id === `ai.${key}`))) throw new Error('SETTING_BATCH_INVALID');
     const ownerFiles = [...new Set(resolved.map((entry) => entry.definition.file))].sort();
     const notificationEdit = resolved.some(({ id }) => /^(email\.|smtp\.|notification\.|qq\.|wechat\.|feishu\.|wecom\.)/.test(id));
     const outboundEdit = resolved.some(({ id }) => /^(wechat\.|feishu\.|wecom\.)/.test(id));

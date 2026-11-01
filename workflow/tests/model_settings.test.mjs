@@ -82,7 +82,7 @@ test('shared UI saves only a changed feature and displays one key editor', async
   const source = await fs.readFile('workflow/tools/web/static/app.js', 'utf8');
   const fn = source.slice(source.indexOf('async function appendModelSettings('), source.indexOf('async function settings(')) + '\nappendModelSettings;';
   const nodes = [], buttons = [], writes = []; let editors = 0;
-  const el = (tag, text) => { const node = { tag, text, children: [], append(...v) { this.children.push(...v); }, prepend(...v) { this.children.unshift(...v); }, setAttribute() {} }; nodes.push(node); return node; };
+  const el = (tag, text) => { const node = { tag, text, children: [], append(...v) { this.children.push(...v); }, prepend(...v) { this.children.unshift(...v); }, setAttribute() {}, addEventListener() {} }; nodes.push(node); return node; };
   const append = vm.runInNewContext(fn, { el, button: (text, run) => { const b = { text, run }; buttons.push(b); return b; }, appendCredentialEditor: () => { editors++; }, api: async (_url, value) => writes.push(JSON.parse(JSON.stringify(value))) });
   await append(el('main'), [{ id: 'translation.enabled', value: false }, { id: 'preference.enabled', value: false }, { id: 'review.master', value: false }, { id: 'review.enabled', value: true }], [{ id: SHARED_MODEL_KEY, compatible: true }]);
   assert.equal(editors, 1); const toggles = nodes.filter(n => n.tag === 'input'); assert.equal(toggles.length, 2);
@@ -103,9 +103,71 @@ test('System presentation omits healthy/optional credentials but preserves real 
     { checkId: 'runtime.data', status: 'FAIL', summary: 'visible runtime failure' },
     { checkId: 'secret.UNKNOWN', status: 'UNKNOWN', summary: 'visible unsafe origin' },
   ];
-  const system = vm.runInNewContext(fn, { main: el('main'), pageIntro: () => el('header'), el, button: (text, run) => { const b = { text, run, dataset: {} }; buttons.push(b); return b; }, supportExportBusy: false, api: async url => url === '/api/version' ? { version: '2.6.0' } : { status: 'FAIL', checks, configurationIssues: [] } });
-  await system(); await buttons.find(b => b.text.includes('刷新')).run();
+  let failing = false;
+  const system = vm.runInNewContext(fn, { main: el('main'), pageIntro: () => el('header'), el, button: (text, run) => { const b = { text, run, dataset: {} }; buttons.push(b); return b; }, supportExportBusy: false, diagnosticCache: null, diagnosticFull: false, diagnosticState: 'unknown', settingDestinations: {}, refreshConfigurationDiagnostics: async () => {}, api: async url => { if (failing) throw new Error('offline'); return url === '/api/version' ? { version: '2.6.0' } : { status: 'FAIL', checks, configurationIssues: [] }; } });
+  await system();
   assert.equal(nodes.filter(n => n.className === 'doctor-check').length, 2);
   assert.equal(nodes.some(n => String(n.text).includes('hidden healthy')), false);
   assert.equal(nodes.some(n => String(n.text).includes('hidden optional')), false);
+  failing = true; await buttons.find(b => b.text.includes('刷新')).run();
+  assert.equal(nodes.filter(n => n.className === 'doctor-check').length, 2);
+  assert.ok(nodes.some(n => String(n.textContent).includes('诊断结果未知')));
+});
+
+test('confirmed common service has one owner, retains legacy fields and never moves old keys to another provider', async t => {
+  const { root, env } = await fixture(t);
+  const { ConfigService } = await import('../tools/lib/control_config_service.mjs');
+  const service = new ConfigService({ root, env });
+  const original = await fs.readFile(env.TITLE_TRANSLATION_CONFIG_PATH, 'utf8');
+  const preferenceBefore = await fs.readFile(env.PREFERENCE_LEARNING_CONFIG_PATH, 'utf8');
+  await assert.rejects(service.update('ai.enabled', true), /SETTING_BATCH_INVALID/);
+  assert.equal(await fs.readFile(env.TITLE_TRANSLATION_CONFIG_PATH, 'utf8'), original);
+  const shared = { endpoint: 'https://new-provider.invalid/v1/chat/completions', model: 'common-model', temperature: 0.7, timeout_ms: 12000, top_p: 0.5, stream: false, thinking: false, max_retries: 1 };
+  await service.updateMany([{ id: 'ai.enabled', value: true }, ...Object.entries(shared).map(([key, value]) => ({ id: `ai.${key}`, value }))]);
+  const saved = JSON.parse(await fs.readFile(env.TITLE_TRANSLATION_CONFIG_PATH, 'utf8'));
+  for (const [key, value] of Object.entries(JSON.parse(original))) assert.deepEqual(saved[key], value);
+  assert.equal(await fs.readFile(env.PREFERENCE_LEARNING_CONFIG_PATH, 'utf8'), preferenceBefore);
+  const input = { ...env, TITLE_TRANSLATION_API_KEY: 'dummy-old', PREFERENCE_LEARNING_API_KEY: 'dummy-other', TITLE_TRANSLATION_MODEL: 'old-override' };
+  assert.equal(getTranslationConfig({ env: input }).model, shared.model);
+  assert.equal(getPreferenceLearningConfig({ env: input }).model, shared.model);
+  assert.equal(getTranslationConfig({ env: input }).apiKeyConfigured, false);
+  assert.equal(getPreferenceLearningConfig({ env: input }).apiKey, '');
+  assert.equal(modelCredentials({ ...input, [SHARED_MODEL_KEY]: 'dummy-new' }).preference, 'dummy-new');
+  const listed = await service.list();
+  assert.equal(listed.find(row => row.id === 'preference.model').value, shared.model);
+  assert.equal(listed.find(row => row.id === 'preference.model').legacyValue, 'dummy');
+});
+
+test('configuration refresh keeps last evidence on failure and updates only after an acknowledged response', async () => {
+  const source = await fs.readFile('workflow/tools/web/static/app.js', 'utf8');
+  const fn = source.slice(source.indexOf('let diagnosticCache ='), source.indexOf('const settingDestinations'));
+  let fail = false;
+  const context = vm.createContext({ api: async () => { if (fail) throw new Error('offline'); return { configurationIssues: [] }; } });
+  vm.runInContext(fn, context);
+  vm.runInContext('diagnosticCache = {checks: [{status:"FAIL"}], configurationIssues: [{checkId:"model.translation"}]};', context);
+  fail = true; await vm.runInContext('refreshConfigurationDiagnostics()', context);
+  assert.equal(vm.runInContext('diagnosticState', context), 'unknown');
+  assert.equal(vm.runInContext('diagnosticCache.configurationIssues.length', context), 1);
+  fail = false; await vm.runInContext('refreshConfigurationDiagnostics()', context);
+  assert.equal(vm.runInContext('diagnosticCache.configurationIssues.length', context), 0);
+  assert.equal(vm.runInContext('diagnosticCache.checks.length', context), 1);
+});
+
+test('canonical shared settings save atomically and invocation configuration remains explicit', async t => {
+  const { root, env } = await fixture(t);
+  const { ConfigService } = await import('../tools/lib/control_config_service.mjs');
+  const canonical = JSON.parse(await fs.readFile('config/paperecho.config.example.json', 'utf8'));
+  canonical.translation = { enabled: true, endpoint: 'https://legacy.invalid/v1', model: 'old-a' };
+  canonical.preference = { endpoint: 'https://legacy.invalid/v1', model: 'old-b' };
+  const configPath = path.join(root, 'canonical.json'); await fs.writeFile(configPath, JSON.stringify(canonical));
+  const input = { ...env, PAPERECHO_APPLICATION_CONFIG: configPath, [SHARED_MODEL_KEY]: 'dummy-only' };
+  const service = new ConfigService({ root, env: input, configPath });
+  const fields = { endpoint: 'https://new.invalid/v1', model: 'chosen', temperature: 0.2, timeout_ms: 10000, top_p: 0.6, stream: false, thinking: false, max_retries: 1 };
+  await service.updateMany([{ id: 'ai.enabled', value: true }, ...Object.entries(fields).map(([key, value]) => ({ id: `ai.${key}`, value }))]);
+  const saved = JSON.parse(await fs.readFile(configPath, 'utf8'));
+  assert.equal(saved.translation.model, 'old-a'); assert.deepEqual(saved.preference, canonical.preference);
+  for (const runtime of [getTranslationConfig({ env: input }), getPreferenceLearningConfig({ env: input })]) {
+    assert.equal(runtime.model, 'chosen'); assert.equal(runtime.endpoint, 'https://new.invalid/v1/chat/completions'); assert.equal(runtime.temperature, 0.2);
+  }
+  assert.equal(getTranslationConfig({ env: { ...input, PAPERECHO_INVOCATION_TRANSLATION_CONFIG: env.TITLE_TRANSLATION_CONFIG_PATH } }).model, 'dummy');
 });

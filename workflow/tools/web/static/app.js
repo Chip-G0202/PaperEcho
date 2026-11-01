@@ -39,7 +39,7 @@ const settingGroups = [
 ];
 const settingViews = {
   common: [['databases', '文献数据库', ['Sources']], ['rss', 'RSS 订阅', ['Sources', 'RSS']], ['period', '检索周期', ['General', 'Search']]],
-  review: [['translation', '标题翻译', ['Models']], ['preference', '偏好学习', ['Models', 'Ranking / Review']]],
+  review: [['ai', '统一 AI 配置', ['Models', 'Ranking / Review']]],
   runtime: [['path', '运行路径', ['Runtime']]],
   automation: [['radar', 'Daily Radar', ['Radar']], ['weekly', '周报', ['Weekly', 'Integrity']]],
   connections: [['notifications', '通知偏好', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
@@ -127,7 +127,79 @@ async function api(url, value) {
   const response = await fetch(url, value === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(value) }).catch(() => { throw new Error('无法连接本地服务，请检查服务是否仍在运行。'); });
   const result = await response.json().catch(() => { throw new Error('服务响应暂不可用，请刷新页面后重试。'); });
   if (!response.ok) throw new Error(errorMessages[result.error] || '操作未完成。请检查输入或刷新页面后重试；安全限制仍然有效。');
+  if (value !== undefined && ['/api/settings', '/api/credentials'].includes(url)) { notice.textContent = '配置保存成功，诊断重新检查中…'; await refreshConfigurationDiagnostics(); notice.textContent = diagnosticState === 'current' ? '配置保存成功，相关诊断已更新。' : '配置保存成功；诊断结果未知，保留上次问题。'; }
   return result;
+}
+let diagnosticCache = null;
+let diagnosticFull = false;
+let diagnosticState = 'unknown';
+let configurationRequest = null;
+async function refreshConfigurationDiagnostics() {
+  if (configurationRequest) { await configurationRequest; return refreshConfigurationDiagnostics(); }
+  diagnosticState = 'checking';
+  configurationRequest = api('/api/doctor/configuration').then(report => {
+    if (!Array.isArray(report.configurationIssues)) throw new Error('UNKNOWN');
+    diagnosticCache = { ...(diagnosticCache || { checks: [] }), configurationIssues: report.configurationIssues };
+    diagnosticState = 'current';
+  }).catch(() => { diagnosticState = 'unknown'; }).finally(() => { configurationRequest = null; });
+  await configurationRequest;
+}
+const settingDestinations = {
+  'ai.key': ['settings/models/ai', '[data-credential="PAPERECHO_MODEL_API_KEY"]'],
+  'ai.endpoint': ['settings/models/ai', '[data-ai-field="endpoint"]'],
+  'ai.model': ['settings/models/ai', '[data-ai-field="model"]'],
+};
+let pendingSettingTarget = null;
+function goToSetting(target) { if (!settingDestinations[target]) return; pendingSettingTarget = target; navigate(settingDestinations[target][0]); }
+function focusSettingTarget() {
+  const destination = settingDestinations[pendingSettingTarget]; pendingSettingTarget = null;
+  const node = destination && main.querySelector(destination[1]); if (!node) return;
+  for (const details of node.querySelectorAll('details')) details.open = true;
+  const details = node.closest('details'); if (details) details.open = true;
+  const edit = node.querySelector('.credential-actions button'); if (edit && !edit.hidden) edit.click();
+  node.scrollIntoView({ block: 'center', behavior: 'smooth' }); node.classList.add('setting-highlight');
+  node.tabIndex = -1; node.focus({ preventScroll: true });
+  const field = node.querySelector('input:not([disabled]):not([readonly]),select'); if (field) field.focus({ preventScroll: true });
+  setTimeout(() => node.classList.remove('setting-highlight'), 2500);
+}
+async function appendAiService(container, data, refreshModel) {
+  const section = el('section', undefined, 'settings-section section ai-service'); container.prepend(section);
+  section.append(el('h3', 'AI 服务配置'), el('p', '翻译与偏好使用同一服务。确认保存后启用；旧参数与旧 Key 保留。服务地址支持兼容 OpenAI 的 API Base URL 或 chat/completions 完整地址。', 'meta'));
+  const enabled = data.find(row => row.id === 'ai.enabled')?.value === true;
+  const fields = [['endpoint', 'API 服务地址', 'url', ''], ['model', '模型名称', 'text', ''], ['temperature', '采样温度', 'number', 0.3], ['timeout_ms', '请求超时（毫秒）', 'number', 30000], ['top_p', 'Top P', 'number', 0.85], ['stream', '流式响应', 'checkbox', false], ['thinking', '思考模式', 'checkbox', false], ['max_retries', '最大重试次数', 'number', 2]];
+  const inputs = new Map(); const conflicts = [];
+  for (const [key, title, type, fallback] of fields) {
+    const oldKey = key === 'timeout_ms' ? 'timeout' : key;
+    const a = data.find(row => row.id === `translation.${oldKey}`)?.value, b = data.find(row => row.id === `preference.${oldKey}`)?.value;
+    const conflict = !enabled && a != null && b != null && a !== b;
+    const row = el('div', undefined, 'setting'); row.dataset.aiField = key;
+    const input = el('input'); input.type = type; input.required = type !== 'checkbox';
+    if (type === 'number') { input.min = ['temperature', 'top_p', 'max_retries'].includes(key) ? '0' : '1000'; input.max = ({ temperature: '2', top_p: '1', max_retries: '20' })[key] || '120000'; input.step = ['temperature', 'top_p'].includes(key) ? '0.01' : '1'; }
+    input.value = enabled ? data.find(row => row.id === `ai.${key}`)?.value ?? fallback : a ?? b ?? fallback;
+    if (type === 'checkbox') input.checked = input.value === 'true';
+    row.append(label(title, input));
+    if (conflict) {
+      conflicts.push(title);
+      const choice = select([['', '请选择保留的值'], ['translation', `采用翻译：${a}`], ['preference', `采用偏好：${b}`], ['custom', '使用上方自行填写的新值']], '');
+      choice.required = true; row.append(label(`${title}：旧值不同`, choice));
+      choice.onchange = () => { if (choice.value !== 'custom') { input.value = choice.value === 'translation' ? a : b; if (type === 'checkbox') input.checked = input.value === 'true'; } };
+      inputs.set(key, { input, choice });
+    } else inputs.set(key, { input });
+    section.append(row);
+  }
+  if (conflicts.length) section.append(el('p', `旧参数冲突：${conflicts.join('、')}。请选择后确认；保存前继续使用原配置。`, 'plan-alert'));
+  const confirmation = el('input'); confirmation.type = 'checkbox'; section.append(label('确认两项功能使用以上服务与参数，且共享 Key 属于该服务；旧值保留', confirmation));
+  const status = el('p', enabled ? '已启用统一 AI 服务。' : '尚未确认合并，继续使用原配置。', 'meta'); status.setAttribute('role', 'status');
+  section.addEventListener('input', () => { status.textContent = '编辑中，尚未保存；诊断仍以已保存配置为准。'; });
+  section.append(button('保存统一 AI 配置', async () => {
+    if (!confirmation.checked || [...inputs.values()].some(({ input, choice }) => !input.checkValidity() || choice && !choice.value)) throw new Error('请填写有效参数、处理冲突并勾选确认；原配置未改变。');
+    const updates = [...inputs].map(([key, { input }]) => ({ id: `ai.${key}`, value: input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value.trim() }));
+    updates.push({ id: 'ai.enabled', value: true });
+    status.textContent = '正在保存…';
+    let saved = false;
+    try { await api('/api/settings', { updates }); saved = true; await refreshModel(); status.textContent = diagnosticState === 'current' ? '配置保存成功，相关诊断已重新检查。' : '配置保存成功；诊断结果未知，原问题保留，请稍后刷新。'; }
+    catch (error) { status.textContent = saved ? '配置已保存，但页面状态未知，请重新读取确认。' : '保存失败，原配置与诊断问题保留。'; if (!saved) throw error; }
+  }), status);
 }
 // Presentation-only queue: source grades/order are never mutated. Saving is
 // serialized; failed or uncertain requests reuse their id until acknowledged.
@@ -303,10 +375,16 @@ async function system() {
   support.append(el('h3', '本地诊断包'), el('p', '仅包含版本、运行环境、健康检查状态及有限事件统计；不包含 Secret、用户目录、研究正文或原始日志。仅在主动操作后生成，由你选择保存位置，不自动上传。'), exportButton, supportState);
   main.append(support);
   const results = el('section', undefined, 'settings-section doctor-results'); results.setAttribute('aria-live', 'polite');
-  const refresh = button('检查 / 刷新健康状态', async () => {
+  const checkStatus = el('p', '诊断重新检查中…', 'meta'); checkStatus.setAttribute('role', 'status');
+  const refreshResults = async (full = false) => {
     results.setAttribute('aria-busy', 'true');
     try {
-      const report = await api('/api/doctor'); results.replaceChildren();
+      checkStatus.textContent = '诊断重新检查中…';
+      if (full || !diagnosticFull) { const fresh = await api('/api/doctor'); if (!Array.isArray(fresh.checks) || !Array.isArray(fresh.configurationIssues)) throw new Error('UNKNOWN'); diagnosticCache = fresh; diagnosticFull = true; diagnosticState = 'current'; }
+      else await refreshConfigurationDiagnostics();
+      if (diagnosticState === 'unknown') { checkStatus.textContent = '诊断结果未知，保留上次问题；请稍后刷新。'; if (!diagnosticCache) return; }
+      else checkStatus.textContent = '诊断已更新；仅检查已保存配置。';
+      const report = diagnosticCache; results.replaceChildren();
       const labels = { WARN: '建议处理', FAIL: '需要处理', UNKNOWN: '待确认' };
       results.dataset.doctorStatus = report.status;
       const checks = report.checks.filter(check => check.status !== 'PASS' && (!check.checkId.startsWith('secret.') || ['FAIL', 'UNKNOWN'].includes(check.status)) && (!['preflight.optional', 'runtime.platform'].includes(check.checkId) || check.blocking || check.status === 'FAIL'));
@@ -325,14 +403,16 @@ async function system() {
             const details = el('details'); details.append(el('summary', '查看完整说明'), el('p', check.summary), el('p', check.actionableHint || ''));
             item.append(details);
           }
+          if (settingDestinations[check.settingTarget]) item.append(button('前往设置', () => goToSetting(check.settingTarget)));
           grid.append(item);
         }
         group.append(grid); results.append(group);
       }
-    } finally { results.setAttribute('aria-busy', 'false'); }
-  });
+    } catch { diagnosticState = 'unknown'; checkStatus.textContent = '诊断结果未知，保留上次问题；请稍后刷新。'; } finally { results.setAttribute('aria-busy', 'false'); }
+  };
+  const refresh = button('检查 / 刷新健康状态', () => refreshResults(true));
   refresh.className = 'system-refresh'; main.append(refresh, results);
-  results.append(el('p', '点击检查按钮获取当前状态；页面不会后台轮询。'));
+  main.append(checkStatus); await refreshResults();
 }
 async function feedback() {
   const intro = { rating: ['文献评级', '核对系统评级；常规文献使用相对纠正，人工复核直接选择正确等级。'], research: ['研究方向反馈', '告诉 PaperEcho 最近推荐结果哪里与你的研究需求不一致。'], rules: ['规则建议', '核对由研究反馈生成的建议；安全校验始终生效。'] }[feedbackView];
@@ -698,6 +778,7 @@ function appendCredentialEditor(section, item, onStatusChange = () => {}) {
   input.oninput = sync;
   editor.append(label(`${names[item.id]}（新值）`, input), save, cancel);
   const actions = el('div', undefined, 'actions credential-actions'); actions.append(configure, clear); row.append(actions, editor); sync();
+  row.refreshCredential = sync;
   return row;
 }
 function clearCredentialInputs(scope = document) {
@@ -772,7 +853,7 @@ async function appendModelSettings(container, data, credentials) {
   const state = el('p', '', 'meta'); state.setAttribute('role', 'status');
   const describe = () => !shared?.compatible ? '两项服务地址不同或无法确认兼容性，暂不能共享 Key；旧配置保持不变，请先统一服务地址。' : shared.conflict && !shared.configured ? '检测到两个不同的旧 Key，原值保持不变。明确保存新的共享 Key 后，两项功能才改用它；不会删除旧值。' : shared.effectiveConfigured ? '两项功能可共用现有 Key。密钥原值不回显；清除共享项也不会删除旧 Key。' : '尚未配置共享 Key。请填写服务提供商签发的 API Key。';
   state.textContent = describe(); section.append(state);
-  if (shared) appendCredentialEditor(section, shared, async () => { state.textContent = describe(); });
+  const sharedEditor = shared && appendCredentialEditor(section, shared, async () => { state.textContent = describe(); status.textContent = missingHint(); });
   const controls = [];
   for (const [id, title] of [['translation.enabled', '启用翻译'], ['preference.enabled', '启用偏好功能']]) {
     const item = data.find(row => row.id === id);
@@ -784,7 +865,7 @@ async function appendModelSettings(container, data, credentials) {
   const missingHint = () => controls.filter(c => c.input.checked).map(c => {
     const name = c.id === 'translation.enabled' ? 'translation' : 'preference';
     const own = credentials.find(row => row.id === (name === 'translation' ? 'TITLE_TRANSLATION_API_KEY' : 'PREFERENCE_LEARNING_API_KEY'));
-    const missing = [!String(data.find(row => row.id === `${name}.model`)?.value || '').trim() && '模型名称', !String(data.find(row => row.id === `${name}.endpoint`)?.value || '').trim() && 'API 地址', !(shared?.effectiveConfigured || own?.configured) && 'API Key'].filter(Boolean);
+    const missing = [!String(data.find(row => row.id === `${name}.model`)?.value || '').trim() && '模型名称', !String(data.find(row => row.id === `${name}.endpoint`)?.value || '').trim() && 'API 地址', !(shared?.effectiveConfigured || (own?.effectiveConfigured ?? own?.configured)) && 'API Key'].filter(Boolean);
     return missing.length ? `${name === 'translation' ? '翻译' : '偏好功能'}仍需配置：${missing.join('、')}` : '';
   }).filter(Boolean).join('；');
   const status = el('p', missingHint(), 'meta'); status.setAttribute('role', 'status');
@@ -804,6 +885,14 @@ async function appendModelSettings(container, data, credentials) {
     status.textContent = `开关已保存，下次工作流生效。${missingHint()}`;
   }), status);
   container.append(section);
+  const refreshModel = async () => {
+    const [freshData, freshCredentials] = await Promise.all([api('/api/settings'), api('/api/credentials')]);
+    for (const row of data) Object.assign(row, freshData.find(item => item.id === row.id));
+    for (const row of credentials) Object.assign(row, freshCredentials.find(item => item.id === row.id));
+    sharedEditor?.refreshCredential?.(); state.textContent = describe(); status.textContent = missingHint();
+  };
+  section.addEventListener('paperecho:preview-key-saved', () => refreshModel().catch(() => { state.textContent = '配置状态未知，请重新读取。'; }));
+  return refreshModel;
 }
 async function settings(group = settingsGroup, view = settingsView) {
   clearCredentialInputs();
@@ -815,7 +904,7 @@ async function settings(group = settingsGroup, view = settingsView) {
   const data = await api('/api/settings');
   const credentials = await api('/api/credentials');
   const groupPath = { common: 'general', review: 'models', runtime: 'runtime', automation: 'automation', connections: 'connections' }[settingsGroup];
-  const hasContent = ([key, , categories]) => ['translation', 'preference', 'path'].includes(key) || (key === 'credentials' ? credentials.length > 0 : categories.some((category) => data.some((entry) => entry.category === category && visibleSetting(entry) && (category !== 'Models' || entry.id.startsWith(`${key}.`)))));
+  const hasContent = ([key, , categories]) => ['ai', 'path'].includes(key) || (key === 'credentials' ? credentials.length > 0 : categories.some((category) => data.some((entry) => entry.category === category && visibleSetting(entry) && (category !== 'Models' || entry.id.startsWith(`${key}.`)))));
   const views = settingViews[settingsGroup].filter(hasContent);
   if (!views.some(([key]) => key === settingsView)) settingsView = views[0]?.[0] || settingViews[settingsGroup][0][0];
   if (views.length > 1) main.append(tertiaryNav('设置任务', views.map(([key, title]) => [key, title]), settingsView, `settings/${groupPath}`));
@@ -891,13 +980,11 @@ async function settings(group = settingsGroup, view = settingsView) {
   };
   const active = (views.find(([key]) => key === settingsView) || settingViews[settingsGroup][0]);
   if (settingsGroup === 'review') {
-    await appendModelSettings(body, data, credentials);
-    const title = settingsView === 'translation' ? '翻译服务参数' : '偏好服务参数';
-    const prefix = settingsView === 'translation' ? 'translation.' : 'preference.';
-    const entries = data.filter(entry => entry.id.startsWith(prefix) && !entry.id.endsWith('.enabled') && visibleSetting(entry));
-    const section = el('section', undefined, 'settings-section section'); section.append(el('h3', title));
-    appendSettingsControls(section, entries, title, '保存服务参数');
-    body.append(section); return;
+    const refreshModel = await appendModelSettings(body, data, credentials);
+    await appendAiService(body, data, refreshModel);
+    const options = el('section', undefined, 'settings-section section'); options.append(el('h3', '功能专属选项'));
+    appendSettingsControls(options, data.filter(entry => entry.category === 'Ranking / Review' && visibleSetting(entry)), '功能专属选项', '保存专属选项');
+    body.append(options); return;
   }
   if (settingsGroup === 'runtime') {
     const section = el('section', undefined, 'settings-section runtime-settings'); section.append(el('h3', '选择运行路径', 'section-header'), el('p', '三种路径互斥；只显示当前路径需要的设置。固定启动入口仍会校验路径一致性。', 'meta'));
@@ -1070,7 +1157,7 @@ async function settings(group = settingsGroup, view = settingsView) {
     appendSettingsControls(section, entries, groupTitle);
     if (group === 'Credentials') {
       section.append(el('p', '凭据是敏感操作，仍需逐项明确替换或清除；原值永不回显。', 'meta'));
-      for (const item of credentials.filter((entry) => !['ZOTERO_API_KEY', 'TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY'].includes(entry.id))) appendCredentialEditor(section, item);
+      for (const item of credentials.filter((entry) => !['PAPERECHO_MODEL_API_KEY', 'ZOTERO_API_KEY', 'TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY'].includes(entry.id))) appendCredentialEditor(section, item);
       section.append(el('p', '已配置不代表连接成功。暂无可复用的安全连接测试入口；连接测试尚未开放。', 'muted'));
     }
     if (entries.length || group === 'Credentials') body.append(section);
@@ -1195,7 +1282,7 @@ function parseRoute(hash) {
     if (section === 'automation' && task === 'plan') { state.page = 'home'; return state; }
     const groups = { general: 'common', common: 'common', models: 'review', review: 'review', runtime: 'runtime', automation: 'automation', connections: 'connections' };
     state.settingsGroup = groups[section] || 'common';
-    const fallback = { common: 'databases', review: 'translation', runtime: 'path', automation: 'radar', connections: 'notifications' }[state.settingsGroup];
+    const fallback = { common: 'databases', review: 'ai', runtime: 'path', automation: 'radar', connections: 'notifications' }[state.settingsGroup];
     state.settingsView = settingViews[state.settingsGroup].some(([key]) => key === task) || state.settingsGroup === 'connections' && notificationChannelIds.includes(task) ? task : fallback;
   }
   return state;
@@ -1204,13 +1291,14 @@ function route() {
   if (location.hash === '#content' && main.getAttribute('aria-busy') === 'false') { main.focus(); return; }
   ({ page, feedbackView, reviewSection, settingsGroup, settingsView } = parseRoute(location.hash));
   notice.textContent = ''; document.querySelector('#sidebar').dataset.open = 'false'; document.querySelector('#menu-toggle').setAttribute('aria-expanded', 'false');
-  return render().then(() => { window.scrollTo?.(0, 0); if (!activeChannelModal) (activeReview?.workspace || main).focus({ preventScroll: true }); });
+  return render().then(() => { window.scrollTo?.(0, 0); if (!activeChannelModal) (activeReview?.workspace || main).focus({ preventScroll: true }); focusSettingTarget(); });
 }
 const defaultRoutes = { feedback: 'feedback/rating/normal', settings: 'settings/general/databases' };
 document.querySelectorAll('[data-page]').forEach((node) => node.addEventListener('click', () => navigate(defaultRoutes[node.dataset.page] || node.dataset.page)));
 document.querySelectorAll('[data-nav-route]').forEach((node) => node.addEventListener('click', () => navigate(node.dataset.navRoute)));
 document.querySelector('#menu-toggle').addEventListener('click', () => { const sidebar = document.querySelector('#sidebar'); const open = sidebar.dataset.open !== 'true'; sidebar.dataset.open = String(open); document.querySelector('#menu-toggle').setAttribute('aria-expanded', String(open)); });
 window.addEventListener('hashchange', route);
+window.addEventListener('paperecho:preview-configuration-saved', () => refreshConfigurationDiagnostics());
 window.addEventListener('pagehide', () => clearCredentialInputs());
 window.addEventListener('pageshow', () => clearCredentialInputs());
 api('/api/session').then(async session => {

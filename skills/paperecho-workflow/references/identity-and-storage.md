@@ -64,3 +64,5 @@ Before changing a shared schema or path, identify readers, writers, legacy migra
 # Control Center feedback boundary
 
 `control_feedback_service.mjs` owns `paper_feedback.json` under the review root. It reuses `literature_identity.mjs`, excludes title-only identity, keeps revision history, and uses lock/atomic replacement. Legacy XLSX import is explicit, one-way and idempotent; uncertain identity blocks import. DOCX remains an input/export adapter. See [Control Center compatibility](../../../docs/control-center.md) for scope and Local JSONL precedence.
+
+统一 AI 服务由现有 translation owner 的 `shared_service` 保存非敏感参数（endpoint/model/temperature/top_p/stream/thinking/timeout_ms/max_retries），仅显式确认 enabled 后生效；两项功能继续独立启停。旧字段与 Key 不改写，冲突需在统一页逐项选择。旧 Key 仅能复用于原服务；共享 Key 仍由既有 SecretService 管理。显式 invocation 配置优先，不写回共享设置。配置保存成功只重查配置诊断，失败保留上次证据。

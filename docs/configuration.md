@@ -588,3 +588,5 @@ Web 的 API v3、读取 page size 100、写入 batch 50、timeout 30 秒、默�
 6. 配置后只运行所选路径 launcher 的 `--check --config config/paperecho.config.json`。blocked 时仅报告缺失项与安全 retry command。
 7. ready/warning 后，用户选择“只检查”则停止；只有明确选择“配置后运行”且 preflight 允许时才执行同一 launcher 的 `--run`。
 8. 单纯应用个人配置不 stage、不 commit。文档/模板维护任务才可在通过验证后提交非个人文件。
+
+统一 AI 服务由现有 translation owner 的 `shared_service` 保存非敏感参数（endpoint/model/temperature/top_p/stream/thinking/timeout_ms/max_retries），仅显式确认 enabled 后生效；两项功能继续独立启停。旧字段与 Key 不改写，冲突需在统一页逐项选择。旧 Key 仅能复用于原服务；共享 Key 仍由既有 SecretService 管理。显式 invocation 配置优先，不写回共享设置。配置保存成功只重查配置诊断，失败保留上次证据。

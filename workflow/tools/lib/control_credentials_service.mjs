@@ -63,6 +63,7 @@ export class SecretService {
     return CONTROL_SECRET_NAMES.map((id) => {
       const origin = this.#origin(id, state);
       return { id, configured: Boolean(this.#value(id, state)), storageClass: origin.kind, writable: Boolean(state) && origin.writable, testAvailable: false,
+        ...(['TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY'].includes(id) ? { effectiveConfigured: Boolean(sharedState[id === 'TITLE_TRANSLATION_API_KEY' ? 'translation' : 'preference']) } : {}),
         ...(id === SHARED_MODEL_KEY ? { compatible: sharedState.compatible, conflict: sharedState.conflict, effectiveConfigured: sharedState.effectiveShared } : {}),
         reason: reason || origin.reason || '', reload: '已保存到本地；当前凭据服务读取新值。新 workflow 启动时加载；已运行的进程需重启，外部环境仍优先。' };
     });

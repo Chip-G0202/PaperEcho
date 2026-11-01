@@ -94,7 +94,7 @@ export function readDomainConfig(file, { root = path.dirname(path.dirname(file))
   try { return { value: JSON.parse(fs.readFileSync(file, 'utf8')), path: file, canonical: false }; }
   catch (error) { if (error.code === 'ENOENT') return { value: null, path: file, canonical: false }; throw new Error('LEGACY_CONFIG_UNREADABLE'); }
 }
-export function resolveCapabilityInput(capability, { env = process.env, legacyPath } = {}) {
+function resolveLegacyCapabilityInput(capability, { env = process.env, legacyPath } = {}) {
   if (env.PAPERECHO_APPLICATION_CONFIG && !env[capability === 'translation' ? 'TITLE_TRANSLATION_CONFIG_PATH' : 'PREFERENCE_LEARNING_CONFIG_PATH']) {
     legacyPath = path.join(path.dirname(env.PAPERECHO_APPLICATION_CONFIG), capability === 'translation' ? 'title_translation.config.json' : 'preference_learning.config.json');
   }
@@ -113,4 +113,25 @@ export function resolveCapabilityInput(capability, { env = process.env, legacyPa
     return { ...loaded, env: effectiveEnv, configPath: path.resolve(invocation) };
   }
   return { value: structuredClone(current[capability] || {}), env: effectiveEnv, configPath: applicationConfigPath({ env }), canonical: true };
+}
+
+// Opt-in common service lives in the existing translation owner. Legacy fields remain intact.
+export function resolveCapabilityInput(capability, options = {}) {
+  const input = resolveLegacyCapabilityInput(capability, options);
+  const env = options.env || process.env;
+  if (env.PAPERECHO_INVOCATION_TRANSLATION_CONFIG || env.PAPERECHO_INVOCATION_PREFERENCE_CONFIG) return input;
+  const translationPath = env.TITLE_TRANSLATION_CONFIG_PATH || path.join(path.dirname(options.legacyPath), 'title_translation.config.json');
+  const owner = resolveLegacyCapabilityInput('translation', { env, legacyPath: translationPath });
+  const shared = owner.value?.shared_service;
+  if (shared?.enabled !== true) return input;
+  const effectiveEnv = { ...input.env };
+  const base = value => { try { const u = new URL(value); return u.origin + u.pathname.replace(/\/+$/, '').replace(/\/chat\/completions$/, ''); } catch { return ''; } };
+  // A legacy key may only follow its original service, never a newly selected provider.
+  for (const [name, prefix] of [['translation', 'TITLE_TRANSLATION'], ['preference', 'PREFERENCE_LEARNING']]) {
+    const original = name === capability ? input : name === 'translation' ? owner : resolveLegacyCapabilityInput(name, { env, legacyPath: env.PREFERENCE_LEARNING_CONFIG_PATH || path.join(path.dirname(options.legacyPath), 'preference_learning.config.json') });
+    if (!base(shared.endpoint) || base(env[prefix + '_ENDPOINT'] || original.value?.endpoint) !== base(shared.endpoint)) { delete effectiveEnv[prefix + '_API_KEY']; if (name === capability && name === 'preference') input.value = { ...input.value, api_key_env_fallback_order: [] }; }
+    for (const key of ['ENDPOINT', 'MODEL', 'TEMPERATURE', 'TIMEOUT_MS', 'TOP_P', 'STREAM', 'THINKING', 'MAX_RETRIES']) delete effectiveEnv[prefix + '_' + key];
+  }
+  const endpoint = String(shared.endpoint || '').replace(/\/+$/, '');
+  return { ...input, value: { ...input.value, ...Object.fromEntries(['endpoint', 'model', 'temperature', 'timeout_ms', 'top_p', 'stream', 'thinking', 'max_retries'].filter(key => shared[key] !== undefined).map(key => [key, key === 'endpoint' && !endpoint.endsWith('/chat/completions') ? `${endpoint}/chat/completions` : shared[key]])) }, env: effectiveEnv };
 }

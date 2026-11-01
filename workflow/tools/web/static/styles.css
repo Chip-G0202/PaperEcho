@@ -79,3 +79,5 @@ input[role=switch]{appearance:none;width:48px;height:28px;border-radius:20px;bac
 .model-settings .model-toggle{display:flex;align-items:center;gap:10px;margin:12px 0}
 .model-toggle input{width:auto}
 @media(max-width:760px){.doctor-grid{grid-template-columns:minmax(0,1fr)}.system-support,.doctor-results{padding:16px}}
+
+.setting-highlight{outline:2px solid var(--accent,#9d722a);outline-offset:4px;border-radius:8px}.ai-service input:not([type=checkbox]),.ai-service select{max-width:100%;min-width:0;width:100%;box-sizing:border-box}.ai-service label{overflow-wrap:anywhere}.doctor-check button{margin-top:10px}
