@@ -1318,6 +1318,7 @@ window.addEventListener('pagehide', () => clearCredentialInputs());
 window.addEventListener('pageshow', () => clearCredentialInputs());
 api('/api/session').then(async session => {
   csrf = session.token;
+  if (!window.paperEchoLoginStartup) document.querySelector('.eyebrow').textContent = '本地 HTML 工作台 · 真实工作空间';
   const { version } = await api('/api/version');
   document.querySelector('#app-version').textContent = version ? `PaperEcho v${version}` : 'PaperEcho（版本未标定）';
   setupState = await api('/api/setup');
