@@ -60,7 +60,7 @@ test('UI shell keeps five real routes, skip target, live status and collapsible 
 });
 test('sidebar owns L1 and L2 navigation while workspace owns L3 tabs', () => {
   assert.match(html, /class="primary-nav"/); assert.match(html, /class="secondary-nav" aria-label="反馈导航"/); assert.match(html, /class="secondary-nav" aria-label="设置导航"/);
-  for (const route of ['feedback/rating/normal', 'feedback/research', 'feedback/rules', 'settings/general/databases', 'settings/models/translation', 'settings/runtime/path', 'settings/automation/radar', 'settings/connections/notifications']) assert.match(html, new RegExp(`data-nav-route="${route}"`));
+  for (const route of ['feedback/rating/normal', 'feedback/research', 'feedback/rules', 'settings/general/databases', 'settings/models/ai', 'settings/runtime/path', 'settings/automation/radar', 'settings/connections/notifications']) assert.match(html, new RegExp(`data-nav-route="${route}"`));
   assert.match(app, /function tertiaryNav/); assert.match(app, /feedback\/rating\/\$\{key\}/); assert.match(app, /function parseRoute/);
   assert.match(app, /\['databases', '文献数据库'/); assert.match(app, /\['rss', 'RSS 订阅'/); assert.match(app, /\['period', '检索周期'/);
   assert.match(app, /settingsView === 'rss' \? 'RSS 订阅状态'/);
@@ -68,7 +68,7 @@ test('sidebar owns L1 and L2 navigation while workspace owns L3 tabs', () => {
 });
 
 test('sidebar footer offers one accessible GitHub Star link without API or tracking', () => {
-  assert.match(html, /<div class="sidebar-footer">[\s\S]*<div class="sidebar-star">[\s\S]*仅本机访问[\s\S]*PaperEcho v2\.5/);
+  assert.match(html, /<div class="sidebar-footer">[\s\S]*<div class="sidebar-star">[\s\S]*仅本机访问[\s\S]*id="app-version">PaperEcho<\/span>/);
   assert.doesNotMatch(html, /PaperEcho v2\.4/); assert.doesNotMatch(app, /PaperEcho v2\.4/);
   assert.match(app, /\['应用版本', version \? `PaperEcho v\$\{version\}`/);
   assert.match(html, /<a href="https:\/\/github\.com\/Chip-G0202\/PaperEcho" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 打开 PaperEcho 仓库">/);

@@ -328,8 +328,8 @@ function gradeEvidence(item) {
 async function home() {
   const [status, schedule, weeklyData] = await Promise.all([api('/api/status'), api('/api/schedule-status'), loadWeekly()]); const visibleWeekly = displayablePapers(weeklyData.items); const grades = gradeCounts(visibleWeekly);
   main.append(pageIntro('研究工作空间', '从最近的文献开始，让每次反馈帮助下一次推荐。'));
-  main.append(taskCard(schedule));
-  const actions = el('div', undefined, 'actions quick-links page-toolbar'); const review = button('开始文献评级', () => navigate('feedback/rating/normal')); review.className = 'primary'; actions.append(review, button('提交研究方向反馈', () => navigate('feedback/research'))); main.append(actions);
+  const planCard = taskCard(schedule); main.append(planCard);
+  const actions = el('div', undefined, 'actions quick-links page-toolbar'); const review = button('开始文献评级', () => navigate('feedback/rating/normal')); review.className = 'primary'; actions.append(review, button('提交研究方向反馈', () => navigate('feedback/research'))); planCard.append(actions);
   const grid = el('div', undefined, 'grid page-summary');
   const date = (value) => value ? new Date(value).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }) : '暂无记录';
   for (const [name, value] of [['最近周报', date(status.lastWeekly)], ['最近 Radar', date(status.lastRadar)], ['本次文献数量', visibleWeekly.length], ['待确认规则建议', status.pendingSuggestions ?? '暂无统计']]) {
@@ -811,8 +811,11 @@ function runtimePathOptions(selected, onChange) {
   const fieldset = el('fieldset', undefined, 'runtime-path-options'); fieldset.append(el('legend', '选择运行路径')); const name = `runtime-path-${crypto.randomUUID()}`;
   for (const [key, path] of Object.entries(runtimePaths)) {
     const input = el('input'); input.type = 'radio'; input.name = name; input.value = key; input.checked = selected === key; input.id = `runtime-${key}-${crypto.randomUUID()}`; input.setAttribute('aria-label', path.title); input.addEventListener('change', () => onChange(key));
-    const copy = el('span', undefined, 'runtime-path-copy'); copy.append(el('strong', path.title), el('span', path.summary), el('small', path.fit), el('small', path.data), el('small', path.result), el('small', path.needs));
-    const card = el('label', undefined, 'runtime-path-card'); card.htmlFor = input.id; card.append(input, copy); fieldset.append(card);
+    const copy = el('span', undefined, 'runtime-path-copy'); copy.append(el('strong', path.title), el('span', path.summary));
+    const card = el('label', undefined, 'runtime-path-card'); card.htmlFor = input.id; card.append(input, copy);
+    const details = el('details', undefined, 'runtime-path-details'); details.append(el('summary', '适用场景与说明'));
+    for (const text of [path.fit, path.data, path.result, path.needs]) details.append(el('p', text, 'meta'));
+    const choice = el('div', undefined, 'runtime-path-choice'); choice.append(card, details); fieldset.append(choice);
   }
   Object.defineProperty(fieldset, 'value', { get: () => fieldset.querySelector('input:checked')?.value });
   return fieldset;
@@ -825,7 +828,7 @@ function emailDeliveryText(delivery) {
 }
 async function appendLoginStartup(container) {
   if (!window.paperEchoLoginStartup) { container.append(el('p', '浏览器工作台使用相同工作空间；登录启动设置请在桌面应用中修改。', 'meta')); return; }
-  const section = el('section', undefined, 'settings-section section');
+  const section = el('section', undefined, 'settings-section section login-startup');
   const label = el('label', '登录时启动 PaperEcho');
   const input = el('input'); input.type = 'checkbox'; input.disabled = true;
   label.prepend(input);
@@ -923,6 +926,7 @@ async function settings(group = settingsGroup, view = settingsView) {
     if (profile?.value === 'radar') body.append(el('p', '当前旧运行配置仅指向 Radar，不适用于周报。', 'plan-alert'), button('修复为标准周报模式', async () => { await api('/api/settings', { id: 'general.profile', value: 'standard' }); notice.textContent = '周报执行模式已修复，下次运行生效。'; await settings(); }));
   }
   const appendSettingsControls = (container, entries, saveName, saveLabel = '保存本组', featureToggleIds = [], featureOptions = {}) => {
+    container.classList.add('settings-form-grid');
     const toggleIds = new Set(featureToggleIds); const saves = []; const dependentRows = []; const featureToggles = []; let unavailable = 0;
     const orderedEntries = toggleIds.size ? [...entries].sort((a, b) => Number(toggleIds.has(b.id)) - Number(toggleIds.has(a.id))) : entries;
     for (const entry of orderedEntries) {
@@ -1170,7 +1174,7 @@ async function settings(group = settingsGroup, view = settingsView) {
 async function setup() {
   const [state, entries] = await Promise.all([api('/api/setup'), api('/api/settings')]); setupState = state;
   const titles = ['欢迎使用', '确认本地工作空间', '基础配置', '服务凭据', '本地检查与摘要'];
-  const section = el('section', undefined, 'settings-section setup-wizard');
+  const section = el('section', undefined, 'settings-section setup-wizard'); section.dataset.step = setupStep;
   section.append(pageIntro(titles[setupStep], `第 ${setupStep + 1} / 5 步 · 配置保存在本机，可返回修改或下次继续。`));
   const actions = el('div', undefined, 'wizard-actions');
   const go = async step => { setupStep = step; await render(); window.scrollTo?.(0, 0); main.focus({ preventScroll: true }); };
@@ -1243,11 +1247,12 @@ async function setup() {
     section.append(el('h3', state.canRun ? '本地检查通过' : '仍需配置，尚不能正式运行'), el('p', '仅进行了本地配置与环境检查；密钥、网络连接及真实外部服务尚未验证。'), el('p', state.persisted ? '基础配置已持久保存。' : '基础配置尚未保存。'));
     section.append(contextCard('已保存配置摘要', [`运行路径：${runtimePaths[state.mode]?.title || '仍需选择'}`, `用户数据目录：${state.roots.userDataRoot}`, `当前服务路径：${runtimePaths[state.roots.activeMode]?.title || '未选择'}`]));
     if (state.mode && state.mode !== state.roots.activeMode) section.append(el('p', '已保存的新运行路径将在下次启动时采用；此处检查读取已保存配置。', 'meta'));
+    const checkGroups = el('div', undefined, 'setup-check-groups'); section.append(checkGroups);
     for (const [title, values] of [['必需项目', state.requiredMissing], ['可选或稍后配置', state.optionalMissing]]) {
-      section.append(el('h4', title)); const list = el('ul');
+      const group = el('section'); group.append(el('h4', title)); const list = el('ul');
       const names = { 'Stage5 recipient': '通知收件人', 'real LLM credentials': 'AI 服务凭据', 'local.input': '本地输入文件或目录', 'local.outputRoot': '本地结果目录', ZOTERO_API_KEY: 'Zotero Web 凭据', ZOTERO_USER_ID: 'Zotero 用户 ID' };
       for (const item of values) list.append(el('li', `${names[item.name] || item.name}：${item.purpose || ''}。${title === '必需项目' ? '请返回基础配置或在设置中补充后重新检查。' : '可稍后在设置中配置。'}`));
-      if (!values.length) list.append(el('li', '无未完成项目')); section.append(list);
+      if (!values.length) list.append(el('li', '无未完成项目')); group.append(list); checkGroups.append(group);
     }
     const checks = { production_entry: '工作流程序', local_input: '本地输入', local_output_root: '本地结果目录', local_feedback: '本地反馈文件', project_output_root: '研究结果目录', zotero_desktop: 'Zotero Desktop', desktop_cli_bridge: 'Zotero 连接组件', zotero_web_api: 'Zotero Web 配置（尚未连接）', smtp: '邮件配置' };
     for (const item of state.readiness) section.append(el('p', `${checks[item.name] || '本地环境项目'}：${item.status === 'ready' ? '通过' : '仍需检查'}`, 'meta'));
@@ -1262,6 +1267,8 @@ async function render() {
   clearCredentialInputs();
   activeChannelModal?.close(true, false);
   document.body.classList.toggle('ai-settings-view', page === 'settings' && settingsGroup === 'review');
+  document.body.classList.toggle('workbench-view', !(page === 'settings' && settingsGroup === 'review'));
+  main.dataset.workbenchPage = page;
   activeReview = null; main.setAttribute('aria-busy', 'true'); main.replaceChildren(el('p', '正在读取当前工作空间…', 'loading'));
   document.querySelector('#page-title').textContent = pageNames[page];
   document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = true; node.setAttribute('aria-current', node.dataset.page === page ? 'page' : 'false'); });
