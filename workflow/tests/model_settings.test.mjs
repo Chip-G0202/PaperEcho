@@ -134,7 +134,9 @@ test('confirmed common service has one owner, retains legacy fields and never mo
   assert.equal(await fs.readFile(env.TITLE_TRANSLATION_CONFIG_PATH, 'utf8'), original);
   const shared = { endpoint: 'https://new-provider.invalid/v1/chat/completions', model: 'common-model', provider: 'compatible', temperature: 0.7, timeout_ms: 12000, top_p: 0.5, stream: false, thinking: false, max_retries: 1 };
   await service.updateMany([{ id: 'ai.enabled', value: true }, ...Object.entries(shared).map(([key, value]) => ({ id: `ai.${key}`, value }))]);
+  await service.updateMany([{id:'ai.enabled',value:true},{id:'ai.provider',value:shared.provider},{id:'ai.endpoint',value:shared.endpoint},{id:'ai.model',value:shared.model}]);
   const saved = JSON.parse(await fs.readFile(env.TITLE_TRANSLATION_CONFIG_PATH, 'utf8'));
+  assert.equal(saved.shared_service.thinking, false); assert.equal(saved.shared_service.temperature, 0.7);
   for (const [key, value] of Object.entries(JSON.parse(original))) assert.deepEqual(saved[key], value);
   assert.equal(await fs.readFile(env.PREFERENCE_LEARNING_CONFIG_PATH, 'utf8'), preferenceBefore);
   const input = { ...env, TITLE_TRANSLATION_API_KEY: 'dummy-old', PREFERENCE_LEARNING_API_KEY: 'dummy-other', TITLE_TRANSLATION_MODEL: 'old-override' };

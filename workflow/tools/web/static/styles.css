@@ -82,4 +82,33 @@ input[role=switch]{appearance:none;width:48px;height:28px;border-radius:20px;bac
 
 .setting-highlight{outline:2px solid var(--accent,#9d722a);outline-offset:4px;border-radius:8px}.ai-service input:not([type=checkbox]),.ai-service select{max-width:100%;min-width:0;width:100%;box-sizing:border-box}.ai-service label{overflow-wrap:anywhere}.doctor-check button{margin-top:10px}
 
-.ai-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.ai-grid>*{min-width:0}.ai-grid .setting{margin:0}.ai-grid input,.ai-grid select{width:100%;max-width:100%;box-sizing:border-box}.ai-grid .credential-setting{grid-column:1/-1}.ai-toggles .model-toggle{display:inline-flex;margin:10px 24px 10px 0}.ai-advanced{margin-top:16px}.ai-advanced .ai-grid{margin:16px 0}.ai-advanced input[type=number]{max-width:100%}@media(max-width:680px){.ai-grid{grid-template-columns:minmax(0,1fr)}}
+/* AI page only: shared rhythm, wider URL/key column, naturally sized rows. */
+.ai-settings-view #content{max-width:1280px;margin-inline:auto}
+.ai-settings-view .content-wrap{padding-top:22px}
+.ai-settings-view .page-intro{margin-bottom:20px}
+.ai-settings-view .settings-body{max-width:none}
+.ai-settings-view .settings-section{padding:22px 24px;margin:0 0 16px}
+.ai-settings-view .settings-section h3{margin:0 0 18px}
+.ai-settings-view #content input:not([type=checkbox]),.ai-settings-view #content select{height:44px;margin:8px 0 0;border-radius:var(--radius);width:100%;max-width:none;min-width:0;box-sizing:border-box}
+.ai-settings-view #content button{min-height:44px;padding:8px 16px;line-height:1.45}
+.ai-settings-view #content label{display:block;margin:0;max-width:none;font-size:14px;font-weight:600;line-height:22px}
+.ai-grid{display:grid;grid-template-columns:minmax(200px,.85fr) minmax(0,1.65fr);column-gap:24px;row-gap:20px;align-items:start}
+.ai-grid>*{min-width:0}.ai-grid .setting{max-width:none;padding:0;margin:0}
+.ai-settings-view .ai-toggles{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px 24px}
+.ai-settings-view .ai-toggles h3{margin:0;font-size:17px}
+.ai-toggle-controls{display:flex;align-items:center;gap:30px;flex-wrap:wrap}
+.ai-settings-view #content .ai-toggles .model-toggle{display:flex;align-items:center;gap:10px;margin:0;white-space:nowrap;font-size:15px}
+.ai-toggle-controls input{width:19px;height:19px;margin:0;accent-color:var(--primary)}
+.ai-toggles>button{margin:0}.ai-toggle-status{grid-column:2/-1;margin:0;font-size:13px}.ai-toggle-status:empty{display:none}
+.ai-service .credential-compact{position:relative}
+.ai-service .credential-compact>p:first-child{position:absolute;right:0;top:0;margin:0;font-size:12px;line-height:22px;font-weight:400;color:var(--muted)}
+.ai-service .credential-compact .credential-editor{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:end;margin:0;padding:0;border:0;background:transparent}
+.ai-service .credential-compact .credential-editor button{margin:0}
+.ai-service .credential-compact .credential-actions{margin:8px 0 0;gap:8px}
+.ai-service .credential-compact .credential-actions:has(button:not([hidden])){display:flex}
+.ai-service .credential-compact .credential-actions:not(:has(button:not([hidden]))){display:none}
+.ai-service-actions{border-top:1px solid var(--border);padding-top:16px;margin:18px 0 0;justify-content:flex-end;gap:10px}
+.ai-key-hint,.ai-capability{font-size:13px;margin:8px 0 0}.ai-key-hint:empty,.ai-capability:empty{display:none}
+.ai-test-note{text-align:right;font-size:12px;margin:8px 0 0}
+.ai-service>[role=status]{margin:10px 0 0;font-size:13px}.ai-service>[role=status]:empty{display:none}
+@media(max-width:760px){.ai-grid{grid-template-columns:minmax(0,1fr);gap:18px}.ai-settings-view .settings-section{padding:18px}.ai-settings-view .ai-toggles{grid-template-columns:minmax(0,1fr) auto;gap:14px}.ai-toggles h3{grid-column:1/-1}.ai-toggle-controls{flex-direction:column;align-items:flex-start;gap:12px}.ai-toggle-status{grid-column:1/-1}.ai-service-actions{justify-content:flex-start}.ai-test-note{text-align:left}}

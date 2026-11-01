@@ -1,3 +1,4 @@
+import modelPolicy from './ai_capabilities.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
@@ -149,5 +150,5 @@ export function resolveCapabilityInput(capability, options = {}) {
   const endpoint = String(shared.endpoint || '').replace(/\/+$/, '');
   const suffix = provider === 'anthropic' ? '/messages' : '/chat/completions';
   const normalized = !endpoint || endpoint.endsWith(suffix) ? endpoint : endpoint + (provider === 'anthropic' && !endpoint.endsWith('/v1') ? '/v1/messages' : suffix);
-  return { ...input, value: { ...input.value, ...Object.fromEntries(['model', 'temperature', 'top_p', 'thinking'].filter(key => shared[key] !== undefined).map(key => [key, shared[key]])), provider, api_version: shared.api_version || '2023-06-01', endpoint: normalized, stream: true, thinking: shared.thinking ?? true, api_key_env_fallback_order: ['PREFERENCE_LEARNING_API_KEY'], serviceIdentity: `${provider}|${target}` }, env: effectiveEnv };
+  return { ...input, value: { ...input.value, ...Object.fromEntries(['model', 'temperature', 'top_p', 'thinking'].filter(key => shared[key] !== undefined).map(key => [key, shared[key]])), provider, api_version: shared.api_version || '2023-06-01', endpoint: normalized, stream: true, thinking: modelPolicy.capabilities(provider, shared.model, shared.api_version).thinking, api_key_env_fallback_order: ['PREFERENCE_LEARNING_API_KEY'], serviceIdentity: `${provider}|${target}` }, env: effectiveEnv };
 }

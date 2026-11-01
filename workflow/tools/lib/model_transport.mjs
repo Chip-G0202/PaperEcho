@@ -11,9 +11,8 @@ export function buildModelRequest(runtime, prompt, { maxTokens = 4096, stream = 
   if (!['compatible', 'openai', 'anthropic'].includes(provider) || !String(runtime.model || '').trim()) throw new Error('AI_CONFIG_INCOMPLETE');
   const address = serviceAddress(provider, runtime.endpoint);
   const caps = capabilities(provider, runtime.model, runtime.api_version);
-  const thinking = runtime.thinking === true || runtime.thinking?.type === 'enabled';
-  if (thinking && !caps.thinking) throw new Error('AI_THINKING_UNSUPPORTED');
-  if (!thinking && !caps.canDisable) throw new Error('AI_THINKING_CANNOT_DISABLE');
+  // Automatic policy; historical user parameters remain stored but no longer control requests.
+  const thinking = caps.thinking;
   const body = { model: runtime.model, messages: [{ role: 'user', content: prompt }], stream };
   const headers = { 'Content-Type': 'application/json' };
   if (provider === 'anthropic') {
@@ -22,18 +21,13 @@ export function buildModelRequest(runtime, prompt, { maxTokens = 4096, stream = 
     if (!['2023-06-01', '2026-10-21'].includes(headers['anthropic-version'])) throw new Error('AI_CONFIG_INCOMPLETE');
     body.max_tokens = Math.max(thinking ? 2048 : 1, Math.min(20000, maxTokens));
     if (thinking) body.thinking = caps.reasoning === 'adaptive' ? { type: 'adaptive' } : { type: 'enabled', budget_tokens: 1024 };
-    else if (caps.thinking) body.thinking = { type: 'disabled' };
   } else {
     headers.Authorization = `Bearer ${runtime.apiKey}`;
     body[caps.reasoning ? 'max_completion_tokens' : 'max_tokens'] = Math.min(20000, Math.max(1, maxTokens));
-    if (caps.reasoning) body.reasoning_effort = thinking ? 'low' : 'none';
+    if (caps.reasoning) body.reasoning_effort = 'low';
   }
   if (provider === 'openai' && caps.confirmed && ['json_schema', 'json_object'].includes(runtime.response_format)) body.response_format = { type: 'json_object' };
-  if (!thinking && caps.sampling) {
-    // Send one sampling control: changing temperature and top_p together is unnecessary.
-    if (Number.isFinite(runtime.temperature)) body.temperature = runtime.temperature;
-    else if (Number.isFinite(runtime.top_p)) body.top_p = runtime.top_p;
-  }
+  // Use provider defaults; never forward hidden historical sampling parameters.
   return { ...address, headers, body };
 }
 async function readModelResponse(response, provider, stream, limit) {

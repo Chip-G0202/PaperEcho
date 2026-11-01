@@ -232,7 +232,7 @@ export class ConfigService {
       return { id, value, definition };
     });
     if (new Set(resolved.map((entry) => entry.id)).size !== resolved.length) throw new Error('SETTING_BATCH_INVALID');
-    if (resolved.some(row => row.id === 'ai.enabled' && row.value === true) && !['endpoint', 'model', 'provider', 'thinking'].every(key => resolved.some(row => row.id === `ai.${key}`))) throw new Error('SETTING_BATCH_INVALID');
+    if (resolved.some(row => row.id === 'ai.enabled' && row.value === true) && !['endpoint', 'model', 'provider'].every(key => resolved.some(row => row.id === `ai.${key}`))) throw new Error('SETTING_BATCH_INVALID');
     const ownerFiles = [...new Set(resolved.map((entry) => entry.definition.file))].sort();
     const notificationEdit = resolved.some(({ id }) => /^(email\.|smtp\.|notification\.|qq\.|wechat\.|feishu\.|wecom\.)/.test(id));
     const outboundEdit = resolved.some(({ id }) => /^(wechat\.|feishu\.|wecom\.)/.test(id));

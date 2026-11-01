@@ -174,45 +174,33 @@ async function appendAiService(container, data, refreshModel, credentials) {
     const row = el('div', undefined, 'setting'); row.dataset.aiField = key; row.append(label(title, input)); grid.append(row);
   }
   const shared = credentials.find(row => row.id === 'PAPERECHO_MODEL_API_KEY');
-  const keyRow = shared && appendCredentialEditor(grid, shared, async () => { await refreshModel(); sync(); });
-  const keyHint = el('p', '', 'meta'); grid.append(keyHint);
-  const advanced = el('section', undefined, 'settings-section section ai-advanced'); container.append(advanced);
-  advanced.append(el('h3', '高级参数'));
-  const thinking = el('input'); thinking.type = 'checkbox'; thinking.checked = value('ai.thinking') ?? true;
-  advanced.append(label('开启思考', thinking));
-  const capability = el('p', '', 'meta'); capability.setAttribute('role', 'status'); advanced.append(capability);
-  const sampling = el('div', undefined, 'ai-grid'); advanced.append(sampling);
-  const temperature = el('input'); temperature.type = 'number'; temperature.min = '0'; temperature.max = '2'; temperature.step = '0.1'; temperature.value = value('ai.temperature') ?? 0.3;
-  const topP = el('input'); topP.type = 'number'; topP.min = '0'; topP.max = '1'; topP.step = '0.01'; topP.value = value('ai.top_p') ?? 0.85;
-  sampling.append(label('温度', temperature), label('top_p', topP));
-  const state = el('p', '修改后点击保存。', 'meta'); state.setAttribute('role', 'status');
+  const keyRow = shared && appendCredentialEditor(grid, shared, async () => { await refreshModel(); sync(); }, { compact: true });
+  const keyHint = el('p', '', 'meta ai-key-hint'); section.append(keyHint);
+  const capability = el('p', '', 'meta ai-capability'); capability.setAttribute('role', 'status'); grid.querySelector('[data-ai-field=model]').append(capability);
+  const state = el('p', '', 'meta'); state.setAttribute('role', 'status');
   const sync = () => {
     const caps = window.PaperEchoAI.capabilities(provider.value, model.value, value('ai.api_version') || '2023-06-01');
-    sampling.hidden = thinking.checked || !caps.sampling;
-    temperature.disabled = topP.disabled = sampling.hidden;
-    capability.textContent = thinking.checked && !caps.thinking ? '此模型的思考能力未确认或不支持，请关闭思考后使用。' : !thinking.checked && !caps.canDisable ? '此模型不能关闭思考。' : !caps.confirmed ? '模型思考与采样能力未确认，仅可使用基础协议；不代表已关闭模型内部推理。' : !thinking.checked && !caps.sampling ? '当前模式不提供采样设置。' : '';
-    keyHint.textContent = shared?.effectiveConfigured ? 'API Key 已配置。' : shared?.configured ? 'API Key 与当前服务不匹配，请重新配置。' : '请配置 API Key。';
+    capability.textContent = caps.thinking ? '' : caps.confirmed ? '此模型不支持思考，使用标准模式。' : '模型能力未确认，使用基础兼容协议，不发送思考扩展。';
+    keyHint.textContent = shared?.configured && !shared?.effectiveConfigured ? 'API Key 与当前服务不匹配，请重新配置。' : '';
   };
-  for (const input of [provider, model, thinking]) input.addEventListener('input', sync);
+  for (const input of [provider, model]) input.addEventListener('input', sync);
   provider.addEventListener('change', () => { if (!endpoint.value || /api\.(openai|anthropic)\.com/.test(endpoint.value)) endpoint.value = provider.value === 'anthropic' ? 'https://api.anthropic.com/v1' : provider.value === 'openai' ? 'https://api.openai.com/v1' : ''; sync(); });
   section.addEventListener('paperecho:preview-key-saved', async () => { await refreshModel(); keyRow?.refreshCredential?.(); sync(); });
-  const fields = () => ({ api_version: value('ai.api_version') || '2023-06-01', provider: provider.value, endpoint: endpoint.value.trim(), model: model.value.trim(), thinking: thinking.checked, ...(!sampling.hidden ? { temperature: Number(temperature.value), top_p: Number(topP.value) } : {}) });
+  const fields = () => ({ api_version: value('ai.api_version') || '2023-06-01', provider: provider.value, endpoint: endpoint.value.trim(), model: model.value.trim() });
   const validate = () => {
-    if (!endpoint.checkValidity() || !model.value.trim() || !sampling.hidden && (!temperature.checkValidity() || !topP.checkValidity())) throw new Error('请填写有效的 API 地址和模型。');
-    if (!thinking.checked && !window.PaperEchoAI.capabilities(provider.value, model.value).canDisable) throw new Error('该模型不支持关闭思考。');
-    if (thinking.checked && !window.PaperEchoAI.capabilities(provider.value, model.value, value('ai.api_version') || '2023-06-01').thinking) throw new Error('该模型尚未确认支持思考，请关闭思考。');
+    if (!endpoint.checkValidity() || !model.value.trim()) throw new Error('请填写有效的 API 地址和模型。');
   };
   section.addEventListener('input', () => { state.textContent = '编辑中，尚未保存。'; });
   const testState = el('p', '', 'meta'); testState.setAttribute('role', 'status');
-  section.append(button('测试连接', async () => {
+  const actions = el('div', undefined, 'actions ai-service-actions');
+  actions.append(button('测试连接', async () => {
     validate(); testState.textContent = '正在验证模型调用（可能产生少量费用）…';
     const keyInput = keyRow?.querySelector('input[type=password]');
     let result;
     try { result = await api('/api/ai/test', { ...fields(), ...(keyInput?.value ? { apiKey: keyInput.value } : {}) }); }
     catch (error) { testState.textContent = '测试未完成，请检查本地服务后重试。'; throw error; }
     testState.textContent = ({ preview: '模拟预览：未联网，未验证真实 API。', reachable: '服务已响应，但未确认模型能返回有效结果。', callable: '连接成功，认证与模型调用已通过。', authentication: '认证失败，请检查 API Key。', model_or_address: '模型或 API 地址不存在，请检查模型名称、权限和接口路径。', model: '模型不可用，请检查模型名称或权限。', address: 'API 地址无效。', protocol: '服务响应不完整或协议不匹配，未确认调用成功。', network: '网络故障或请求超时，未确认模型可调用。', configuration: '配置不完整或模型参数不受支持。', limited: '服务限流或额度不足，未确认模型可调用。' })[result.status] || '结果未知，请稍后重试。';
-  }), el('p', '主动测试会发送极短请求，可能产生少量费用。', 'meta'), testState);
-  const actions = el('div', undefined, 'actions');
+  }));
   actions.append(button('保存 AI 配置', async () => {
     validate(); state.textContent = '正在保存…';
     const updates = Object.entries(fields()).map(([key, v]) => ({ id: `ai.${key}`, value: v })); updates.push({ id: 'ai.enabled', value: true });
@@ -220,7 +208,8 @@ async function appendAiService(container, data, refreshModel, credentials) {
     try { await api('/api/settings', { updates }); saved = true; await refreshModel(); keyRow?.refreshCredential?.(); sync(); state.textContent = diagnosticState === 'current' ? '已保存，诊断已更新。' : '已保存，诊断结果待确认。'; }
     catch (error) { state.textContent = saved ? '已保存，页面状态待确认。' : '保存失败，请重试。'; if (!saved) throw error; }
   }));
-  advanced.append(actions, state); sync();
+  actions.lastElementChild.classList.add('primary');
+  section.append(actions, el('p', '测试连接会发送极短请求，可能产生少量费用。', 'meta ai-test-note'), testState, state); sync();
 }
 // Presentation-only queue: source grades/order are never mutated. Saving is
 // serialized; failed or uncertain requests reuse their id until acknowledged.
@@ -750,25 +739,26 @@ function settingValue(setting, input) {
   if (['integer', 'number'].includes(setting.type)) return Number(input.value);
   return input.value;
 }
-function appendCredentialEditor(section, item, onStatusChange = () => {}) {
+function appendCredentialEditor(section, item, onStatusChange = () => {}, { compact = false } = {}) {
   const names = { PAPERECHO_MODEL_API_KEY: 'API Key', TITLE_TRANSLATION_API_KEY: '智能翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', SEMANTIC_SCHOLAR_API_KEY: 'Semantic Scholar API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key', QQ_BOT_APP_SECRET: 'QQ 机器人 AppSecret', WXPUSHER_APP_TOKEN: 'WxPusher appToken', WECOM_WEBHOOK_URL: '企业微信群机器人 Webhook', FEISHU_WEBHOOK_URL: '飞书机器人 Webhook', FEISHU_SIGNING_SECRET: '飞书签名密钥（可选；开启签名校验时必填）' };
   if (!item || !Object.hasOwn(names, item.id)) return null;
   const writable = () => item.writable === true && ['local-managed', 'unconfigured'].includes(item.storageClass);
-  const row = el('div', undefined, 'setting credential-setting'); row.dataset.credential = item.id;
+  const row = el('div', undefined, 'setting credential-setting'); row.dataset.credential = item.id; if (compact) row.classList.add('credential-compact');
   const status = el('p'); status.setAttribute('role', 'status');
   const statusText = () => `${names[item.id]}：${item.storageClass === 'external-managed' ? '由外部环境管理' : !['local-managed', 'unconfigured'].includes(item.storageClass) ? '来源无法确认（只读）' : item.configured ? '已配置' : '未配置'}`;
   status.textContent = statusText(); row.append(status); section.append(row);
-  if (!writable()) { row.append(el('p', item.reason || '请在原配置入口维护并重启；此处不允许写入。', 'muted')); return row; }
+  if (!writable()) { if (compact) { const field = el('input'); field.type = 'password'; field.readOnly = true; field.placeholder = item.configured ? '已配置，由外部管理' : '来源待确认'; row.append(label(names[item.id], field)); } row.append(el('p', item.reason || '请在原配置入口维护并重启；此处不允许写入。', 'muted')); return row; }
   let editing = !item.configured, busy = false, focusTarget = null;
   const input = el('input'); input.type = 'password'; input.value = ''; input.autocomplete = 'new-password'; input.maxLength = 4096; input.placeholder = '输入新值；原值不会回显';
   const editor = el('div', undefined, 'credential-editor');
   const sync = () => {
     status.textContent = statusText();
     if (!writable()) input.value = '';
-    editor.hidden = !writable() || !editing;
+    editor.hidden = !writable() || !editing && !compact;
+    if (compact) { input.readOnly = !editing; input.placeholder = item.configured && !editing ? '已保存，原值不回显' : '输入 API Key'; save.hidden = !editing; }
     configure.hidden = !writable() || editing || !item.configured;
     clear.hidden = !writable() || editing || !item.configured;
-    cancel.hidden = !item.configured;
+    cancel.hidden = !item.configured || !editing;
     save.disabled = busy || !writable() || input.value.length === 0;
     input.disabled = busy;
   };
@@ -797,8 +787,8 @@ function appendCredentialEditor(section, item, onStatusChange = () => {}) {
   const configure = button('修改', () => { input.value = ''; editing = true; sync(); input.focus(); }); configure.setAttribute('aria-label', `修改${names[item.id]}`);
   const clear = button(item.id === 'ZOTERO_API_KEY' ? '清除' : '清除凭据', () => update('clear')); clear.syncDisabled = restoreControls;
   input.oninput = sync;
-  editor.append(label(`${names[item.id]}（新值）`, input), save, cancel);
-  const actions = el('div', undefined, 'actions credential-actions'); actions.append(configure, clear); row.append(actions, editor); sync();
+  editor.append(label(compact ? names[item.id] : `${names[item.id]}（新值）`, input), save, cancel);
+  const actions = el('div', undefined, 'actions credential-actions'); actions.append(configure, clear); row.append(actions, editor); if (compact) editor.append(configure, clear); sync();
   row.refreshCredential = sync;
   return row;
 }
@@ -871,13 +861,13 @@ async function appendModelSettings(container, data, credentials) {
   const section = el('section', undefined, 'settings-section section model-settings');
   section.append(el('h3', '功能开关')); section.classList.add('ai-toggles');
   const shared = credentials.find(row => row.id === 'PAPERECHO_MODEL_API_KEY');
-  const controls = [];
+  const controls = []; const toggleGroup = el('div', undefined, 'ai-toggle-controls'); section.append(toggleGroup);
   for (const [id, title] of [['translation.enabled', '启用智能翻译'], ['preference.enabled', '启用自适应学习']]) {
     const item = data.find(row => row.id === id);
     const label = el('label', title, 'model-toggle'); const input = el('input'); input.type = 'checkbox';
     const master = data.find(row => row.id === 'review.master');
     input.checked = id === 'translation.enabled' ? item?.value === true : item?.value === true && master?.value === true;
-    const before = input.checked; label.prepend(input); section.append(label); controls.push({ id, input, before });
+    const before = input.checked; label.prepend(input); toggleGroup.append(label); controls.push({ id, input, before });
   }
   const missingHint = () => controls.filter(c => c.input.checked).map(c => {
     const name = c.id === 'translation.enabled' ? 'translation' : 'preference';
@@ -885,7 +875,7 @@ async function appendModelSettings(container, data, credentials) {
     const missing = [!String(data.find(row => row.id === `${name}.model`)?.value || '').trim() && '模型名称', !String(data.find(row => row.id === `${name}.endpoint`)?.value || '').trim() && 'API 地址', !(shared?.effectiveConfigured || (own?.effectiveConfigured ?? own?.configured)) && 'API Key'].filter(Boolean);
     return missing.length ? `${name === 'translation' ? '智能翻译' : '自适应学习'}仍需配置：${missing.join('、')}` : '';
   }).filter(Boolean).join('；');
-  const status = el('p', missingHint(), 'meta'); status.setAttribute('role', 'status');
+  const status = el('p', '', 'meta ai-toggle-status'); status.setAttribute('role', 'status');
   section.append(button('保存功能开关', async () => {
     const updates = controls.filter(c => c.input.checked !== c.before).flatMap(c => {
       const rows = [{ id: c.id, value: c.input.checked }];
@@ -916,7 +906,7 @@ async function settings(group = settingsGroup, view = settingsView) {
   settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common';
   const requestedChannel = settingsGroup === 'connections' && notificationChannelIds.includes(view) ? view : null;
   settingsView = requestedChannel ? 'notifications' : view;
-  main.append(pageIntro('工作空间设置', '设置本机工作空间与服务。'));
+  main.append(pageIntro(settingsGroup === 'review' ? 'AI 功能配置' : '工作空间设置', settingsGroup === 'review' ? '智能翻译与自适应学习共用一个模型服务。' : '设置本机工作空间与服务。'));
   if (settingsGroup === 'common') await appendLoginStartup(main);
   const data = await api('/api/settings');
   const credentials = await api('/api/credentials');
@@ -1271,6 +1261,7 @@ async function setup() {
 async function render() {
   clearCredentialInputs();
   activeChannelModal?.close(true, false);
+  document.body.classList.toggle('ai-settings-view', page === 'settings' && settingsGroup === 'review');
   activeReview = null; main.setAttribute('aria-busy', 'true'); main.replaceChildren(el('p', '正在读取当前工作空间…', 'loading'));
   document.querySelector('#page-title').textContent = pageNames[page];
   document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = true; node.setAttribute('aria-current', node.dataset.page === page ? 'page' : 'false'); });
