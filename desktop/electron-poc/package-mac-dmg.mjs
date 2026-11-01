@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { packager } from '@electron/packager';
 import { flipFuses, getCurrentFuseWire, FuseV1Options as F, FuseState } from '@electron/fuses';
-import { appVersion, sourceAllowed, fuseConfig } from './package-policy.mjs';
+import { appVersion, sourceAllowed, fuseConfig, dependencyFileAllowed } from './package-policy.mjs';
 import { nativeSmoke } from './mac-native-smoke.mjs';
 
 // Reuse Packager's locked signer, including its inside-out nested-code ordering.
@@ -35,6 +35,7 @@ export async function finalizeMacBundle(bundle, stage, electronVersion, { flip =
 export function macOptions(stage, checksums, electronVersion) {
   return { dir: path.join(stage, 'shell'), name, appVersion, buildVersion: appVersion, electronVersion,
     platform: 'darwin', arch: 'arm64', asar: true, prune: false,
+    icon: fileURLToPath(new URL('./icons/paperecho.icns', import.meta.url)),
     // Preserve the existing digest policy; the complete bundle is signed after fuses.
     asarIntegrityDigest: false,
     extraResource: [path.join(stage, 'core')], out: path.join(stage, 'output'), tmpdir: path.join(stage, 'tmp'),
@@ -99,7 +100,7 @@ export async function buildTestDmg() {
   assert.ok(modules.length > 0, 'PRODUCTION_DEPENDENCIES_REQUIRED');
   for (const directory of modules) {
     assert.ok(directory.startsWith(path.join(repo, 'node_modules') + path.sep)); assert.equal(await fs.realpath(directory), directory);
-    await fs.cp(directory, path.join(core, path.relative(repo, directory)), { recursive: true, dereference: false });
+    await fs.cp(directory, path.join(core, path.relative(repo, directory)), { recursive: true, dereference: false, filter: file => dependencyFileAllowed(path.relative(repo, file)) });
   }
   for (const file of ['main.mjs', 'shell.mjs', 'preload.cjs']) await fs.copyFile(path.join(repo, 'desktop/electron-poc', file), path.join(shell, file));
   await fs.writeFile(path.join(shell, 'package.json'), JSON.stringify({ name: 'paperecho', productName: name, author: 'PaperEcho contributors', version: appVersion, private: true, type: 'module', main: 'main.mjs' }));
@@ -122,7 +123,7 @@ export async function buildTestDmg() {
   await fs.rename(bundle, path.join(disk, name + '.app')); await fs.symlink('/Applications', path.join(disk, 'Applications'));
   const artifact = path.join(stage, 'artifact'); await fs.mkdir(artifact);
   const filename = `${name}-${appVersion}-darwin-arm64-${gitCommit.slice(0, 8)}${dirty ? '-UNCOMMITTED' : ''}${distribution ? '' : '-TEST-ONLY'}.dmg`, dmg = path.join(artifact, filename);
-  run('/usr/bin/hdiutil', ['create', '-volname', 'PaperEcho TEST ONLY', '-srcfolder', disk, '-format', 'UDZO', '-fs', 'HFS+', dmg]);
+  run('/usr/bin/hdiutil', ['create', '-volname', distribution ? 'PaperEcho' : 'PaperEcho TEST ONLY', '-srcfolder', disk, '-format', 'UDZO', '-fs', 'HFS+', dmg]);
   run('/usr/bin/hdiutil', ['verify', dmg]);
   const mount = path.join(stage, 'verify-mount'); await fs.mkdir(mount);
   run('/usr/bin/hdiutil', ['attach', dmg, '-readonly', '-nobrowse', '-mountpoint', mount]);

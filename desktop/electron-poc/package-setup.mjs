@@ -13,10 +13,11 @@ export function setupConfiguration(output, filename) {
   return {
     appId: 'com.electron.paperecho', productName: 'PaperEcho', electronVersion: '44.7.2',
     directories: { output }, artifactName: filename, forceCodeSigning: false, publish: null,
-    win: { target: ['nsis'], signAndEditExecutable: false },
+    win: { target: ['nsis'], signAndEditExecutable: false, icon: fileURLToPath(new URL('./icons/paperecho.ico', import.meta.url)) },
     nsis: { oneClick: false, perMachine: false, allowElevation: false, allowToChangeInstallationDirectory: true,
       runAfterFinish: false, deleteAppDataOnUninstall: false, packElevateHelper: false,
-      differentialPackage: false, include: fileURLToPath(new URL('./setup-guard.nsh', import.meta.url)) },
+      differentialPackage: false, installerIcon: fileURLToPath(new URL('./icons/paperecho.ico', import.meta.url)),
+      uninstallerIcon: fileURLToPath(new URL('./icons/paperecho.ico', import.meta.url)), include: fileURLToPath(new URL('./setup-guard.nsh', import.meta.url)) },
   };
 }
 

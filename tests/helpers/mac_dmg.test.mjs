@@ -22,11 +22,12 @@ test('Mac source policy excludes secrets, user state, build inputs and packaged 
 test('Mac build fails before any build or system command on an unsupported host', async () => {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') await assert.rejects(buildTestDmg(), /MACOS_ARM64_BUILD_REQUIRED/);
 });
-test('manual workflow uses an existing build command and uploads only after successful native verification', async () => {
+test('manual workflow uses the existing distribution command and uploads only verified DMG output', async () => {
   const pkg = JSON.parse(await fs.readFile(new URL('../../desktop/electron-poc/package.json', import.meta.url)));
   assert.equal(pkg.scripts['package:dmg:mac'], 'node package-mac-dmg.mjs');
   const workflow = await fs.readFile(new URL('../../.github/workflows/mac-dmg-manual.yml', import.meta.url), 'utf8');
-  assert.match(workflow, /npm run package:dmg:mac --prefix desktop\/electron-poc/);
+  assert.equal(pkg.scripts['package:dmg'], 'node package-mac-dmg.mjs --distribution');
+  assert.match(workflow, /npm run package:dmg --prefix desktop\/electron-poc/);
   assert.doesNotMatch(workflow, /secrets\.|self-hosted|macos-.*-large|always\(|continue-on-error|schedule:|pull_request:|push:|^\s*cache:|npm test|release create/m);
   assert.match(workflow, /package-manager-cache: false/);
   assert.match(workflow, /retention-days: 3/); assert.match(workflow, /persist-credentials: false/);

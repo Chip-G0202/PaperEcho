@@ -65,7 +65,7 @@ export async function startShell({ root, show = true } = {}) {
     if (!allowed) { event.preventDefault(); return; }
     item.setSaveDialogOptions({ title: '保存 PaperEcho 诊断包', filters: [{ name: 'ZIP 诊断包', extensions: ['zip'] }] });
   });
-  window = new BrowserWindow({ width: 1366, height: 768, minWidth: 390, minHeight: 600, show, autoHideMenuBar: true, webPreferences: { ...preferences, session: partition, preload: path.join(app.getAppPath(), 'preload.cjs') } });
+  window = new BrowserWindow({ width: 1366, height: 768, minWidth: 390, minHeight: 600, show, autoHideMenuBar: true, icon: app.isPackaged ? path.join(process.resourcesPath, 'core/desktop/electron-poc/icons/paperecho.png') : path.join(app.getAppPath(), 'icons/paperecho.png'), webPreferences: { ...preferences, session: partition, preload: path.join(app.getAppPath(), 'preload.cjs') } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('render-process-gone', () => { void runtimeLog?.write('GUI_RENDERER_GONE', { subsystem: 'gui' }); });
   app.on('child-process-gone', () => { void runtimeLog?.write('GUI_CHILD_GONE', { subsystem: 'gui' }); });

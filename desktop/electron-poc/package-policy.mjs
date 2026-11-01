@@ -12,9 +12,17 @@ const configs = new Set(['openalex_search.json', 'paperecho.config.example.json'
   'prompt-preference-learning.md', 'prompt-title-translation.md', 'pubmed_pmc_search.json',
   'review-workflow-rules.json', 'rss_sources.json', 'source_selection.json', 'title_translation.config.json']);
 export function sourceAllowed(file) {
-  return file === 'workflow/tools/lib/ai_capabilities.cjs' || /^workflow\/tools\/.*\.(mjs|py)$/.test(file)
+  return file === 'desktop/electron-poc/icons/paperecho.png' || file === 'workflow/tools/lib/ai_capabilities.cjs' || /^workflow\/tools\/.*\.(mjs|py)$/.test(file)
     || /^workflow\/tools\/web\/static\/(index\.html|app\.js|styles\.css|paperecho-mark\.svg)$/.test(file)
     || /^skills\/paperecho-(local|zotero-desktop|zotero-web)\/scripts\/run\.mjs$/.test(file)
     || file.startsWith('config/') && configs.has(file.slice(7))
     || ['desktop/electron-poc/preload.cjs', 'desktop/electron-poc/runtime.mjs', 'desktop/electron-poc/headless.mjs', 'desktop/electron-poc/main.mjs', 'desktop/electron-poc/shell.mjs', 'tests/helpers/electron_smoke.mjs', 'tests/helpers/first_run_smoke.mjs', 'tests/helpers/packaged_probe.mjs'].includes(file);
+}
+
+// These packages use their Node entry/lib in the local backend. Their dist trees
+// are duplicate browser bundles, never loaded by the HTTP renderer.
+export function dependencyFileAllowed(file) {
+  const name = file.replaceAll('\\', '/');
+  return !/(^|\/)node_modules\/(exceljs|jszip)\/dist(?:\/|$)/.test(name)
+    && !/\.(?:js|mjs|cjs)\.map$/.test(name);
 }
