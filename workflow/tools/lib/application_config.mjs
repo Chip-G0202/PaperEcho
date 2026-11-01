@@ -115,23 +115,39 @@ function resolveLegacyCapabilityInput(capability, { env = process.env, legacyPat
   return { value: structuredClone(current[capability] || {}), env: effectiveEnv, configPath: applicationConfigPath({ env }), canonical: true };
 }
 
-// Opt-in common service lives in the existing translation owner. Legacy fields remain intact.
+// One effective AI service. Resolving legacy owners is read-only and idempotent.
 export function resolveCapabilityInput(capability, options = {}) {
   const input = resolveLegacyCapabilityInput(capability, options);
   const env = options.env || process.env;
   if (env.PAPERECHO_INVOCATION_TRANSLATION_CONFIG || env.PAPERECHO_INVOCATION_PREFERENCE_CONFIG) return input;
-  const translationPath = env.TITLE_TRANSLATION_CONFIG_PATH || path.join(path.dirname(options.legacyPath), 'title_translation.config.json');
-  const owner = resolveLegacyCapabilityInput('translation', { env, legacyPath: translationPath });
-  const shared = owner.value?.shared_service;
-  if (shared?.enabled !== true) return input;
+  const directory = path.dirname(options.legacyPath);
+  const owner = name => resolveLegacyCapabilityInput(name, { env, legacyPath: env[name === 'translation' ? 'TITLE_TRANSLATION_CONFIG_PATH' : 'PREFERENCE_LEARNING_CONFIG_PATH'] || path.join(directory, name === 'translation' ? 'title_translation.config.json' : 'preference_learning.config.json') });
+  const translation = owner('translation'), preference = owner('preference');
+  const existing = translation.value?.shared_service;
+  // Prefer the preference service; do not combine parameters from different providers.
+  const selected = preference.value?.endpoint || preference.env.PREFERENCE_LEARNING_ENDPOINT ? preference : translation;
+  const prefix = selected === preference ? 'PREFERENCE_LEARNING' : 'TITLE_TRANSLATION';
+  const shared = existing?.enabled === true ? existing : {
+    ...selected.value,
+    endpoint: selected.env[prefix + '_ENDPOINT'] || selected.value?.endpoint || '',
+    model: selected.env[prefix + '_MODEL'] || selected.value?.model || '',
+    thinking: true, stream: true,
+  };
+  const infer = endpoint => { try { return new URL(endpoint).hostname === 'api.anthropic.com' ? 'anthropic' : new URL(endpoint).hostname === 'api.openai.com' ? 'openai' : 'compatible'; } catch { return 'compatible'; } };
+  const provider = shared.provider || infer(shared.endpoint);
   const effectiveEnv = { ...input.env };
-  const base = value => { try { const u = new URL(value); return u.origin + u.pathname.replace(/\/+$/, '').replace(/\/chat\/completions$/, ''); } catch { return ''; } };
-  // A legacy key may only follow its original service, never a newly selected provider.
-  for (const [name, prefix] of [['translation', 'TITLE_TRANSLATION'], ['preference', 'PREFERENCE_LEARNING']]) {
-    const original = name === capability ? input : name === 'translation' ? owner : resolveLegacyCapabilityInput(name, { env, legacyPath: env.PREFERENCE_LEARNING_CONFIG_PATH || path.join(path.dirname(options.legacyPath), 'preference_learning.config.json') });
-    if (!base(shared.endpoint) || base(env[prefix + '_ENDPOINT'] || original.value?.endpoint) !== base(shared.endpoint)) { delete effectiveEnv[prefix + '_API_KEY']; if (name === capability && name === 'preference') input.value = { ...input.value, api_key_env_fallback_order: [] }; }
-    for (const key of ['ENDPOINT', 'MODEL', 'TEMPERATURE', 'TIMEOUT_MS', 'TOP_P', 'STREAM', 'THINKING', 'MAX_RETRIES']) delete effectiveEnv[prefix + '_' + key];
+  const base = value => { try { const u = new URL(value); return u.origin + u.pathname.replace(/\/+$/, '').replace(/\/(chat\/completions|messages)$/, ''); } catch { return ''; } };
+  const target = base(shared.endpoint);
+  for (const [name, keyPrefix, original] of [['translation', 'TITLE_TRANSLATION', translation], ['preference', 'PREFERENCE_LEARNING', preference]]) {
+    const source = original.env[keyPrefix + '_ENDPOINT'] || original.value?.endpoint;
+    const originalProvider = original.value?.provider || infer(source);
+    if (!target || base(source) !== target || (provider === 'anthropic') !== (originalProvider === 'anthropic')) delete effectiveEnv[keyPrefix + '_API_KEY'];
+    for (const key of ['ENDPOINT', 'MODEL', 'TEMPERATURE', 'TIMEOUT_MS', 'TOP_P', 'STREAM', 'THINKING', 'MAX_RETRIES']) delete effectiveEnv[keyPrefix + '_' + key];
   }
+  // Saved shared keys are bound to the service they were entered for.
+  if (shared.credential_service && shared.credential_service !== `${provider}|${target}`) delete effectiveEnv.PAPERECHO_MODEL_API_KEY;
   const endpoint = String(shared.endpoint || '').replace(/\/+$/, '');
-  return { ...input, value: { ...input.value, ...Object.fromEntries(['endpoint', 'model', 'temperature', 'timeout_ms', 'top_p', 'stream', 'thinking', 'max_retries'].filter(key => shared[key] !== undefined).map(key => [key, key === 'endpoint' && !endpoint.endsWith('/chat/completions') ? `${endpoint}/chat/completions` : shared[key]])) }, env: effectiveEnv };
+  const suffix = provider === 'anthropic' ? '/messages' : '/chat/completions';
+  const normalized = !endpoint || endpoint.endsWith(suffix) ? endpoint : endpoint + (provider === 'anthropic' && !endpoint.endsWith('/v1') ? '/v1/messages' : suffix);
+  return { ...input, value: { ...input.value, ...Object.fromEntries(['model', 'temperature', 'top_p', 'thinking'].filter(key => shared[key] !== undefined).map(key => [key, shared[key]])), provider, api_version: shared.api_version || '2023-06-01', endpoint: normalized, stream: true, thinking: shared.thinking ?? true, api_key_env_fallback_order: ['PREFERENCE_LEARNING_API_KEY'], serviceIdentity: `${provider}|${target}` }, env: effectiveEnv };
 }

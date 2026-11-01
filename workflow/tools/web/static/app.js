@@ -18,7 +18,7 @@ const setupDraft = new Map(); // Non-secret unsaved fields only; no browser pers
 const notificationChannelIds = ['email', 'qq', 'wechat', 'feishu', 'wecom'];
 const decisionReceipts = new Map();
 const pageNames = { home: '概览 · Overview', weekly: '文献 · Literature', feedback: '反馈 · Feedback', settings: '设置 · Settings', system: '系统 · System', setup: '首次配置 · Setup' };
-const errorMessages = { SHARED_MODEL_PROVIDER_MISMATCH: '两项服务不兼容，请先在模型设置中统一服务地址；旧密钥未改变。', SETTING_VALUE_INVALID: '请检查字段格式或允许范围，原设置未改变。', SEARCH_KEYWORD_OWNER_REQUIRED: '请使用检索词分组修改检索式。', CREDENTIAL_VALUE_INVALID: '请输入有效单行凭据（最多 4096 字符）；请勿同时包含两种引号。', CREDENTIAL_EXTERNALLY_MANAGED: '该凭据由外部环境管理，请在原入口修改。', CREDENTIAL_WRITE_FAILED: '凭据未保存，请检查本地配置权限后重试。', CREDENTIAL_ENV_FORMAT_UNSUPPORTED: '凭据文件格式无法安全编辑，原文件未改变。', WEEKLY_CHANGED_RELOAD: '当前文献已更新，请刷新页面后重试。' };
+const errorMessages = { SHARED_MODEL_PROVIDER_MISMATCH: '请检查 AI 服务地址；API Key 未保存。', SETTING_VALUE_INVALID: '请检查字段格式或允许范围，原设置未改变。', SEARCH_KEYWORD_OWNER_REQUIRED: '请使用检索词分组修改检索式。', CREDENTIAL_VALUE_INVALID: '请输入有效单行凭据（最多 4096 字符）；请勿同时包含两种引号。', CREDENTIAL_EXTERNALLY_MANAGED: '该凭据由外部环境管理，请在原入口修改。', CREDENTIAL_WRITE_FAILED: '凭据未保存，请检查本地配置权限后重试。', CREDENTIAL_ENV_FORMAT_UNSUPPORTED: '凭据文件格式无法安全编辑，原文件未改变。', WEEKLY_CHANGED_RELOAD: '当前文献已更新，请刷新页面后重试。' };
 // Keep the existing API/canonical values; the stored learning action is unchanged.
 Object.assign(errorMessages, { SESSION_REQUIRED: '会话已失效，请刷新页面后重试。', CSRF_REQUIRED: '安全校验未通过，请刷新页面后重试。', ORIGIN_REJECTED: '请求来源未通过安全校验。', CREDENTIAL_ACL_UNSAFE: '文件权限无法安全确认，凭据未保存，请在原配置入口检查权限。', CREDENTIAL_CONCURRENT_CHANGE: '凭据文件已被其他操作更改，请重新读取后重试。', CREDENTIAL_RECOVERY_REQUIRED: '凭据恢复未完成，请通过原配置入口检查后再继续。', CREDENTIAL_KEY_NOT_ALLOWED: '此凭据字段不允许修改。' });
 const feedbackLabels = { highly_relevant: '升级', relevant: '不变', maybe: '降级', irrelevant: '排除', do_not_recommend_similar: '排除（原强负反馈）' };
@@ -32,14 +32,14 @@ const statusLabels = { pending: '待确认', candidate: '候选', accepted: '已
 const riskLabels = { low: '低', medium: '中', high: '高' };
 const settingGroups = [
   ['common', '常用设置', ['General', 'Sources', 'Search', 'RSS']],
-  ['review', '模型与审阅', ['Models', 'Ranking / Review']],
+  ['review', 'AI 功能配置', ['Models', 'Ranking / Review']],
   ['runtime', '运行路径', ['Runtime']],
   ['automation', '自动化', ['Radar', 'Weekly', 'Integrity']],
   ['connections', '通知与推送', ['Zotero', 'Notifications', 'Credentials']],
 ];
 const settingViews = {
   common: [['databases', '文献数据库', ['Sources']], ['rss', 'RSS 订阅', ['Sources', 'RSS']], ['period', '检索周期', ['General', 'Search']]],
-  review: [['ai', '统一 AI 配置', ['Models', 'Ranking / Review']]],
+  review: [['ai', 'AI 功能配置', ['Models', 'Ranking / Review']]],
   runtime: [['path', '运行路径', ['Runtime']]],
   automation: [['radar', 'Daily Radar', ['Radar']], ['weekly', '周报', ['Weekly', 'Integrity']]],
   connections: [['notifications', '通知偏好', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
@@ -162,44 +162,65 @@ function focusSettingTarget() {
   const field = node.querySelector('input:not([disabled]):not([readonly]),select'); if (field) field.focus({ preventScroll: true });
   setTimeout(() => node.classList.remove('setting-highlight'), 2500);
 }
-async function appendAiService(container, data, refreshModel) {
-  const section = el('section', undefined, 'settings-section section ai-service'); container.prepend(section);
-  section.append(el('h3', 'AI 服务配置'), el('p', '翻译与偏好使用同一服务。确认保存后启用；旧参数与旧 Key 保留。服务地址支持兼容 OpenAI 的 API Base URL 或 chat/completions 完整地址。', 'meta'));
-  const enabled = data.find(row => row.id === 'ai.enabled')?.value === true;
-  const fields = [['endpoint', 'API 服务地址', 'url', ''], ['model', '模型名称', 'text', ''], ['temperature', '采样温度', 'number', 0.3], ['timeout_ms', '请求超时（毫秒）', 'number', 30000], ['top_p', 'Top P', 'number', 0.85], ['stream', '流式响应', 'checkbox', false], ['thinking', '思考模式', 'checkbox', false], ['max_retries', '最大重试次数', 'number', 2]];
-  const inputs = new Map(); const conflicts = [];
-  for (const [key, title, type, fallback] of fields) {
-    const oldKey = key === 'timeout_ms' ? 'timeout' : key;
-    const a = data.find(row => row.id === `translation.${oldKey}`)?.value, b = data.find(row => row.id === `preference.${oldKey}`)?.value;
-    const conflict = !enabled && a != null && b != null && a !== b;
-    const row = el('div', undefined, 'setting'); row.dataset.aiField = key;
-    const input = el('input'); input.type = type; input.required = type !== 'checkbox';
-    if (type === 'number') { input.min = ['temperature', 'top_p', 'max_retries'].includes(key) ? '0' : '1000'; input.max = ({ temperature: '2', top_p: '1', max_retries: '20' })[key] || '120000'; input.step = ['temperature', 'top_p'].includes(key) ? '0.01' : '1'; }
-    input.value = enabled ? data.find(row => row.id === `ai.${key}`)?.value ?? fallback : a ?? b ?? fallback;
-    if (type === 'checkbox') input.checked = input.value === 'true';
-    row.append(label(title, input));
-    if (conflict) {
-      conflicts.push(title);
-      const choice = select([['', '请选择保留的值'], ['translation', `采用翻译：${a}`], ['preference', `采用偏好：${b}`], ['custom', '使用上方自行填写的新值']], '');
-      choice.required = true; row.append(label(`${title}：旧值不同`, choice));
-      choice.onchange = () => { if (choice.value !== 'custom') { input.value = choice.value === 'translation' ? a : b; if (type === 'checkbox') input.checked = input.value === 'true'; } };
-      inputs.set(key, { input, choice });
-    } else inputs.set(key, { input });
-    section.append(row);
+async function appendAiService(container, data, refreshModel, credentials) {
+  const value = id => data.find(row => row.id === id)?.value;
+  const section = el('section', undefined, 'settings-section section ai-service'); container.append(section);
+  section.append(el('h3', 'AI 服务配置'));
+  const grid = el('div', undefined, 'ai-grid'); section.append(grid);
+  const provider = select([['compatible', 'OpenAI 兼容服务'], ['openai', 'OpenAI'], ['anthropic', 'Anthropic']], value('ai.provider') || 'compatible');
+  const endpoint = el('input'); endpoint.type = 'url'; endpoint.required = true; endpoint.value = value('ai.endpoint') || '';
+  const model = el('input'); model.required = true; model.value = value('ai.model') || '';
+  for (const [key, title, input] of [['provider', '服务提供商', provider], ['endpoint', 'API 地址', endpoint], ['model', '模型', model]]) {
+    const row = el('div', undefined, 'setting'); row.dataset.aiField = key; row.append(label(title, input)); grid.append(row);
   }
-  if (conflicts.length) section.append(el('p', `旧参数冲突：${conflicts.join('、')}。请选择后确认；保存前继续使用原配置。`, 'plan-alert'));
-  const confirmation = el('input'); confirmation.type = 'checkbox'; section.append(label('确认两项功能使用以上服务与参数，且共享 Key 属于该服务；旧值保留', confirmation));
-  const status = el('p', enabled ? '已启用统一 AI 服务。' : '尚未确认合并，继续使用原配置。', 'meta'); status.setAttribute('role', 'status');
-  section.addEventListener('input', () => { status.textContent = '编辑中，尚未保存；诊断仍以已保存配置为准。'; });
-  section.append(button('保存统一 AI 配置', async () => {
-    if (!confirmation.checked || [...inputs.values()].some(({ input, choice }) => !input.checkValidity() || choice && !choice.value)) throw new Error('请填写有效参数、处理冲突并勾选确认；原配置未改变。');
-    const updates = [...inputs].map(([key, { input }]) => ({ id: `ai.${key}`, value: input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value.trim() }));
-    updates.push({ id: 'ai.enabled', value: true });
-    status.textContent = '正在保存…';
+  const shared = credentials.find(row => row.id === 'PAPERECHO_MODEL_API_KEY');
+  const keyRow = shared && appendCredentialEditor(grid, shared, async () => { await refreshModel(); sync(); });
+  const keyHint = el('p', '', 'meta'); grid.append(keyHint);
+  const advanced = el('section', undefined, 'settings-section section ai-advanced'); container.append(advanced);
+  advanced.append(el('h3', '高级参数'));
+  const thinking = el('input'); thinking.type = 'checkbox'; thinking.checked = value('ai.thinking') ?? true;
+  advanced.append(label('开启思考', thinking));
+  const capability = el('p', '', 'meta'); capability.setAttribute('role', 'status'); advanced.append(capability);
+  const sampling = el('div', undefined, 'ai-grid'); advanced.append(sampling);
+  const temperature = el('input'); temperature.type = 'number'; temperature.min = '0'; temperature.max = '2'; temperature.step = '0.1'; temperature.value = value('ai.temperature') ?? 0.3;
+  const topP = el('input'); topP.type = 'number'; topP.min = '0'; topP.max = '1'; topP.step = '0.01'; topP.value = value('ai.top_p') ?? 0.85;
+  sampling.append(label('温度', temperature), label('top_p', topP));
+  const state = el('p', '修改后点击保存。', 'meta'); state.setAttribute('role', 'status');
+  const sync = () => {
+    const caps = window.PaperEchoAI.capabilities(provider.value, model.value, value('ai.api_version') || '2023-06-01');
+    sampling.hidden = thinking.checked || !caps.sampling;
+    temperature.disabled = topP.disabled = sampling.hidden;
+    capability.textContent = thinking.checked && !caps.thinking ? '此模型的思考能力未确认或不支持，请关闭思考后使用。' : !thinking.checked && !caps.canDisable ? '此模型不能关闭思考。' : !caps.confirmed ? '模型思考与采样能力未确认，仅可使用基础协议；不代表已关闭模型内部推理。' : !thinking.checked && !caps.sampling ? '当前模式不提供采样设置。' : '';
+    keyHint.textContent = shared?.effectiveConfigured ? 'API Key 已配置。' : shared?.configured ? 'API Key 与当前服务不匹配，请重新配置。' : '请配置 API Key。';
+  };
+  for (const input of [provider, model, thinking]) input.addEventListener('input', sync);
+  provider.addEventListener('change', () => { if (!endpoint.value || /api\.(openai|anthropic)\.com/.test(endpoint.value)) endpoint.value = provider.value === 'anthropic' ? 'https://api.anthropic.com/v1' : provider.value === 'openai' ? 'https://api.openai.com/v1' : ''; sync(); });
+  section.addEventListener('paperecho:preview-key-saved', async () => { await refreshModel(); keyRow?.refreshCredential?.(); sync(); });
+  const fields = () => ({ api_version: value('ai.api_version') || '2023-06-01', provider: provider.value, endpoint: endpoint.value.trim(), model: model.value.trim(), thinking: thinking.checked, ...(!sampling.hidden ? { temperature: Number(temperature.value), top_p: Number(topP.value) } : {}) });
+  const validate = () => {
+    if (!endpoint.checkValidity() || !model.value.trim() || !sampling.hidden && (!temperature.checkValidity() || !topP.checkValidity())) throw new Error('请填写有效的 API 地址和模型。');
+    if (!thinking.checked && !window.PaperEchoAI.capabilities(provider.value, model.value).canDisable) throw new Error('该模型不支持关闭思考。');
+    if (thinking.checked && !window.PaperEchoAI.capabilities(provider.value, model.value, value('ai.api_version') || '2023-06-01').thinking) throw new Error('该模型尚未确认支持思考，请关闭思考。');
+  };
+  section.addEventListener('input', () => { state.textContent = '编辑中，尚未保存。'; });
+  const testState = el('p', '', 'meta'); testState.setAttribute('role', 'status');
+  section.append(button('测试连接', async () => {
+    validate(); testState.textContent = '正在验证模型调用（可能产生少量费用）…';
+    const keyInput = keyRow?.querySelector('input[type=password]');
+    let result;
+    try { result = await api('/api/ai/test', { ...fields(), ...(keyInput?.value ? { apiKey: keyInput.value } : {}) }); }
+    catch (error) { testState.textContent = '测试未完成，请检查本地服务后重试。'; throw error; }
+    testState.textContent = ({ preview: '模拟预览：未联网，未验证真实 API。', reachable: '服务已响应，但未确认模型能返回有效结果。', callable: '连接成功，认证与模型调用已通过。', authentication: '认证失败，请检查 API Key。', model_or_address: '模型或 API 地址不存在，请检查模型名称、权限和接口路径。', model: '模型不可用，请检查模型名称或权限。', address: 'API 地址无效。', protocol: '服务响应不完整或协议不匹配，未确认调用成功。', network: '网络故障或请求超时，未确认模型可调用。', configuration: '配置不完整或模型参数不受支持。', limited: '服务限流或额度不足，未确认模型可调用。' })[result.status] || '结果未知，请稍后重试。';
+  }), el('p', '主动测试会发送极短请求，可能产生少量费用。', 'meta'), testState);
+  const actions = el('div', undefined, 'actions');
+  actions.append(button('保存 AI 配置', async () => {
+    validate(); state.textContent = '正在保存…';
+    const updates = Object.entries(fields()).map(([key, v]) => ({ id: `ai.${key}`, value: v })); updates.push({ id: 'ai.enabled', value: true });
     let saved = false;
-    try { await api('/api/settings', { updates }); saved = true; await refreshModel(); status.textContent = diagnosticState === 'current' ? '配置保存成功，相关诊断已重新检查。' : '配置保存成功；诊断结果未知，原问题保留，请稍后刷新。'; }
-    catch (error) { status.textContent = saved ? '配置已保存，但页面状态未知，请重新读取确认。' : '保存失败，原配置与诊断问题保留。'; if (!saved) throw error; }
-  }), status);
+    try { await api('/api/settings', { updates }); saved = true; await refreshModel(); keyRow?.refreshCredential?.(); sync(); state.textContent = diagnosticState === 'current' ? '已保存，诊断已更新。' : '已保存，诊断结果待确认。'; }
+    catch (error) { state.textContent = saved ? '已保存，页面状态待确认。' : '保存失败，请重试。'; if (!saved) throw error; }
+  }));
+  advanced.append(actions, state); sync();
 }
 // Presentation-only queue: source grades/order are never mutated. Saving is
 // serialized; failed or uncertain requests reuse their id until acknowledged.
@@ -730,7 +751,7 @@ function settingValue(setting, input) {
   return input.value;
 }
 function appendCredentialEditor(section, item, onStatusChange = () => {}) {
-  const names = { PAPERECHO_MODEL_API_KEY: '共享 API Key', TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', SEMANTIC_SCHOLAR_API_KEY: 'Semantic Scholar API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key', QQ_BOT_APP_SECRET: 'QQ 机器人 AppSecret', WXPUSHER_APP_TOKEN: 'WxPusher appToken', WECOM_WEBHOOK_URL: '企业微信群机器人 Webhook', FEISHU_WEBHOOK_URL: '飞书机器人 Webhook', FEISHU_SIGNING_SECRET: '飞书签名密钥（可选；开启签名校验时必填）' };
+  const names = { PAPERECHO_MODEL_API_KEY: 'API Key', TITLE_TRANSLATION_API_KEY: '智能翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', SEMANTIC_SCHOLAR_API_KEY: 'Semantic Scholar API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key', QQ_BOT_APP_SECRET: 'QQ 机器人 AppSecret', WXPUSHER_APP_TOKEN: 'WxPusher appToken', WECOM_WEBHOOK_URL: '企业微信群机器人 Webhook', FEISHU_WEBHOOK_URL: '飞书机器人 Webhook', FEISHU_SIGNING_SECRET: '飞书签名密钥（可选；开启签名校验时必填）' };
   if (!item || !Object.hasOwn(names, item.id)) return null;
   const writable = () => item.writable === true && ['local-managed', 'unconfigured'].includes(item.storageClass);
   const row = el('div', undefined, 'setting credential-setting'); row.dataset.credential = item.id;
@@ -764,7 +785,7 @@ function appendCredentialEditor(section, item, onStatusChange = () => {}) {
       Object.assign(item, fresh);
       if (fresh.configured !== (action === 'replace') || fresh.storageClass !== (action === 'clear' ? 'unconfigured' : 'local-managed') || !fresh.writable) throw new Error();
       editing = !item.configured; await onStatusChange();
-      notice.textContent = action === 'clear' ? '凭据已清除；新工作流启动时加载，已运行的进程需重启。' : '凭据已保存到本地，当前凭据服务已更新；新工作流启动时加载，外部环境仍优先，已运行的进程需重启。';
+      notice.textContent = action === 'clear' ? '已清除此凭据。历史配置未删除。' : '凭据已保存。';
       if (row.isConnected) focusTarget = item.configured ? configure : input;
     } catch (error) {
       throw new Error(persisted ? '写入已返回，但状态刷新未完成；请重新读取后确认，不要重复提交。' : Object.values(errorMessages).includes(error.message) ? error.message : '凭据操作未完成，请检查连接、会话与权限后重试或取消。');
@@ -813,7 +834,7 @@ function emailDeliveryText(delivery) {
   return `最近发送：${emailResultLabels[delivery.status] || '尚未发送'}${delivery.kind === 'test' ? '（测试通知）' : ''}${time}${delivery.error ? ` · ${emailErrorLabels[delivery.error] || '暂时无法发送'}` : ''}`;
 }
 async function appendLoginStartup(container) {
-  if (!window.paperEchoLoginStartup) return;
+  if (!window.paperEchoLoginStartup) { container.append(el('p', '浏览器工作台使用相同工作空间；登录启动设置请在桌面应用中修改。', 'meta')); return; }
   const section = el('section', undefined, 'settings-section section');
   const label = el('label', '登录时启动 PaperEcho');
   const input = el('input'); input.type = 'checkbox'; input.disabled = true;
@@ -848,14 +869,10 @@ async function appendLoginStartup(container) {
 }
 async function appendModelSettings(container, data, credentials) {
   const section = el('section', undefined, 'settings-section section model-settings');
-  section.append(el('h3', '翻译与偏好功能'));
+  section.append(el('h3', '功能开关')); section.classList.add('ai-toggles');
   const shared = credentials.find(row => row.id === 'PAPERECHO_MODEL_API_KEY');
-  const state = el('p', '', 'meta'); state.setAttribute('role', 'status');
-  const describe = () => !shared?.compatible ? '两项服务地址不同或无法确认兼容性，暂不能共享 Key；旧配置保持不变，请先统一服务地址。' : shared.conflict && !shared.configured ? '检测到两个不同的旧 Key，原值保持不变。明确保存新的共享 Key 后，两项功能才改用它；不会删除旧值。' : shared.effectiveConfigured ? '两项功能可共用现有 Key。密钥原值不回显；清除共享项也不会删除旧 Key。' : '尚未配置共享 Key。请填写服务提供商签发的 API Key。';
-  state.textContent = describe(); section.append(state);
-  const sharedEditor = shared && appendCredentialEditor(section, shared, async () => { state.textContent = describe(); status.textContent = missingHint(); });
   const controls = [];
-  for (const [id, title] of [['translation.enabled', '启用翻译'], ['preference.enabled', '启用偏好功能']]) {
+  for (const [id, title] of [['translation.enabled', '启用智能翻译'], ['preference.enabled', '启用自适应学习']]) {
     const item = data.find(row => row.id === id);
     const label = el('label', title, 'model-toggle'); const input = el('input'); input.type = 'checkbox';
     const master = data.find(row => row.id === 'review.master');
@@ -866,7 +883,7 @@ async function appendModelSettings(container, data, credentials) {
     const name = c.id === 'translation.enabled' ? 'translation' : 'preference';
     const own = credentials.find(row => row.id === (name === 'translation' ? 'TITLE_TRANSLATION_API_KEY' : 'PREFERENCE_LEARNING_API_KEY'));
     const missing = [!String(data.find(row => row.id === `${name}.model`)?.value || '').trim() && '模型名称', !String(data.find(row => row.id === `${name}.endpoint`)?.value || '').trim() && 'API 地址', !(shared?.effectiveConfigured || (own?.effectiveConfigured ?? own?.configured)) && 'API Key'].filter(Boolean);
-    return missing.length ? `${name === 'translation' ? '翻译' : '偏好功能'}仍需配置：${missing.join('、')}` : '';
+    return missing.length ? `${name === 'translation' ? '智能翻译' : '自适应学习'}仍需配置：${missing.join('、')}` : '';
   }).filter(Boolean).join('；');
   const status = el('p', missingHint(), 'meta'); status.setAttribute('role', 'status');
   section.append(button('保存功能开关', async () => {
@@ -889,9 +906,9 @@ async function appendModelSettings(container, data, credentials) {
     const [freshData, freshCredentials] = await Promise.all([api('/api/settings'), api('/api/credentials')]);
     for (const row of data) Object.assign(row, freshData.find(item => item.id === row.id));
     for (const row of credentials) Object.assign(row, freshCredentials.find(item => item.id === row.id));
-    sharedEditor?.refreshCredential?.(); state.textContent = describe(); status.textContent = missingHint();
+    status.textContent = missingHint();
   };
-  section.addEventListener('paperecho:preview-key-saved', () => refreshModel().catch(() => { state.textContent = '配置状态未知，请重新读取。'; }));
+  section.addEventListener('paperecho:preview-key-saved', () => refreshModel().catch(() => { status.textContent = '配置状态未知，请重新读取。'; }));
   return refreshModel;
 }
 async function settings(group = settingsGroup, view = settingsView) {
@@ -899,7 +916,7 @@ async function settings(group = settingsGroup, view = settingsView) {
   settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common';
   const requestedChannel = settingsGroup === 'connections' && notificationChannelIds.includes(view) ? view : null;
   settingsView = requestedChannel ? 'notifications' : view;
-  main.append(pageIntro('工作空间设置', '这里只保留日常最常用的选项；检索词、检索式和底层参数继续由原配置维护。'));
+  main.append(pageIntro('工作空间设置', '设置本机工作空间与服务。'));
   if (settingsGroup === 'common') await appendLoginStartup(main);
   const data = await api('/api/settings');
   const credentials = await api('/api/credentials');
@@ -920,7 +937,7 @@ async function settings(group = settingsGroup, view = settingsView) {
     const orderedEntries = toggleIds.size ? [...entries].sort((a, b) => Number(toggleIds.has(b.id)) - Number(toggleIds.has(a.id))) : entries;
     for (const entry of orderedEntries) {
       const rowContainer = featureOptions.rowContainer?.(entry) || container;
-      const setting = { ...entry, sourceEntry: entry, optionScope: settingsView, description: entry.description.replace(/translation/g, '标题翻译').replace(/preference/g, '偏好学习').replace(/required/g, '必要').replace(/optional/g, '补充').replace(/negative/g, '排除').replace(/owner/g, '配置服务').replace(/workflow/g, '工作流').replace(/Weekly/g, '周报') };
+      const setting = { ...entry, sourceEntry: entry, optionScope: settingsView, description: entry.description.replace(/translation/g, '智能翻译').replace(/preference/g, '自适应学习').replace(/required/g, '必要').replace(/optional/g, '补充').replace(/negative/g, '排除').replace(/owner/g, '配置服务').replace(/workflow/g, '工作流').replace(/Weekly/g, '周报') };
       if (setting.id === 'sources.override') setting.description = settingsView === 'rss' ? 'RSS 订阅状态' : '选择 PaperEcho 用于检索论文的数据库来源';
       if (setting.id === 'pubmed.days') setting.description = 'PubMed / PMC 检索天数';
       if (setting.id === 'openalex.days') setting.description = 'OpenAlex 检索天数';
@@ -981,10 +998,7 @@ async function settings(group = settingsGroup, view = settingsView) {
   const active = (views.find(([key]) => key === settingsView) || settingViews[settingsGroup][0]);
   if (settingsGroup === 'review') {
     const refreshModel = await appendModelSettings(body, data, credentials);
-    await appendAiService(body, data, refreshModel);
-    const options = el('section', undefined, 'settings-section section'); options.append(el('h3', '功能专属选项'));
-    appendSettingsControls(options, data.filter(entry => entry.category === 'Ranking / Review' && visibleSetting(entry)), '功能专属选项', '保存专属选项');
-    body.append(options); return;
+    await appendAiService(body, data, refreshModel, credentials); return;
   }
   if (settingsGroup === 'runtime') {
     const section = el('section', undefined, 'settings-section runtime-settings'); section.append(el('h3', '选择运行路径', 'section-header'), el('p', '三种路径互斥；只显示当前路径需要的设置。固定启动入口仍会校验路径一致性。', 'meta'));
@@ -1233,7 +1247,8 @@ async function setup() {
     const ids = [];
     if (entries.find(x => x.id === 'runtime.mode')?.value === 'web') ids.unshift('ZOTERO_API_KEY');
     for (const id of ids) appendCredentialEditor(section, credentials.find(x => x.id === id));
-    await appendModelSettings(section, entries, credentials);
+    const refresh = await appendModelSettings(section, entries, credentials);
+    await appendAiService(section, entries, refresh, credentials);
   } else {
     section.append(el('h3', state.canRun ? '本地检查通过' : '仍需配置，尚不能正式运行'), el('p', '仅进行了本地配置与环境检查；密钥、网络连接及真实外部服务尚未验证。'), el('p', state.persisted ? '基础配置已持久保存。' : '基础配置尚未保存。'));
     section.append(contextCard('已保存配置摘要', [`运行路径：${runtimePaths[state.mode]?.title || '仍需选择'}`, `用户数据目录：${state.roots.userDataRoot}`, `当前服务路径：${runtimePaths[state.roots.activeMode]?.title || '未选择'}`]));

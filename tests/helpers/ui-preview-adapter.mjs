@@ -5,7 +5,7 @@ function installPaperEchoPreview(seed) {
     'runtime.mode': 'desktop', 'general.profile': 'standard', 'translation.enabled': true,
     'preference.enabled': false, 'review.master': false, 'review.enabled': false,
     'translation.endpoint': 'https://preview.invalid/v1/chat/completions', 'preference.endpoint': 'https://preview.invalid/v1/chat/completions',
-    'translation.model': '模拟模型', 'preference.model': '模拟模型',
+    'translation.model': 'gpt-5.1', 'preference.model': 'gpt-5.1', 'ai.provider': 'openai', 'ai.thinking': true, 'ai.model': 'gpt-5.1', 'ai.endpoint': 'https://preview.invalid/v1',
     'runtime.projectRoot': '/模拟工作空间', 'local.input': '/模拟输入', 'local.output': '/模拟结果',
     'desktop.zoteroExe': '/模拟路径/Zotero', 'web.userId': '123456', 'radar.enabled': true,
     'weekly.interval': 7, 'rss.sources': [{ name: '[模拟] 研究动态', url: 'https://preview.invalid/feed', enabled: true, publicationTitle: '模拟期刊' }],
@@ -23,7 +23,7 @@ function installPaperEchoPreview(seed) {
   const intro = document.createElement('strong'); intro.textContent = `UI 预览 · v${seed.version} · ${seed.sourceCommit.slice(0, 8)}｜全部为模拟数据，保存仅更新本页内存。`;
   const activity = document.createElement('span'); activity.setAttribute('role', 'status'); activity.textContent = '禁止输入真实密钥；原生操作、联网调用及文件导出不可用。';
   const scenario = document.createElement('select'); scenario.setAttribute('aria-label', '模拟模型配置场景');
-  for (const [value, text] of [['missing', '模拟：Key 缺失'], ['configured', '模拟：Key 已配置'], ['conflict', '模拟：旧 Key 冲突'], ['incompatible', '模拟：服务不兼容']]) { const option = document.createElement('option'); option.value = value; option.textContent = text; scenario.append(option); }
+  for (const [value, text] of [['missing', '模拟：Key 缺失'], ['configured', '模拟：Key 已配置'], ['conflict', '模拟：旧 Key 不同（采用学习 Key）'], ['incompatible', '模拟：Key 与服务不匹配']]) { const option = document.createElement('option'); option.value = value; option.textContent = text; scenario.append(option); }
   const reset = document.createElement('button'); reset.textContent = '重置模拟数据'; reset.onclick = () => location.reload();
   const wizard = document.createElement('button'); wizard.textContent = '首次配置向导'; wizard.onclick = () => { location.hash = '#setup'; };
   banner.append(intro, scenario, fault, wizard, reset, activity); document.body.prepend(banner);
@@ -31,16 +31,16 @@ function installPaperEchoPreview(seed) {
   new ResizeObserver(() => document.documentElement.style.setProperty('--preview-banner-height', banner.getBoundingClientRect().height + 'px')).observe(banner);
   // The same real renderer is used, but secret inputs are read-only before paint.
   const protectSecrets = () => { for (const input of document.querySelectorAll('input[type=password],.credential-setting input')) { input.readOnly = true; input.placeholder = '预览不接收密钥，请用上方场景切换'; input.autocomplete = 'off'; } };
-  new MutationObserver(() => { protectSecrets(); const row = document.querySelector('[data-credential="PAPERECHO_MODEL_API_KEY"]'); if (row && !row.querySelector('[data-mock-key]')) { const mock = document.createElement('button'); mock.dataset.mockKey = ''; mock.textContent = '使用模拟 Key（仅浏览器内存）'; mock.onclick = async () => { if (failureMode === 'save') { activity.textContent = '模拟保存失败，原状态保留。'; return; } if (setting('translation.endpoint') !== setting('preference.endpoint')) { activity.textContent = '服务地址不同，请先确认保存统一 AI 服务；旧模拟值保留。'; return; } modelState = 'configured'; scenario.value = 'configured'; row.dispatchEvent(new Event('paperecho:preview-key-saved', { bubbles: true })); window.dispatchEvent(new Event('paperecho:preview-configuration-saved')); activity.textContent = '模拟 Key 已配置，已触发配置诊断重查；未接收或保存真实密钥。'; }; row.append(mock); } }).observe(document.body, { childList: true, subtree: true });
+  new MutationObserver(() => { protectSecrets(); const row = document.querySelector('[data-credential="PAPERECHO_MODEL_API_KEY"]'); if (row && !row.querySelector('[data-mock-key]')) { const mock = document.createElement('button'); mock.dataset.mockKey = ''; mock.textContent = '使用模拟 Key（仅浏览器内存）'; mock.onclick = async () => { if (failureMode === 'save') { activity.textContent = '模拟保存失败，原状态保留。'; return; } if (setting('translation.endpoint') !== setting('preference.endpoint')) { activity.textContent = '服务地址不同，请先保存 AI 服务地址。'; return; } modelState = 'configured'; scenario.value = 'configured'; row.dispatchEvent(new Event('paperecho:preview-key-saved', { bubbles: true })); window.dispatchEvent(new Event('paperecho:preview-configuration-saved')); activity.textContent = '模拟 Key 已配置，已触发配置诊断重查；未接收或保存真实密钥。'; }; row.append(mock); } }).observe(document.body, { childList: true, subtree: true });
   document.addEventListener('click', event => {
     const link = event.target.closest('a');
     if (link && /^https?:/.test(link.href)) { event.preventDefault(); activity.textContent = '模拟预览：未打开外部链接。'; }
   });
-  scenario.onchange = () => { modelState = scenario.value; const put = (id, value) => { const row = settings.find(s => s.id === id); if (row) row.value = value; }; put('ai.enabled', false); put('translation.model', '模拟模型'); put('preference.model', modelState === 'conflict' ? '模拟旧偏好模型' : '模拟模型'); put('translation.temperature', 0.3); put('preference.temperature', modelState === 'conflict' ? 0.7 : 0.3); put('preference.endpoint', modelState === 'incompatible' ? 'https://other-preview.invalid/v1/chat/completions' : setting('translation.endpoint')); activity.textContent = '已切换模拟配置场景；没有读取或修改真实 Key。'; window.dispatchEvent(new HashChangeEvent('hashchange')); };
+  scenario.onchange = () => { modelState = scenario.value; const put = (id, value) => { const row = settings.find(s => s.id === id); if (row) row.value = value; }; put('ai.enabled', false); put('translation.model', 'gpt-5.1'); put('preference.model', 'gpt-5.1'); put('translation.temperature', 0.3); put('preference.temperature', modelState === 'conflict' ? 0.7 : 0.3); put('preference.endpoint', modelState === 'incompatible' ? 'https://other-preview.invalid/v1/chat/completions' : setting('translation.endpoint')); activity.textContent = '已切换模拟配置场景；没有读取或修改真实 Key。'; window.dispatchEvent(new HashChangeEvent('hashchange')); };
   window.paperEchoLoginStartup = Object.freeze({ status: async () => ({ available: false, error: 'LOGIN_STARTUP_UNAVAILABLE' }), set: async () => ({ available: false, error: 'LOGIN_STARTUP_UNAVAILABLE' }) });
   window.paperEchoFirstRun = Object.freeze({ status: async () => ({ available: false }), choose: async () => ({ available: false, error: 'STARTUP_SELECTION_UNAVAILABLE' }) });
   const setting = id => settings.find(row => row.id === id)?.value;
-  const credentials = () => seed.secretNames.map(id => ({ id, configured: id === sharedId && modelState === 'configured', storageClass: id === sharedId && modelState === 'configured' ? 'local-managed' : 'unconfigured', writable: true, testAvailable: false, compatible: setting('translation.endpoint') === setting('preference.endpoint'), conflict: modelState === 'conflict', effectiveConfigured: modelState === 'configured', reason: '模拟预览：不接收或保存真实密钥。' }));
+  const credentials = () => seed.secretNames.map(id => ({ id, configured: id === sharedId && ['configured', 'conflict'].includes(modelState), storageClass: id === sharedId && ['configured', 'conflict'].includes(modelState) ? 'local-managed' : 'unconfigured', writable: true, testAvailable: false, compatible: setting('translation.endpoint') === setting('preference.endpoint'), conflict: modelState === 'conflict', effectiveConfigured: ['configured', 'conflict'].includes(modelState), reason: '模拟预览：不接收或保存真实密钥。' }));
   const response = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
   window.fetch = async (input, options = {}) => {
     const url = new URL(String(input), location.href), route = url.pathname;
@@ -50,6 +50,7 @@ function installPaperEchoPreview(seed) {
     const body = options.body ? JSON.parse(options.body) : {};
     if (options.method === 'POST') {
       activity.textContent = '模拟交互：仅更新浏览器内存，未保存真实配置、调用 AI 或提交业务操作。';
+      if (route === '/api/ai/test') return response({ status: 'preview', preview: true });
       if (route === '/api/settings') { if (failureMode === 'save') return response({ error: 'SETTING_VALUE_INVALID' }, 400); for (const update of body.updates || [body]) { const row = settings.find(s => s.id === update.id); if (row) row.value = update.value; } if (setting('ai.enabled')) for (const name of ['translation', 'preference']) for (const key of ['endpoint', 'model', 'temperature', 'timeout', 'top_p', 'stream', 'thinking', 'max_retries']) { const row = settings.find(s => s.id === name + '.' + key); if (row) row.value = setting('ai.' + (key === 'timeout' ? 'timeout_ms' : key)); } return response({ results: body.updates || [body], preview: true }); }
       if (route === '/api/feedback') { const item = papers.find(p => p.id === body.paperId); if (item) { if (body.manualGrade) item.manualGrade = body.manualGrade; else item.feedback = body.value; } return response({ status: 'recorded', preview: true }); }
       if (route === '/api/research') return response({ status: 'pending', saved: true, preview: true });
@@ -71,7 +72,7 @@ function installPaperEchoPreview(seed) {
       case '/api/doctor/configuration':
       case '/api/doctor': {
         if (failureMode === 'doctor') return response({ error: 'PREVIEW_UNKNOWN' }, 503);
-        const configurationIssues = ['translation', 'preference'].filter(name => setting(name + '.enabled') && (name === 'translation' || setting('review.master')) && (modelState !== 'configured' || !setting(name + '.endpoint') || !setting(name + '.model'))).map(name => ({ checkId: 'model.' + name, status: 'WARN', summary: `${name === 'translation' ? '翻译' : '偏好功能'}配置不完整（模拟）`, settingTarget: 'ai.key', actionableHint: '请前往统一 AI 配置补充共享 API Key。预览请使用模拟 Key 按钮。' }));
+        const configurationIssues = ['translation', 'preference'].filter(name => setting(name + '.enabled') && (name === 'translation' || setting('review.master')) && (!['configured', 'conflict'].includes(modelState) || !setting(name + '.endpoint') || !setting(name + '.model'))).map(name => ({ checkId: 'model.' + name, status: 'WARN', summary: `${name === 'translation' ? '智能翻译' : '自适应学习'}配置不完整（模拟）`, settingTarget: 'ai.key', actionableHint: '请前往AI 功能配置补充共享 API Key。预览请使用模拟 Key 按钮。' }));
         return response({ status: configurationIssues.length ? 'WARN' : 'PASS', canRun: true, checks: [{ checkId: 'runtime.roots', status: 'PASS', summary: '模拟健康项，应由真实 UI 自动隐藏' }], configurationIssues });
       }
       default: return response({ error: 'PREVIEW_API_UNAVAILABLE' }, 404);

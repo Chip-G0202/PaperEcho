@@ -589,4 +589,4 @@ Web 的 API v3、读取 page size 100、写入 batch 50、timeout 30 秒、默�
 7. ready/warning 后，用户选择“只检查”则停止；只有明确选择“配置后运行”且 preflight 允许时才执行同一 launcher 的 `--run`。
 8. 单纯应用个人配置不 stage、不 commit。文档/模板维护任务才可在通过验证后提交非个人文件。
 
-统一 AI 服务由现有 translation owner 的 `shared_service` 保存非敏感参数（endpoint/model/temperature/top_p/stream/thinking/timeout_ms/max_retries），仅显式确认 enabled 后生效；两项功能继续独立启停。旧字段与 Key 不改写，冲突需在统一页逐项选择。旧 Key 仅能复用于原服务；共享 Key 仍由既有 SecretService 管理。显式 invocation 配置优先，不写回共享设置。配置保存成功只重查配置诊断，失败保留上次证据。
+统一 AI 服务的非敏感参数保存在现有 translation owner 的 `shared_service`，既有字段不删除。首次读取优先历史学习服务及其 Key；仅在服务匹配时复用唯一旧 Key，读取不写回，后续共享保存不被迁移覆盖。新 Key 仍由 SecretService 保存并绑定服务身份，改换服务不会自动发送旧 Key。`ai_capabilities.cjs` 同时约束 UI 与请求：思考模式、采样字段按模型及 API 版本判定；Anthropic 默认保持 `2023-06-01`，不自动升级。主动连接测试单次、8 秒、无重试；只有有效输出及正常完成原因才算模型可调用。新配置等级复审默认开启，显式关闭状态保留；已有基础配置不因环境检查失败重复进入首次向导。

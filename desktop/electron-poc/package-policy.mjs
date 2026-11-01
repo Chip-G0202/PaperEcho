@@ -12,7 +12,7 @@ const configs = new Set(['openalex_search.json', 'paperecho.config.example.json'
   'prompt-preference-learning.md', 'prompt-title-translation.md', 'pubmed_pmc_search.json',
   'review-workflow-rules.json', 'rss_sources.json', 'source_selection.json', 'title_translation.config.json']);
 export function sourceAllowed(file) {
-  return /^workflow\/tools\/.*\.(mjs|py)$/.test(file)
+  return file === 'workflow/tools/lib/ai_capabilities.cjs' || /^workflow\/tools\/.*\.(mjs|py)$/.test(file)
     || /^workflow\/tools\/web\/static\/(index\.html|app\.js|styles\.css|paperecho-mark\.svg)$/.test(file)
     || /^skills\/paperecho-(local|zotero-desktop|zotero-web)\/scripts\/run\.mjs$/.test(file)
     || file.startsWith('config/') && configs.has(file.slice(7))

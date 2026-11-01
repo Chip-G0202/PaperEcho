@@ -19,11 +19,11 @@ export class SetupService {
       const report = await runPreflight(resolved.options, { env: resolved.env });
       const recoveryRequired = report.startupRecovery?.blocking === true;
       const summaries = entries => entries.map(({ name, purpose, configure }) => ({ name, purpose, configure }));
-      return { ...base, needsSetup: !report.canRun && !recoveryRequired, recoveryRequired, canRun: report.canRun, mode: report.mode, status: report.status,
+      return { ...base, needsSetup: false, recoveryRequired, canRun: report.canRun, mode: report.mode, status: report.status,
         requiredMissing: summaries(report.requiredMissing), optionalMissing: summaries([...report.featureMissing, ...report.optionalMissing]), readiness: report.readiness };
     } catch (error) {
       // Fixed messages only: configuration/parser exceptions may contain private inputs.
-      return { ...base, needsSetup: true, canRun: false, requiredMissing: [{ name: '基础配置仍需检查', configure: '检查运行路径、输入和配置格式' }], optionalMissing: [], readiness: [], error: /^[A-Z_]+$/.test(error.code || '') ? error.code : 'SETUP_CHECK_FAILED' };
+      return { ...base, needsSetup: false, canRun: false, requiredMissing: [{ name: '基础配置仍需检查', configure: '检查运行路径、输入和配置格式' }], optionalMissing: [], readiness: [], error: /^[A-Z_]+$/.test(error.code || '') ? error.code : 'SETUP_CHECK_FAILED' };
     }
   }
 }

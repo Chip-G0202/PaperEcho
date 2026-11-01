@@ -1,3 +1,4 @@
+import { testModelConnection } from '../lib/model_transport.mjs';
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -27,7 +28,7 @@ export async function resolveControlCenterStartup({ root = CONTROL_CENTER_ROOT, 
   const context = await resolveApplicationRuntimeContext({ cwd: root, env, argv });
   return { root, env: context.layout !== 'dev' ? context.env : env, argv, context };
 }
-const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/paperecho-mark.svg', ['paperecho-mark.svg', 'image/svg+xml']]]);
+const assets = new Map([['/ai-capabilities.js', ['../lib/ai_capabilities.cjs', 'text/javascript; charset=utf-8']],['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/paperecho-mark.svg', ['paperecho-mark.svg', 'image/svg+xml']]]);
 export const MAX_BODY_BYTES = 65536;
 export function safeLink(value) {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : null; } catch { return null; }
@@ -93,7 +94,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       if (req.method === 'GET' && assets.has(decoded)) {
         const [name, type] = assets.get(decoded);
         res.writeHead(200, { 'Content-Type': type });
-        return res.end(await fs.readFile(path.join(here, 'static', name)));
+        return res.end(await fs.readFile(name === '../lib/ai_capabilities.cjs' ? path.join(here, '../lib/ai_capabilities.cjs') : path.join(here, 'static', name)));
       }
       if (!decoded.startsWith('/api/')) return send(404, { error: 'NOT_FOUND' });
       const cookie = String(req.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
@@ -133,6 +134,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
           return res.end(zip);
         } finally { res.off('close', cancel); req.off('aborted', cancel); }
       }
+      if (decoded === '/api/ai/test') return send(200, await testModelConnection(input, { secrets: services.secrets }));
       if (decoded === '/api/notifications/test') return send(200, await services.notifications.test(input));
       if (decoded === '/api/shutdown') {
         res.once('finish', () => {

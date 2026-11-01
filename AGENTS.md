@@ -97,13 +97,13 @@ Cadence defaults:
 - Do not fabricate references, page numbers, doses, stats, or experimental outcomes.
 - PDF acquisition is out of automation scope. Users handle PDFs manually in Zotero.
 - Translation and preference can share `PAPERECHO_MODEL_API_KEY` through the existing environment / local `.env` / injected secret storage. Shared use requires compatible service endpoints; never send a shared key to a different provider.
-- Preserve legacy `TITLE_TRANSLATION_API_KEY` and `PREFERENCE_LEARNING_API_KEY`. Reuse a single/equal legacy key only for compatible endpoints; distinct keys remain intact until the user explicitly saves a shared key. Never migrate by overwriting legacy values.
-- Confirmed common AI parameters live in the translation owner `shared_service`; preserve all legacy fields and require explicit conflict choices. Existing SecretService owns the shared key; never reuse a legacy key with a different provider. Invocation overrides remain explicit.
+- Preserve legacy keys byte-for-byte. Normal AI calls prefer a saved shared key, then the historical learning key; use the sole legacy translation key only for its original compatible service. Legacy resolution is read-only and idempotent.
+- Common AI parameters live in the translation owner `shared_service`; keep legacy fields intact, prefer learning service parameters before the first shared save, and never overwrite a later shared save during startup. SecretService owns keys and service binding. Model/API-version capabilities are shared by renderer and request adapter; do not infer optional reasoning support from an arbitrary compatible model name. Invocation overrides remain explicit.
 - Non-secret title translation parameters live in `config/title_translation.config.json`.
 - The default translation model lives in `config/title_translation.config.json`, and `TITLE_TRANSLATION_MODEL` can override it.
 - The title translation prompt lives in `config/prompt-title-translation.md` and uses `${sourceText}` substitution.
 - Default translation rate limits are RPM `100` and TPM `10,000,000`.
-- Title translation non-stream request bodies currently use `max_tokens`; if a real provider/model/key is not configured in the active environment, verification must stay mock/local, and end-to-end success must not be claimed.
+- The shared model adapter owns protocol-specific token limits and normal completion checks; if a real provider/model/key is not configured in the active environment, verification must stay mock/local, and end-to-end success must not be claimed.
 - Never write title translation secrets into config files, prompts, memory, reports, stdout, or stderr.
 
 ## Directory Model

@@ -13,7 +13,7 @@ import { resolveRuntimePaths } from './runtime_config.mjs';
 const INITIAL_OWNER_VALUES = Object.freeze({
   'title_translation.config.json': { enabled: true },
   'preference_learning.config.json': {},
-  'review-workflow-rules.json': { llm_review: { enabled: false, grade_review_enabled: false, preference_learning_enabled: false } },
+  'review-workflow-rules.json': { llm_review: { enabled: true, grade_review_enabled: true, preference_learning_enabled: false } },
 });
 
 const OWNER_PATH_ENV = Object.freeze({
@@ -25,9 +25,9 @@ const definitions = [];
 function setting(id, category, file, key, type, description, validation = {}) {
   definitions.push({ id, category, file, key, type, description, validation, secret: false, advanced: category === 'Advanced', reload: 'next_run' });
 }
-setting('preference.enabled', 'Models', 'review-workflow-rules.json', 'llm_review.preference_learning_enabled', 'boolean', '启用偏好学习');
+setting('preference.enabled', 'Models', 'review-workflow-rules.json', 'llm_review.preference_learning_enabled', 'boolean', '启用自适应学习');
 setting('review.master', 'Models', 'review-workflow-rules.json', 'llm_review.enabled', 'boolean', '启用智能评审总开关');
-setting('translation.enabled', 'Models', 'title_translation.config.json', 'enabled', 'boolean', '启用标题翻译');
+setting('translation.enabled', 'Models', 'title_translation.config.json', 'enabled', 'boolean', '启用智能翻译');
 for (const [capability, file] of [['translation', 'title_translation.config.json'], ['preference', 'preference_learning.config.json']]) {
   setting(`${capability}.model`, 'Models', file, 'model', 'string', `${capability} 模型名称`, { maxLength: 200 });
   setting(`${capability}.endpoint`, 'Models', file, 'endpoint', 'url', `${capability} API 地址`);
@@ -35,6 +35,9 @@ for (const [capability, file] of [['translation', 'title_translation.config.json
   for (const [key, type, title, rules] of [['top_p', 'number', 'Top P', { min: 0, max: 1 }], ['stream', 'boolean', '流式响应', {}], ['thinking', 'boolean', '思考模式', {}], ['max_retries', 'integer', '最大重试次数', { min: 0, max: 20 }]]) setting(`${capability}.${key}`, 'Models', file, key, type, title, rules);
   setting(`${capability}.timeout`, 'Advanced', file, 'timeout_ms', 'integer', '请求超时（毫秒）', { min: 1000, max: 600000 });
 }
+setting('ai.api_version', 'Models', 'title_translation.config.json', 'shared_service.api_version', 'enum', 'Anthropic API 版本', { values: ['2023-06-01', '2026-10-21'] });
+setting('ai.provider', 'Models', 'title_translation.config.json', 'shared_service.provider', 'enum', '服务提供商', { values: ['compatible', 'openai', 'anthropic'] });
+setting('ai.credential_service', 'Models', 'title_translation.config.json', 'shared_service.credential_service', 'string', '凭据服务绑定', { maxLength: 2200 });
 setting('ai.enabled', 'Models', 'title_translation.config.json', 'shared_service.enabled', 'boolean', '确认使用统一 AI 服务');
 for (const [key, type, title, rules] of [
   ['endpoint', 'url', 'API 服务地址', {}], ['model', 'string', '模型名称', { maxLength: 200 }],
@@ -180,7 +183,7 @@ export class ConfigService {
       try {
         if (!owners.has(definition.file)) owners.set(definition.file, await this.readOwnerOrTemplate(definition.file));
         const owner = owners.get(definition.file);
-        value = get(owner.value, definition.key) ?? (['translation.enabled', 'notification.radar', 'notification.weekly'].includes(definition.id) ? true : null);
+        value = get(owner.value, definition.key) ?? (['translation.enabled', 'review.enabled', 'review.master', 'notification.radar', 'notification.weekly'].includes(definition.id) ? true : null);
         // Show the existing SMTP transport defaults so saving the form preserves TLS.
         if (definition.id === 'smtp.port' && value == null) value = 465;
         if (definition.id === 'smtp.secure' && value == null) value = Number(owner.value.common?.email?.smtp?.port ?? 465) === 465;
@@ -193,7 +196,13 @@ export class ConfigService {
       result.push({ ...publicDefinition, value: definition.id === 'wechat.uid' ? null : value, ...(definition.id === 'wechat.uid' ? { configured: Boolean(value) } : {}), available, ownerPresent, effectiveValue: definition.id === 'runtime.mode' ? this.runtimeMode || value : undefined });
     }
     result.push({ id: 'weekly.interval', category: 'Weekly', type: 'integer', value: Number(owners.get('paperecho.config.json')?.value?.weekly?.intervalDays || this.env.review_results_RUN_INTERVAL_DAYS || 7), default: 7, available: true, readOnly: true, description: '默认 7 天；由调度配置管理', validation: { min: 1 }, secret: false, advanced: true, reload: 'scheduler' });
-    if (result.find(row => row.id === 'ai.enabled')?.value === true) {
+    if (result.find(row => row.id === 'ai.enabled')?.value !== true) {
+      const selected = result.find(row => row.id === 'preference.endpoint')?.value ? 'preference' : 'translation';
+      for (const key of ['endpoint', 'model', 'temperature', 'top_p']) result.find(row => row.id === `ai.${key}`).value = result.find(row => row.id === `${selected}.${key}`)?.value;
+      result.find(row => row.id === 'ai.provider').value = String(result.find(row => row.id === 'ai.endpoint').value || '').includes('api.anthropic.com') ? 'anthropic' : 'compatible';
+      result.find(row => row.id === 'ai.thinking').value = true;
+    }
+    {
       for (const name of ['translation', 'preference']) for (const key of ['endpoint', 'model', 'temperature', 'timeout', 'top_p', 'stream', 'thinking', 'max_retries']) {
         const row = result.find(row => row.id === `${name}.${key}`);
         row.legacyValue = row.value;
@@ -205,6 +214,10 @@ export class ConfigService {
   async update(id, value) {
     const result = await this.updateMany([{ id, value }]);
     return result.results[0];
+  }
+  async serviceBinding() {
+    const entries = await this.list(); const value = id => entries.find(row => row.id === id)?.value;
+    try { const u = new URL(value('ai.endpoint')); return `${value('ai.provider') || 'compatible'}|${u.origin + u.pathname.replace(/\/+$/, '').replace(/\/(chat\/completions|messages)$/, '')}`; } catch { return ''; }
   }
   async updateMany(updates) {
     if (!Array.isArray(updates) || updates.length < 1 || updates.length > 50) throw new Error('SETTING_BATCH_INVALID');
@@ -219,7 +232,7 @@ export class ConfigService {
       return { id, value, definition };
     });
     if (new Set(resolved.map((entry) => entry.id)).size !== resolved.length) throw new Error('SETTING_BATCH_INVALID');
-    if (resolved.some(row => row.id === 'ai.enabled' && row.value === true) && !['endpoint', 'model', 'temperature', 'timeout_ms', 'top_p', 'stream', 'thinking', 'max_retries'].every(key => resolved.some(row => row.id === `ai.${key}`))) throw new Error('SETTING_BATCH_INVALID');
+    if (resolved.some(row => row.id === 'ai.enabled' && row.value === true) && !['endpoint', 'model', 'provider', 'thinking'].every(key => resolved.some(row => row.id === `ai.${key}`))) throw new Error('SETTING_BATCH_INVALID');
     const ownerFiles = [...new Set(resolved.map((entry) => entry.definition.file))].sort();
     const notificationEdit = resolved.some(({ id }) => /^(email\.|smtp\.|notification\.|qq\.|wechat\.|feishu\.|wecom\.)/.test(id));
     const outboundEdit = resolved.some(({ id }) => /^(wechat\.|feishu\.|wecom\.)/.test(id));
@@ -232,10 +245,14 @@ export class ConfigService {
       return withAtomicJsonLock(target, async () => {
         const current = readApplicationConfig({ root: this.root, env: this.env, configPath: target });
         const candidate = outboundEdit ? upgradeOutboundChannelsConfig(current) : qqEdit ? upgradeNotificationChannelsConfig(current) : notificationEdit ? upgradeNotificationConfig(current) : current;
+        const priorBinding = resolved.some(row => ['ai.endpoint', 'ai.provider'].includes(row.id)) ? await this.serviceBinding() : '';
         for (const { id, value, definition } of resolved) {
           const section = DOMAIN_SECTIONS[definition.file];
           const owner = section ? (candidate[section] ||= {}) : candidate;
           if (id === 'pubmed.query' && owner.keyword_groups) throw new Error('SEARCH_KEYWORD_OWNER_REQUIRED');
+          if (['ai.endpoint', 'ai.provider'].includes(id) && priorBinding && !owner.shared_service?.credential_service) {
+            (owner.shared_service ||= {}).credential_service = priorBinding;
+          }
           put(owner, definition.key, value);
           if (definition.key.startsWith('keyword_groups.')) owner.query = buildPubMedQueryFromKeywordGroups(owner.keyword_groups);
           await this.verify(owner, definition);
@@ -261,9 +278,13 @@ export class ConfigService {
         if (!owner.present) missingBefore.add(file);
         before.set(file, owner.value); after.set(file, structuredClone(owner.value));
       }
+      const priorBinding = resolved.some(row => ['ai.endpoint', 'ai.provider'].includes(row.id)) ? await this.serviceBinding() : '';
       for (const { id, value, definition } of resolved) {
         const owner = after.get(definition.file);
-        put(owner, definition.key, value);
+        if (['ai.endpoint', 'ai.provider'].includes(id) && priorBinding && !owner.shared_service?.credential_service) {
+            (owner.shared_service ||= {}).credential_service = priorBinding;
+          }
+          put(owner, definition.key, value);
         if (id === 'pubmed.query' && owner.keyword_groups) throw new Error('SEARCH_KEYWORD_OWNER_REQUIRED');
         if (definition.key.startsWith('keyword_groups.')) owner.query = buildPubMedQueryFromKeywordGroups(owner.keyword_groups);
       }

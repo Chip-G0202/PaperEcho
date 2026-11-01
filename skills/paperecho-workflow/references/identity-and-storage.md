@@ -65,4 +65,4 @@ Before changing a shared schema or path, identify readers, writers, legacy migra
 
 `control_feedback_service.mjs` owns `paper_feedback.json` under the review root. It reuses `literature_identity.mjs`, excludes title-only identity, keeps revision history, and uses lock/atomic replacement. Legacy XLSX import is explicit, one-way and idempotent; uncertain identity blocks import. DOCX remains an input/export adapter. See [Control Center compatibility](../../../docs/control-center.md) for scope and Local JSONL precedence.
 
-统一 AI 服务由现有 translation owner 的 `shared_service` 保存非敏感参数（endpoint/model/temperature/top_p/stream/thinking/timeout_ms/max_retries），仅显式确认 enabled 后生效；两项功能继续独立启停。旧字段与 Key 不改写，冲突需在统一页逐项选择。旧 Key 仅能复用于原服务；共享 Key 仍由既有 SecretService 管理。显式 invocation 配置优先，不写回共享设置。配置保存成功只重查配置诊断，失败保留上次证据。
+统一 AI 服务的非敏感参数保存在现有 translation owner 的 `shared_service`，既有字段不删除。首次读取优先历史学习服务及其 Key；仅在服务匹配时复用唯一旧 Key，读取不写回，后续共享保存不被迁移覆盖。新 Key 仍由 SecretService 保存并绑定服务身份，改换服务不会自动发送旧 Key。`ai_capabilities.cjs` 同时约束 UI 与请求：思考模式、采样字段按模型及 API 版本判定；Anthropic 默认保持 `2023-06-01`，不自动升级。主动连接测试单次、8 秒、无重试；只有有效输出及正常完成原因才算模型可调用。新配置等级复审默认开启，显式关闭状态保留；已有基础配置不因环境检查失败重复进入首次向导。

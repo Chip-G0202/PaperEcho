@@ -40,18 +40,19 @@ if (process.argv.includes('--stop')) {
     const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
     const seed = { version: metadata.version, sourceCommit, registry: CONFIG_REGISTRY, secretNames: CONTROL_SECRET_NAMES };
     const staticRoot = path.join(repo, 'workflow/tools/web/static');
-    const [index, css, js, svg, adapter] = await Promise.all([
+    const [index, css, js, svg, adapter, capabilities] = await Promise.all([
       fs.readFile(path.join(staticRoot, 'index.html'), 'utf8'), fs.readFile(path.join(staticRoot, 'styles.css'), 'utf8'),
       fs.readFile(path.join(staticRoot, 'app.js'), 'utf8'), fs.readFile(path.join(staticRoot, 'paperecho-mark.svg')),
-      fs.readFile(new URL('./ui-preview-adapter.mjs', import.meta.url), 'utf8'),
+      fs.readFile(new URL('./ui-preview-adapter.mjs', import.meta.url), 'utf8'), fs.readFile(path.join(repo, 'workflow/tools/lib/ai_capabilities.cjs'), 'utf8'),
     ]);
     const scriptSafe = value => value.replace(/<\/script/gi, '<\\/script');
     const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'";
     const html = index.replace('<head>', `<head><meta http-equiv="Content-Security-Policy" content="${policy}">`)
       .replace('<link rel="stylesheet" href="/styles.css">', `<style>${css}</style>`)
+      .replace('<script src="/ai-capabilities.js" defer></script>', '')
       .replace('<script src="/app.js" defer></script>', '')
       .replaceAll('/paperecho-mark.svg?v=2.4', 'data:image/svg+xml;base64,' + svg.toString('base64'))
-      .replace('</body>', `<script>${scriptSafe(adapter)}\ninstallPaperEchoPreview(${JSON.stringify(seed).replaceAll('<', '\\u003c')});</script><script>${scriptSafe(js)}</script></body>`);
+      .replace('</body>', `<script>${scriptSafe(capabilities)}</script><script>${scriptSafe(adapter)}\ninstallPaperEchoPreview(${JSON.stringify(seed).replaceAll('<', '\\u003c')});</script><script>${scriptSafe(js)}</script></body>`);
     const htmlFile = path.join(root, 'PaperEcho-workbench-preview.html'); await fs.writeFile(htmlFile, html, { flag: 'wx' });
     // Reuse the existing loopback HTTP owner; never construct real application services.
     const app = await startControlCenter({ root, port: 0, env: {}, context: { userDataRoot: dataRoot }, services: { secrets: { redact: value => value } } });

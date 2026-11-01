@@ -1,3 +1,4 @@
+import { requestModelText } from './model_transport.mjs';
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -209,6 +210,8 @@ function resolveTranslationConfig({ env = process.env } = {}) {
     : DEFAULT_PROMPT_TEMPLATE;
 
   return {
+    provider: fileConfig.provider || 'compatible',
+    api_version: fileConfig.api_version || '2023-06-01',
     enabled: coerceBoolean(env.TITLE_TRANSLATION_ENABLED ?? fileConfig.enabled, DEFAULT_CONFIG.enabled),
     apiKeyConfigured: Boolean(normalizeSecretValue(modelCredentials(env).translation)),
     apiKey: normalizeSecretValue(modelCredentials(env).translation),
@@ -521,76 +524,10 @@ export async function parseStreamingTranslationText(res) {
   return normalizeTranslationText(out);
 }
 
-function buildTranslationRequestBody(runtime, prompt, { maxOutputTokens, stream = runtime.stream } = {}) {
-  const thinking = runtime.thinking && typeof runtime.thinking === "object"
-    ? runtime.thinking
-    : runtime.thinking
-      ? { type: "enabled" }
-      : { type: "disabled" };
-  const body = {
-    temperature: runtime.temperature,
-    top_p: runtime.top_p,
-    stream: Boolean(stream),
-    thinking,
-    messages: [
-      { role: "user", content: prompt },
-    ],
-  };
-  if (String(runtime.user_id || "").trim()) {
-    body.user_id = String(runtime.user_id).trim();
-  }
-  if (String(runtime.model || "").trim()) {
-    body.model = runtime.model;
-  }
-  if (!stream) {
-    body.max_tokens = Number(maxOutputTokens) || estimateMaxOutputTokens(1);
-  }
-  return body;
-}
-
 async function fetchTranslation(runtime, prompt, { maxOutputTokens, stream = runtime.stream } = {}) {
   if (runtime.enabled === false) throw new Error('translation_disabled');
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("translation_timeout")), runtime.timeout_ms);
-  try {
-    const res = await fetch(runtime.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${runtime.apiKey ?? normalizeSecretValue(modelCredentials(process.env).translation)}`,
-      },
-      body: JSON.stringify(buildTranslationRequestBody(runtime, prompt, { maxOutputTokens, stream })),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      const t = await res.text().catch(() => "");
-      const err = new Error(`HTTP_${res.status}${t ? `:${t.slice(0, 180)}` : ""}`);
-      err.status = res.status;
-      err.retryAfterMs = parseServerDelayMs(res.headers.get("Retry-After"));
-      err.backoffMs = parseServerDelayMs(res.headers.get("Backoff"));
-      throw err;
-    }
-
-    if (stream) {
-      return {
-        text: await parseStreamingTranslationText(res),
-        usage: { available: false, input_tokens: null, output_tokens: null, total_tokens: null },
-        response_excerpt: "",
-      };
-    }
-
-    const data = await res.json();
-    const content = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.delta?.content ?? data?.output_text ?? data?.text ?? "";
-    const text = normalizeTranslationText(content);
-    return {
-      text,
-      usage: extractUsage(data),
-      response_excerpt: text.slice(0, 600),
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
+  const text = normalizeTranslationText(await requestModelText({ ...runtime, apiKey: runtime.apiKey ?? normalizeSecretValue(modelCredentials(process.env).translation) }, prompt, { maxTokens: maxOutputTokens || estimateMaxOutputTokens(1), stream: stream !== false }));
+  return { text, usage: { available: false, input_tokens: null, output_tokens: null, total_tokens: null }, response_excerpt: '' };
 }
 
 async function translateWithRuntime(title, {

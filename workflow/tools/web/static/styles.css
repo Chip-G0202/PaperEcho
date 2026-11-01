@@ -81,3 +81,5 @@ input[role=switch]{appearance:none;width:48px;height:28px;border-radius:20px;bac
 @media(max-width:760px){.doctor-grid{grid-template-columns:minmax(0,1fr)}.system-support,.doctor-results{padding:16px}}
 
 .setting-highlight{outline:2px solid var(--accent,#9d722a);outline-offset:4px;border-radius:8px}.ai-service input:not([type=checkbox]),.ai-service select{max-width:100%;min-width:0;width:100%;box-sizing:border-box}.ai-service label{overflow-wrap:anywhere}.doctor-check button{margin-top:10px}
+
+.ai-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.ai-grid>*{min-width:0}.ai-grid .setting{margin:0}.ai-grid input,.ai-grid select{width:100%;max-width:100%;box-sizing:border-box}.ai-grid .credential-setting{grid-column:1/-1}.ai-toggles .model-toggle{display:inline-flex;margin:10px 24px 10px 0}.ai-advanced{margin-top:16px}.ai-advanced .ai-grid{margin:16px 0}.ai-advanced input[type=number]{max-width:100%}@media(max-width:680px){.ai-grid{grid-template-columns:minmax(0,1fr)}}

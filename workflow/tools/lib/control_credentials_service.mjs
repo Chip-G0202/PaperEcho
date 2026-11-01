@@ -6,6 +6,7 @@ import { writeAtomicText, withAtomicJsonLock, renameWithTransientRetry } from '.
 import { CONTROL_SECRET_NAMES, credentialOrigin, markLocalCredential, redactSecrets, secretValues } from './credential_registry.mjs';
 import { secureCredentialFile, credentialSecurityRuntimeAvailable } from './credential_file_security.mjs';
 import { resolveRuntimePaths, assertRuntimeDataPath } from './runtime_config.mjs';
+import { ConfigService } from './control_config_service.mjs';
 import { modelCredentials, SHARED_MODEL_KEY } from './model_credentials.mjs';
 export { CONTROL_SECRET_NAMES } from './credential_registry.mjs';
 export { inspect as inspectCredentialText };
@@ -26,11 +27,11 @@ function inspect(text) {
 }
 
 export class SecretService {
-  #env; #file; #seen = new Set(); #atomicOptions;
+  #env; #file; #root; #seen = new Set(); #atomicOptions;
   constructor({ root, env = process.env, atomicOptions } = {}) {
     const paths = resolveRuntimePaths({ applicationRoot: root, env });
     if (paths.layout !== 'dev') root = paths.userDataRoot;
-    this.#env = env;
+    this.#env = env; this.#root = root;
     this.#file = root ? path.join(path.resolve(root), '.env') : null;
     if (this.#file) assertRuntimeDataPath(paths, this.#file);
     this.#atomicOptions = atomicOptions;
@@ -113,6 +114,13 @@ export class SecretService {
     if (secret) this.#seen.add(secret);
     return operation(secret);
   }
+  async withModelCredential(serviceIdentity, operation) {
+    const state = await this.#read(); const env = { ...this.#env };
+    for (const id of [SHARED_MODEL_KEY, 'TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY']) env[id] = this.#value(id, state) || '';
+    const current = modelCredentials(env);
+    if (current.serviceIdentity !== serviceIdentity) return operation('');
+    return operation(current.preference);
+  }
   async #write(id, value, clear) {
     if (!CONTROL_SECRET_NAMES.includes(id)) throw new Error('CREDENTIAL_KEY_NOT_ALLOWED');
     if (typeof value !== 'string' || (!clear && !value.length) || value.length > 4096 || /[\r\n\u0000-\u001f\u007f]/.test(value) || (value.includes('"') && value.includes("'"))) throw new Error('CREDENTIAL_VALUE_INVALID');
@@ -138,6 +146,13 @@ export class SecretService {
         this.#seen.add(value);
         this.#env[id] = value;
         markLocalCredential(this.#env, id, this.#file);
+        if (id === SHARED_MODEL_KEY && !clear) {
+          const config = new ConfigService({ root: this.#root, env: this.#env });
+          const settings = await config.list();
+          const endpoint = settings.find(row => row.id === 'ai.endpoint')?.value;
+          const provider = settings.find(row => row.id === 'ai.provider')?.value || 'compatible';
+          if (endpoint) { const u = new URL(endpoint); await config.update('ai.credential_service', `${provider}|${u.origin + u.pathname.replace(/\/+$/, '').replace(/\/(chat\/completions|messages)$/, '')}`); }
+        }
         return { id, configured: Boolean(value), storageClass: value ? 'local-managed' : 'unconfigured', status: clear ? 'cleared' : 'replaced', savedToFile: true, currentServiceUpdated: true, workflowEffect: 'on-next-start-unless-externally-overridden' };
       // Native ACL checks can exceed the shared 5s default; waiting remains bounded.
       }, { timeoutMs: 15000, staleMs: Infinity }); // Never steal a credential lock from a slow live writer.

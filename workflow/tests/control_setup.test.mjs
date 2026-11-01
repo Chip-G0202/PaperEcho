@@ -67,7 +67,7 @@ test('old and unfinished configuration is readable without auto-overwrite; confl
   await configure(f); const old = JSON.parse(await fs.readFile(f.file, 'utf8')); old.mode = null; old.common.email.enabled = false;
   await fs.writeFile(f.file, JSON.stringify(old)); const before = await fs.readFile(f.file, 'utf8');
   const context = await resolveApplicationRuntimeContext({ cwd: f.app, env: f.env });
-  assert.equal((await createControlServices({ root: f.app, context, env: f.env }).setup.status()).canRun, false);
+  const status = await createControlServices({ root: f.app, context, env: f.env }).setup.status(); assert.equal(status.canRun, false); assert.equal(status.needsSetup, false);
   assert.equal(await fs.readFile(f.file, 'utf8'), before);
   const conflict = { ...f.env, PAPERECHO_DATA_ROOT: f.app };
   await assert.rejects(resolveApplicationRuntimeContext({ cwd: f.app, env: conflict }), /RUNTIME_INSTALLED_BOUNDARY/);
