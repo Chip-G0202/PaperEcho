@@ -41,7 +41,7 @@ const settingViews = {
   common: [['databases', '文献数据库', ['Sources']], ['rss', 'RSS 订阅', ['Sources', 'RSS']], ['period', '检索周期', ['General', 'Search']]],
   review: [['ai', 'AI 功能配置', ['Models', 'Ranking / Review']]],
   runtime: [['path', '运行路径', ['Runtime']]],
-  automation: [['radar', 'Daily Radar', ['Radar']], ['weekly', '周报', ['Weekly', 'Integrity']]],
+  automation: [['radar', '自动化', ['Radar', 'Weekly', 'Integrity']]],
   connections: [['notifications', '通知偏好', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
 };
 function el(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; }
@@ -72,25 +72,25 @@ function contextCard(title, rows) {
   for (const row of rows.filter(Boolean)) card.append(el('p', row));
   return card;
 }
-const flowName = (flow) => flow === 'weekly' ? '周报' : flow === 'radar' ? 'Daily Radar' : '待确认';
+const flowName = (flow) => flow === 'weekly' ? '研究简报' : flow === 'radar' ? '每日雷达' : '待确认';
 const reportDay = (value) => value ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' }).format(new Date(value)) : '待确认';
 function taskIssue(plan) {
   if (plan.status === 'unsupported') return ['本地运行路径不支持定时任务', '请切换至 Zotero Desktop 或 Zotero Web。', 'settings/runtime/path', '前往运行路径'];
   if (plan.status === 'invalid') {
-    const cause = plan.reason === 'SCHEDULE_WEEKLY_MODE_INVALID' ? '周报运行配置不兼容'
-      : plan.reason === 'SCHEDULE_INTERVAL_UNSUPPORTED' ? '周报周期配置不受支持'
+    const cause = plan.reason === 'SCHEDULE_WEEKLY_MODE_INVALID' ? '研究简报运行配置不兼容'
+      : plan.reason === 'SCHEDULE_INTERVAL_UNSUPPORTED' ? '研究简报周期配置不受支持'
         : plan.reason === 'SCHEDULE_STATE_UNREADABLE' ? '计划记录暂无法读取'
           : plan.reason?.startsWith('SCHEDULE_DAY_DECISION_') ? '当日计划记录异常' : '计划记录格式或内容不一致';
     const route = plan.reason === 'SCHEDULE_WEEKLY_MODE_INVALID' ? 'settings/automation/weekly' : 'system';
-    return ['计划状态异常', `${cause}；已暂停自动选择流程。`, route, route === 'system' ? '查看运行状态' : '前往周报设置'];
+    return ['计划状态异常', `${cause}；已暂停自动选择流程。`, route, route === 'system' ? '查看运行状态' : '前往研究简报设置'];
   }
   if (plan.currentRun?.state === 'unconfirmed') return ['上次运行结果尚未确认', '已暂停开启新的写入流程。', 'system', '查看运行状态'];
-  if (plan.currentRun?.flow === 'weekly' && plan.currentRun.business === 'completed' && plan.notification === 'pending') return ['周报已完成，通知待恢复', '周报主体已成功；通知按现有收据恢复。', 'system', '查看运行状态'];
+  if (plan.currentRun?.flow === 'weekly' && plan.currentRun.business === 'completed' && plan.notification === 'pending') return ['研究简报已完成，通知待恢复', '研究简报主体已成功；通知按现有收据恢复。', 'system', '查看运行状态'];
   if (plan.currentRun?.state === 'recovery_required') {
-    if (plan.currentRun.flow === 'weekly' && plan.currentRun.business === 'not_completed') return ['周报未完成，等待恢复', '周期尚未推进；下次仍将优先处理周报。', 'system', '查看运行状态'];
+    if (plan.currentRun.flow === 'weekly' && plan.currentRun.business === 'not_completed') return ['研究简报未完成，等待恢复', '周期尚未推进；下次仍将优先处理研究简报。', 'system', '查看运行状态'];
     return ['需要恢复上次运行', '上次任务仍待处理。', 'system', '查看运行状态'];
   }
-  if (plan.status === 'radar_disabled') return ['Daily Radar 未启用', '今日任务无法运行，也不会改为周报。', 'settings/automation/radar', '前往 Radar 设置'];
+  if (plan.status === 'radar_disabled') return ['每日雷达 未启用', '今日任务无法运行，也不会改为研究简报。', 'settings/automation/radar', '前往自动化设置'];
   return null;
 }
 function taskCard(plan) {
@@ -101,11 +101,11 @@ function taskCard(plan) {
     card.append(el('p', issue[0], 'plan-headline'), el('p', issue[1], 'meta'), button(issue[3], () => navigate(issue[2])));
     return card;
   }
-  if (!plan.weekly.lastSuccessfulPlannedSlot && !plan.currentRun) card.append(el('p', '尚未建立周报周期', 'plan-headline'), el('p', '首次计划任务将生成周报。', 'meta'));
+  if (!plan.weekly.lastSuccessfulPlannedSlot && !plan.currentRun) card.append(el('p', '尚未建立研究简报周期', 'plan-headline'), el('p', '首次计划任务将生成研究简报。', 'meta'));
   else card.append(el('p', flowName(plan.today.selectedFlow), 'plan-headline'));
   const facts = el('div', undefined, 'plan-facts');
   facts.append(el('span', `今天 ${plan.scheduledTime} · 北京时间`));
-  if (plan.weekly.nextDuePlannedSlot) facts.append(el('span', `${!plan.weekly.lastSuccessfulPlannedSlot ? '首次周报' : '下次周报'}：${plan.weekly.nextDuePlannedSlot === plan.today.plannedSlot ? `今天 ${plan.scheduledTime}` : reportDay(plan.weekly.nextDuePlannedSlot)}`));
+  if (plan.weekly.nextDuePlannedSlot) facts.append(el('span', `${!plan.weekly.lastSuccessfulPlannedSlot ? '首次研究简报' : '下次研究简报'}：${plan.weekly.nextDuePlannedSlot === plan.today.plannedSlot ? `今天 ${plan.scheduledTime}` : reportDay(plan.weekly.nextDuePlannedSlot)}`));
   card.append(facts);
   if (plan.status === 'before_slot') card.append(el('p', '尚未到时间', 'plan-state'));
   else if (plan.currentRun?.state === 'completed') card.append(el('p', '已完成', 'plan-state'));
@@ -332,7 +332,7 @@ async function home() {
   const actions = el('div', undefined, 'actions quick-links page-toolbar'); const review = button('开始文献评级', () => navigate('feedback/rating/normal')); review.className = 'primary'; actions.append(review, button('提交研究方向反馈', () => navigate('feedback/research'))); planCard.append(actions);
   const grid = el('div', undefined, 'grid page-summary');
   const date = (value) => value ? new Date(value).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }) : '暂无记录';
-  for (const [name, value] of [['最近周报', date(status.lastWeekly)], ['最近 Radar', date(status.lastRadar)], ['本次文献数量', visibleWeekly.length], ['待确认规则建议', status.pendingSuggestions ?? '暂无统计']]) {
+  for (const [name, value] of [['最近研究简报', date(status.lastWeekly)], ['最近每日雷达', date(status.lastRadar)], ['本次文献数量', visibleWeekly.length], ['待确认规则建议', status.pendingSuggestions ?? '暂无统计']]) {
     const card = el('section', undefined, 'card'); card.append(el('h3', name), el('p', String(value), 'metric')); grid.append(card);
   }
   main.append(grid, el('p', `A级 ${grades.A} · B级 ${grades.B} · C级 ${grades.C} · 待处理反馈 ${visibleWeekly.filter((item) => !item.feedback).length}`, 'overview-summary'));
@@ -571,7 +571,7 @@ async function research(showIntro = true) {
     } catch (error) { receipt.textContent = '提交未完成，输入已保留。'; throw error; } finally { input.disabled = false; }
   }); submit.className = 'primary';
   form.append(label('你的评价', input), el('p', '生成的建议会先进入人工确认，不会直接修改正式规则。', 'meta'), submit, receipt); const viewRules = button('查看规则建议', () => navigate('feedback/rules')); viewRules.hidden = true; form.append(viewRules);
-  main.append(workspaceColumns([form], [contextCard('提交后会发生什么', ['反馈立即保存，提交时不生成建议。', '下一次 Radar/Weekly 业务成功后发布建议，审核接受前不改变正式规则。'])]));
+  main.append(workspaceColumns([form], [contextCard('提交后会发生什么', ['反馈立即保存，提交时不生成建议。', '下一次 每日雷达/研究简报 业务成功后发布建议，审核接受前不改变正式规则。'])]));
 }
 async function suggestions(showIntro = true) {
   if (showIntro) main.append(pageIntro('规则建议审阅', '接受、拒绝或修改后提交，自动保存并继续下一条。'));
@@ -688,7 +688,7 @@ function rssEditor(setting, container) {
   draw(); container.append(list, button('添加 RSS', () => { entries.push({ name: '', url: '', enabled: false }); draw(); }));
   return () => structuredClone(entries);
 }
-const settingGroupNames = { General: '运行方式', Models: '模型与 AI', Sources: '文献数据库', Search: '检索周期', RSS: 'RSS 期刊订阅', 'Ranking / Review': '评审体验', Radar: 'Daily Radar', Weekly: '周报', Integrity: '撤稿与更正监测', Runtime: '运行路径', Notifications: '邮件与提醒', Credentials: '凭据' };
+const settingGroupNames = { General: '运行方式', Models: '模型与 AI', Sources: '文献数据库', Search: '检索周期', RSS: 'RSS 期刊订阅', 'Ranking / Review': '评审体验', Radar: '每日雷达', Weekly: '研究简报', Integrity: '撤稿与更正监测', Runtime: '运行路径', Notifications: '邮件与提醒', Credentials: '凭据' };
 function visibleSetting(setting) {
   if (['sources.domain', 'review.master', 'review.batch', 'general.profile', 'weekly.email', 'feedback.enabled', 'zotero.user', 'zotero.batch'].includes(setting.id)) return false;
   if (setting.category === 'Search') return ['pubmed.days', 'openalex.days'].includes(setting.id);
@@ -909,7 +909,7 @@ async function settings(group = settingsGroup, view = settingsView) {
   settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common';
   const requestedChannel = settingsGroup === 'connections' && notificationChannelIds.includes(view) ? view : null;
   settingsView = requestedChannel ? 'notifications' : view;
-  main.append(pageIntro(settingsGroup === 'review' ? 'AI 功能配置' : '工作空间设置', settingsGroup === 'review' ? '智能翻译与自适应学习共用一个模型服务。' : '设置本机工作空间与服务。'));
+  main.append(pageIntro(settingsGroup === 'review' ? 'AI 功能配置' : settingsGroup === 'automation' ? '自动化' : '工作空间设置', settingsGroup === 'review' ? '智能翻译与自适应学习共用一个模型服务。' : settingsGroup === 'automation' ? '安排研究任务的运行节奏。' : '设置本机工作空间与服务。'));
   if (settingsGroup === 'common') await appendLoginStartup(main);
   const data = await api('/api/settings');
   const credentials = await api('/api/credentials');
@@ -919,11 +919,49 @@ async function settings(group = settingsGroup, view = settingsView) {
   if (!views.some(([key]) => key === settingsView)) settingsView = views[0]?.[0] || settingViews[settingsGroup][0][0];
   if (views.length > 1) main.append(tertiaryNav('设置任务', views.map(([key, title]) => [key, title]), settingsView, `settings/${groupPath}`));
   const body = el('div', undefined, 'settings-body page-content'); main.append(body);
-  if (settingsGroup === 'automation' && settingsView === 'radar') body.append(el('p', '非周报日运行。', 'meta'));
-  if (settingsGroup === 'automation' && settingsView === 'weekly') {
-    body.append(el('p', '每 7 天生成一次。', 'meta'));
-    const profile = data.find((entry) => entry.id === 'general.profile');
-    if (profile?.value === 'radar') body.append(el('p', '当前旧运行配置仅指向 Radar，不适用于周报。', 'plan-alert'), button('修复为标准周报模式', async () => { await api('/api/settings', { id: 'general.profile', value: 'standard' }); notice.textContent = '周报执行模式已修复，下次运行生效。'; await settings(); }));
+  if (settingsGroup === 'automation') {
+    const registrationText = registration => {
+      if (registration?.state === 'registered') return '系统任务已注册：北京时间 15:00 自动运行，退出工作台后仍有效。';
+      if (registration?.state === 'disabled') return '系统自动化已关闭，任务已注销。';
+      const reasons = { SCHEDULER_PREVIEW_ONLY: '当前为模拟预览，不会创建系统任务。', SCHEDULER_HOST_TIMEZONE_REQUIRED: '当前 macOS 时区不受支持，需使用 Asia/Shanghai 时区。', SCHEDULER_PREFLIGHT_BLOCKED: '配置或运行状态未通过安全检查。', SCHEDULER_GUI_SESSION_REQUIRED: '需要在当前用户的桌面会话中启动。', SCHEDULER_TASK_RUNNING: '任务正在执行，请完成后重新保存。', SCHEDULER_PACKAGED_LAYOUT_REQUIRED: '开发或源码工作台不会注册系统任务。' };
+      return `${registration?.state === 'failed' ? '系统任务注册失败。' : '系统任务注册尚未确认。'}${reasons[registration?.code] || '请检查配置后重新保存，或重新启动应用。'}`;
+    };
+    const taskStatus = el('p', '正在核对系统任务…', 'meta'); taskStatus.setAttribute('aria-live', 'polite');
+    const card = el('section', undefined, 'settings-section automation-settings');
+    for (const [id, title, description] of [
+      ['radar.enabled', '每日雷达', '在研究简报间隔期间运行每日检索。'],
+      ['weekly.interval', '研究简报', '按间隔生成研究简报，默认每 7 天一次。'],
+      ['integrity.enabled', '撤稿检测', '运行时检查文献的撤稿与更正状态。'],
+    ]) {
+      const entry = data.find(item => item.id === id); const row = el('div', undefined, 'automation-row'); row.dataset.setting = id;
+      const copy = el('div', undefined, 'automation-copy'); const controlId = `automation-${id.replaceAll('.', '-')}`;
+      const titleLabel = el('label', title); titleLabel.htmlFor = controlId;
+      const hint = el('p', id === 'weekly.interval' && entry?.enabled === false ? '当前已停用；保存新间隔后启用。' : description, 'meta');
+      copy.append(titleLabel, hint); row.append(copy);
+      const controls = el('div', undefined, 'automation-controls');
+      if (!entry?.available) { controls.append(el('p', '配置暂不可用，请稍后重试。', 'field-error')); row.append(controls); card.append(row); continue; }
+      const input = id === 'weekly.interval' ? el('input') : settingControl(entry); input.id = controlId;
+      if (id === 'weekly.interval') { input.type = 'number'; input.min = entry.validation.min; input.max = entry.validation.max; input.step = '1'; input.required = true; input.value = entry.value; input.setAttribute('aria-describedby', `${controlId}-unit`); }
+      controls.append(input);
+      if (id === 'weekly.interval') { const unit = el('span', '天'); unit.id = `${controlId}-unit`; controls.append(unit); }
+      const save = button('保存', async () => {
+        const value = id === 'weekly.interval' ? Number(input.value) : input.checked;
+        if (id === 'weekly.interval' && (!input.value.trim() || !Number.isInteger(value) || value < Number(input.min) || value > Number(input.max))) {
+          input.setCustomValidity(`请输入 ${input.min}–${input.max} 之间的正整数天数。`); input.reportValidity(); notice.textContent = `研究简报间隔须为 ${input.min}–${input.max} 天的正整数，未保存。`; return;
+        }
+        notice.textContent = '正在保存并核对系统任务…';
+        const result = await api('/api/settings', { id, value }); entry.value = value;
+        if (id === 'weekly.interval') { entry.enabled = true; hint.textContent = description; }
+        taskStatus.textContent = registrationText(result.scheduling);
+        notice.textContent = `${title}配置已保存。${taskStatus.textContent}`;
+      });
+      input.addEventListener('input', () => input.setCustomValidity(''));
+      controls.append(save); row.append(controls); card.append(row);
+    }
+    body.append(card, taskStatus);
+    try { taskStatus.textContent = registrationText((await api('/api/schedule-status')).registration); }
+    catch { taskStatus.textContent = '系统任务注册状态未知，请重新读取。'; }
+    return;
   }
   const appendSettingsControls = (container, entries, saveName, saveLabel = '保存本组', featureToggleIds = [], featureOptions = {}) => {
     container.classList.add('settings-form-grid');
@@ -931,7 +969,7 @@ async function settings(group = settingsGroup, view = settingsView) {
     const orderedEntries = toggleIds.size ? [...entries].sort((a, b) => Number(toggleIds.has(b.id)) - Number(toggleIds.has(a.id))) : entries;
     for (const entry of orderedEntries) {
       const rowContainer = featureOptions.rowContainer?.(entry) || container;
-      const setting = { ...entry, sourceEntry: entry, optionScope: settingsView, description: entry.description.replace(/translation/g, '智能翻译').replace(/preference/g, '自适应学习').replace(/required/g, '必要').replace(/optional/g, '补充').replace(/negative/g, '排除').replace(/owner/g, '配置服务').replace(/workflow/g, '工作流').replace(/Weekly/g, '周报') };
+      const setting = { ...entry, sourceEntry: entry, optionScope: settingsView, description: entry.description.replace(/translation/g, '智能翻译').replace(/preference/g, '自适应学习').replace(/required/g, '必要').replace(/optional/g, '补充').replace(/negative/g, '排除').replace(/owner/g, '配置服务').replace(/workflow/g, '工作流').replace(/Weekly/g, '研究简报') };
       if (setting.id === 'sources.override') setting.description = settingsView === 'rss' ? 'RSS 订阅状态' : '选择 PaperEcho 用于检索论文的数据库来源';
       if (setting.id === 'pubmed.days') setting.description = 'PubMed / PMC 检索天数';
       if (setting.id === 'openalex.days') setting.description = 'OpenAlex 检索天数';
@@ -1037,14 +1075,14 @@ async function settings(group = settingsGroup, view = settingsView) {
   if (settingsGroup === 'connections' && settingsView === 'notifications') {
     const channelSettings = await api('/api/notifications');
     const preferences = el('section', undefined, 'settings-section section notification-preferences');
-    preferences.append(el('h3', '通知偏好', 'section-header'), el('p', '选择一次通知渠道，再分别开启 Daily Radar 与 Weekly 通知。平台配置在下方卡片中管理。', 'meta'));
+    preferences.append(el('h3', '通知偏好', 'section-header'), el('p', '选择一次通知渠道，再分别开启 每日雷达 与 Weekly 通知。平台配置在下方卡片中管理。', 'meta'));
     const names = { email: 'Email', qq: 'QQ', wechat: '微信', feishu: '飞书', wecom: '企业微信' };
     const globalIds = notificationChannelIds.map(id => `${id}.enabled`);
     const selector = el('fieldset', undefined, 'notification-global-channels'); selector.append(el('legend', '通知渠道'), el('p', 'PaperEcho 使用哪些平台发送通知。', 'meta')); preferences.append(selector);
     const events = new Map();
-    for (const [event, title] of [['radar', 'Daily Radar 通知'], ['weekly', 'Weekly 通知']]) {
+    for (const [event, title] of [['radar', '每日雷达 通知'], ['weekly', '研究简报通知']]) {
       const region = el('section', undefined, 'notification-event'); region.dataset.event = event;
-      region.append(el('h4', title), el('p', `开启后，${event === 'radar' ? 'Daily Radar' : 'Weekly'} 会通过上方选择的通知渠道发送。`, 'meta')); preferences.append(region); events.set(`notification.${event}`, region);
+      region.append(el('h4', title), el('p', `开启后，${event === 'radar' ? '每日雷达' : '研究简报'} 会通过上方选择的通知渠道发送。`, 'meta')); preferences.append(region); events.set(`notification.${event}`, region);
     }
     const other = el('details', undefined, 'notification-other'); other.append(el('summary', '其它提醒')); preferences.append(other);
     const preferenceEntries = data.filter(entry => globalIds.includes(entry.id) || entry.id.startsWith('notification.')).map(entry => ({ ...entry, description: globalIds.includes(entry.id) ? names[entry.id.split('.')[0]] : events.has(entry.id) ? '启用通知' : entry.description }));
@@ -1296,6 +1334,7 @@ function parseRoute(hash) {
     const groups = { general: 'common', common: 'common', models: 'review', review: 'review', runtime: 'runtime', automation: 'automation', connections: 'connections' };
     state.settingsGroup = groups[section] || 'common';
     const fallback = { common: 'databases', review: 'ai', runtime: 'path', automation: 'radar', connections: 'notifications' }[state.settingsGroup];
+    if (state.settingsGroup === 'automation') { state.settingsView = 'radar'; return state; }
     state.settingsView = settingViews[state.settingsGroup].some(([key]) => key === task) || state.settingsGroup === 'connections' && notificationChannelIds.includes(task) ? task : fallback;
   }
   return state;

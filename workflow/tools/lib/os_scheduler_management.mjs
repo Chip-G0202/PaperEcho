@@ -23,6 +23,7 @@ export async function manageOsSchedule(operation, { env = process.env, applicati
       || result.operation !== mapped || result.taskId !== report.spec.taskId) throw new Error('SCHEDULER_RESULT_INVALID');
     if (mapped !== 'status' && result.status !== (mapped === 'unregister' ? 'not-installed' : report.spec.enabled ? 'loaded' : 'installed-not-loaded')) throw new Error('SCHEDULER_RESULT_INVALID');
     const safe = { schemaVersion: 1, status: result.status, operation: mapped, taskId: result.taskId, osMutation: mapped !== 'status', readiness: report.status, releaseValidated: false };
+    if (typeof result.definitionMatches === 'boolean') safe.definitionMatches = result.definitionMatches;
     for (const key of ['pid', 'lastExit']) if (Number.isSafeInteger(result[key])) safe[key] = result[key];
     if (typeof result.unchanged === 'boolean') safe.unchanged = result.unchanged;
     return safe;

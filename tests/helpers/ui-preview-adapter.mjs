@@ -12,7 +12,6 @@ function installPaperEchoPreview(seed) {
   };
   const defaults = row => row.type === 'boolean' ? false : ['list', 'sources'].includes(row.type) ? [] : ['integer', 'number'].includes(row.type) ? row.validation?.min ?? 1 : row.type === 'enum' ? row.validation?.values?.[0] || '' : '';
   const settings = seed.registry.map(({ file, key, ...row }) => ({ ...row, value: values[row.id] ?? defaults(row), available: true, ownerPresent: true }));
-  settings.push({ id: 'weekly.interval', category: 'Weekly', type: 'integer', value: 7, available: true, readOnly: true, description: '默认 7 天（模拟）', validation: {} });
   let modelState = 'missing'; let failureMode = '';
   const fault = document.createElement('select'); fault.setAttribute('aria-label', '模拟保存与诊断状态');
   for (const [value, title] of [['', '模拟：正常保存与诊断'], ['save', '模拟：保存失败'], ['doctor', '模拟：诊断结果未知']]) { const option = document.createElement('option'); option.value = value; option.textContent = title; fault.append(option); }
@@ -51,7 +50,7 @@ function installPaperEchoPreview(seed) {
     if (options.method === 'POST') {
       activity.textContent = '模拟交互：仅更新浏览器内存，未保存真实配置、调用 AI 或提交业务操作。';
       if (route === '/api/ai/test') return response({ status: 'preview', preview: true });
-      if (route === '/api/settings') { if (failureMode === 'save') return response({ error: 'SETTING_VALUE_INVALID' }, 400); for (const update of body.updates || [body]) { const row = settings.find(s => s.id === update.id); if (row) row.value = update.value; } if (setting('ai.enabled')) for (const name of ['translation', 'preference']) for (const key of ['endpoint', 'model', 'temperature', 'timeout', 'top_p', 'stream', 'thinking', 'max_retries']) { const row = settings.find(s => s.id === name + '.' + key); if (row) row.value = setting('ai.' + (key === 'timeout' ? 'timeout_ms' : key)); } return response({ results: body.updates || [body], preview: true }); }
+      if (route === '/api/settings') { if (failureMode === 'save') return response({ error: 'SETTING_VALUE_INVALID' }, 400); for (const update of body.updates || [body]) { const row = settings.find(s => s.id === update.id); if (row) { row.value = update.value; if (row.id === 'weekly.interval') row.enabled = true; } } if (setting('ai.enabled')) for (const name of ['translation', 'preference']) for (const key of ['endpoint', 'model', 'temperature', 'timeout', 'top_p', 'stream', 'thinking', 'max_retries']) { const row = settings.find(s => s.id === name + '.' + key); if (row) row.value = setting('ai.' + (key === 'timeout' ? 'timeout_ms' : key)); } return response({ results: body.updates || [body], preview: true, scheduling: { state: 'unknown', code: 'SCHEDULER_PREVIEW_ONLY' } }); }
       if (route === '/api/feedback') { const item = papers.find(p => p.id === body.paperId); if (item) { if (body.manualGrade) item.manualGrade = body.manualGrade; else item.feedback = body.value; } return response({ status: 'recorded', preview: true }); }
       if (route === '/api/research') return response({ status: 'pending', saved: true, preview: true });
       if (route === '/api/decision') { const item = rules.find(r => r.id === body.id); if (item) item.status = body.decision; return response({ status: body.decision, application_status: 'requires_manual_action', preview: true }); }
@@ -64,7 +63,7 @@ function installPaperEchoPreview(seed) {
       case '/api/credentials': return response(credentials());
       case '/api/setup': return response({ needsSetup: false, persisted: true, canRun: true, mode: setting('runtime.mode'), roots: { layout: 'installed', userDataRoot: '/模拟工作空间', cacheRoot: '/模拟缓存', activeMode: setting('runtime.mode') }, requiredMissing: [], optionalMissing: [], readiness: [] });
       case '/api/status': return response({ lastWeekly: '2026-11-01T07:00:00Z', lastRadar: '2026-11-01T06:00:00Z', pendingSuggestions: rules.filter(r => r.status === 'pending').length, lastRun: { status: 'completed' }, needsReview: 1 });
-      case '/api/schedule-status': return response({ status: 'before_slot', scheduledTime: '15:00', weekly: { lastSuccessfulPlannedSlot: '2026-11-01T07:00:00Z', nextDuePlannedSlot: '2026-11-08T07:00:00Z' }, today: { selectedFlow: 'radar', plannedSlot: '2026-11-01T07:00:00Z' }, currentRun: null });
+      case '/api/schedule-status': return response({ registration: { state: 'unknown', code: 'SCHEDULER_PREVIEW_ONLY' }, status: 'before_slot', scheduledTime: '15:00', weekly: { lastSuccessfulPlannedSlot: '2026-11-01T07:00:00Z', nextDuePlannedSlot: '2026-11-08T07:00:00Z' }, today: { selectedFlow: 'radar', plannedSlot: '2026-11-01T07:00:00Z' }, currentRun: null });
       case '/api/weekly': return response({ runId: 'preview-weekly', total: papers.length, items: papers });
       case '/api/pending-summary': return response({ normal: papers.filter(p => !p.pendingReview && !p.feedback).length, manual: papers.filter(p => p.pendingReview && !p.manualGrade).length, rules: rules.filter(r => r.status === 'pending').length });
       case '/api/suggestions': return response(rules.filter(r => r.status === 'pending'));

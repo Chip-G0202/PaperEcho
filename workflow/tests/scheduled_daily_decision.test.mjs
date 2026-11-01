@@ -58,7 +58,7 @@ test('corrupted, contradictory and future state fail closed', () => {
     { ...baseline, last_successful_full_run_at: day(-1).toISOString() },
     { ...baseline, last_successful_scheduled_run_at: day(9).toISOString() },
   ]) assert.throws(() => select(7, { runtimeState: state }), /SCHEDULE_STATE_INVALID/);
-  assert.throws(() => select(7, { intervalDays: 14 }), /SCHEDULE_INTERVAL_UNSUPPORTED/);
+  assert.throws(() => select(7, { intervalDays: 0 }), /SCHEDULE_INTERVAL_UNSUPPORTED/);
 });
 
 test('state reader distinguishes missing, unreadable and malformed from an empty initial state', async () => {
@@ -69,3 +69,14 @@ test('state reader distinguishes missing, unreadable and malformed from an empty
   await assert.rejects(readScheduledRuntimeState('unused', { readFile: async () => '{' }), /SCHEDULE_STATE_INVALID:json/);
   await assert.rejects(readScheduledRuntimeState('unused', { readFile: async () => { throw new Error('permission'); } }), /SCHEDULE_STATE_UNREADABLE/);
 });
+
+ test('custom intervals preserve the success anchor and disabled brief never takes over', () => {
+  assert.equal(select(7, { intervalDays: 14 }).selectedFlow, 'radar');
+  assert.equal(select(14, { intervalDays: 14 }).selectedFlow, 'weekly');
+  assert.equal(select(7, { intervalDays: 14 }).nextWeeklySlot, day(14).toISOString());
+  assert.equal(select(1, { intervalDays: 1 }).selectedFlow, 'weekly');
+  assert.equal(select(30, { weeklyEnabled: false }).selectedFlow, 'radar');
+  assert.equal(select(30, { weeklyEnabled: false, radarEnabled: false }).allowed, false);
+  assert.equal(select(30, { weeklyEnabled: false }).nextWeeklySlot, null);
+  for (const intervalDays of [-1, 1.5, NaN, Infinity]) assert.throws(() => select(7, { intervalDays }), /SCHEDULE_INTERVAL_UNSUPPORTED/);
+ });

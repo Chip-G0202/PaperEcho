@@ -81,23 +81,15 @@ test('sidebar footer offers one accessible GitHub Star link without API or track
   assert.match(css, /@media\(max-width:760px\)[^\n]*\.sidebar-footer\{padding-top:12px\}/);
 });
 
-test('Overview keeps read-only schedule facts while Automation has only actionable tabs', () => {
-  assert.match(app, /automation: \[\['radar', 'Daily Radar'[^\n]*\['weekly', '周报'/);
-  assert.doesNotMatch(app, /\['plan', '每日计划'|每日计划运行|Weekly 周报|运行机制|外部 Agent|Control Center 无需保持打开/);
-  assert.match(app, /api\('\/api\/schedule-status'\)/);
-  assert.match(app, /timeZone: 'Asia\/Shanghai'/);
-  assert.match(app, /function taskCard\(plan\)/);
-  assert.match(app, /今天 \$\{plan\.scheduledTime\} · 北京时间/);
-  assert.match(app, /下次周报/);
-  assert.match(app, /尚未建立周报周期/);
-  assert.match(app, /Radar 未启用/);
-  assert.match(app, /计划状态异常/);
-  assert.match(app, /周报已完成，通知待恢复/);
-  assert.match(app, /本地运行路径不支持定时任务/);
-  assert.match(app, /非周报日运行/);
-  assert.match(app, /每 7 天生成一次/);
+test('Overview keeps schedule facts while Automation uses one three-row settings card', () => {
+  assert.match(app, /automation: \[\['radar', '自动化', \['Radar', 'Weekly', 'Integrity'\]\]\]/);
+  assert.match(app, /automation-settings/); assert.match(app, /\['radar.enabled', '每日雷达'/);
+  assert.match(app, /\['weekly.interval', '研究简报'/); assert.match(app, /\['integrity.enabled', '撤稿检测'/);
+  assert.match(app, /input.step = '1'/); assert.match(app, /Number.isInteger\(value\)/);
+  assert.match(app, /api\('\/api\/schedule-status'\)/); assert.match(app, /function taskCard\(plan\)/);
+  assert.match(app, /下次研究简报/); assert.match(app, /每日雷达 未启用/);
   assert.match(app, /section === 'automation' && task === 'plan'/);
-  assert.doesNotMatch(app, /Agent：运行中|自动任务已启用|下一次 Agent 运行/);
+  assert.match(app, /if \(state.settingsGroup === 'automation'\) \{ state.settingsView = 'radar'; return state; \}/);
 });
 test('header and favicon reference the same canonical SVG mark', () => {
   assert.match(html, /rel="icon" href="\/paperecho-mark\.svg\?v=2\.4" type="image\/svg\+xml"/);

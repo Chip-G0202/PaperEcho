@@ -51,7 +51,7 @@ export function validateApplicationSections(config) {
     if (value.sources !== undefined && !Array.isArray(value.sources)) throw new Error('APPLICATION_CONFIG_VALUE_INVALID');
     if (section === 'rss' && value.sources?.some(source => object(source) && !isValidRssPublicationTitle(source.publicationTitle))) throw new Error('APPLICATION_CONFIG_VALUE_INVALID');
   }
-  if (config.weekly !== undefined && (!object(config.weekly) || !Number.isInteger(config.weekly.intervalDays) || config.weekly.intervalDays < 1)) throw new Error('APPLICATION_CONFIG_WEEKLY_INVALID');
+  if (config.weekly !== undefined && (!object(config.weekly) || !Number.isInteger(config.weekly.intervalDays) || config.weekly.intervalDays < 1 || (config.weekly.enabled !== undefined && typeof config.weekly.enabled !== 'boolean'))) throw new Error('APPLICATION_CONFIG_WEEKLY_INVALID');
   return config;
 }
 export function applicationConfigPath({ root, env = process.env, configPath } = {}) {

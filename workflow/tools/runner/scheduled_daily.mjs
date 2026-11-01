@@ -45,6 +45,7 @@ export async function selectScheduledDailyRun(resolved, {
       const state = await readScheduledRuntimeState(path.join(runtime.researchRoot, "runtime_state.json"), fsApi);
       const decision = decideScheduledDaily({ now, ...state, weeklyMode: options.profile,
         radarEnabled: resolved.config?.common?.radar?.enabled === true,
+        weeklyEnabled: resolved.config?.profile !== 'radar' && resolved.config?.weekly?.enabled !== false,
         intervalDays: Number(env.review_results_RUN_INTERVAL_DAYS || 7) });
       if (!decision.allowed || decision.selectedFlow !== "weekly") throw new Error("SCHEDULE_DAY_DECISION_CONFLICT");
       return { status: "ready", decision, resolved: withRunnerProfile(resolved, options.profile) };
@@ -71,6 +72,7 @@ export async function selectScheduledDailyRun(resolved, {
   const decision = decideScheduledDaily({
     now, ...state, weeklyMode: options.profile,
     radarEnabled: resolved.config?.common?.radar?.enabled === true,
+    weeklyEnabled: resolved.config?.profile !== 'radar' && resolved.config?.weekly?.enabled !== false,
     intervalDays: Number(env.review_results_RUN_INTERVAL_DAYS || 7),
   });
   if (!decision.allowed) return { status: decision.reason, decision };

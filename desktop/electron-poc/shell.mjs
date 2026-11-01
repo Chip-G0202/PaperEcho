@@ -93,7 +93,13 @@ export async function acquireServer(root, { port = 8765, env } = {}) {
   for (let attempt = 0; attempt < ports.length; attempt++) {
     const selected = await discoverControlCenter(ports, instance);
     if (!selected) throw new Error('PORT_OCCUPIED');
-    if (selected.status === 'same') return { url: selected.url, owned: false, context: startup.context, close: async () => {} };
+    if (selected.status === 'same') {
+      // Reopening Electron must also repair a missing task when an independently
+      // launched HTML backend already owns this workspace's HTTP server.
+      const { createControlServices } = await import(pathToFileURL(path.join(moduleRoot, 'workflow/tools/lib/control_application_services.mjs')).href);
+      await createControlServices({ root, env: startup.env, context: startup.context }).automation.reconcile();
+      return { url: selected.url, owned: false, context: startup.context, close: async () => {} };
+    }
     try {
       const running = await startControlCenter({ ...startup, port: selected.port });
       return { ...running, owned: true, context: startup.context, close: async () => {

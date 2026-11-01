@@ -150,3 +150,17 @@ test('unsafe ancestor, forged spec and concurrent management cannot mutate a for
   await assert.rejects(g.run('register', { ...g.spec, executable: '/bin/sh', secret: 'private-test-key' }), /^Error: SCHEDULER_SPEC_INVALID$/);
   await assert.rejects(manageOsSchedule('register', { inspect: async () => ({ status: 'UNKNOWN', spec: g.spec }), adapter: { execute: () => assert.fail('Incomplete Mac safety checks must not be bypassed') } }), /SCHEDULER_PREFLIGHT_BLOCKED/);
 });
+
+test('standard root:admin Applications ancestor is accepted without accepting other writable directories',async()=>{
+  const prepare=gid=>{
+    const f=fixture();f.dirs('/Applications/PaperEcho.app/Contents/MacOS');
+    Object.assign(f.nodes.get('/Applications'),{uid:0,gid,mode:0o40775});
+    f.add('/Applications/PaperEcho.app/Contents/MacOS/PaperEcho',false,'fixture executable');
+    const spec=scheduleSpec({platform:'darwin',paths:{applicationRoot:'/Applications',userDataRoot:f.spec.userDataRoot,cacheRoot:f.spec.cacheRoot,layout:'installed'},config:{schemaVersion:6,mode:'desktop',scheduler:{schemaVersion:1,enabled:true,time:'15:00',timezone:'Asia/Shanghai'}}});
+    return {f,spec};
+  };
+  const {f,spec}=prepare(80);assert.equal((await f.run('register',spec)).status,'loaded');
+  const other=prepare(20);await assert.rejects(other.f.run('register',other.spec),/SCHEDULER_PATH_UNSAFE/);
+  const world=prepare(80);world.f.nodes.get('/Applications').mode=0o40777;
+  await assert.rejects(world.f.run('register',world.spec),/SCHEDULER_PATH_UNSAFE/);
+});

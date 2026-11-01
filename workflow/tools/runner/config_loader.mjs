@@ -322,6 +322,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
     effectiveEnv.PAPERECHO_APPLICATION_CONFIG = loaded.configPath;
     effectiveEnv.review_results_RUN_INTERVAL_DAYS = String(config.weekly?.intervalDays || 7);
   }
+  setEnvValue(effectiveEnv, "PAPERECHO_WEEKLY_ENABLED", config?.profile !== 'radar' && config?.weekly?.enabled !== false);
   if (cliOptions.preferenceConfig) effectiveEnv.PAPERECHO_INVOCATION_PREFERENCE_CONFIG = cliOptions.preferenceConfig;
   if (cliOptions.translationConfig) effectiveEnv.PAPERECHO_INVOCATION_TRANSLATION_CONFIG = cliOptions.translationConfig;
   const secretStatus = {};

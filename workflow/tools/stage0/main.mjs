@@ -235,6 +235,7 @@ export async function runZoteroLiteratureFilter({
       now: new Date(startedAt), ...state,
       weeklyMode: env.PAPERECHO_SCHEDULED_WEEKLY_MODE || "standard",
       radarEnabled: /^(1|true|yes|on)$/i.test(String(env.PAPERECHO_RADAR_ENABLED || "")),
+      weeklyEnabled: env.PAPERECHO_WEEKLY_ENABLED !== "false",
       intervalDays: Number(env.review_results_RUN_INTERVAL_DAYS || 7),
     });
     if (!scheduledDailyDecision.allowed

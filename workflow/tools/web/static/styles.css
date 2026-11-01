@@ -243,3 +243,15 @@ input[role=switch]{appearance:none;width:48px;height:28px;border-radius:20px;bac
 .workbench-view #content .setup-check-groups h4{margin:0 0 8px}
 .workbench-view #content .setup-check-groups ul{margin:0;padding-left:22px}
 @media(max-width:760px){.workbench-view .channel-backdrop{padding:calc(var(--preview-banner-height,0px) + 12px) 12px 12px}.workbench-view .channel-dialog.settings-section{max-height:calc(100dvh - var(--preview-banner-height,0px) - 24px)}.workbench-view .channel-dialog-body,.workbench-view .channel-credentials,.workbench-view #content .setup-check-groups{grid-template-columns:minmax(0,1fr)}}
+
+/* Automation groups related controls within three natural-height rows. */
+.workbench-view #content .automation-settings{margin:0;padding:0 24px}
+.workbench-view #content .automation-row{display:flex;align-items:center;justify-content:space-between;gap:20px 32px;padding:22px 0}
+.workbench-view #content .automation-row+.automation-row{border-top:1px solid var(--border)}
+.workbench-view #content .automation-copy{min-width:0}
+.workbench-view #content .automation-copy label{font-size:16px;font-weight:650}
+.workbench-view #content .automation-copy p{margin:6px 0 0;font-size:14px}
+.workbench-view #content .automation-controls{display:flex;align-items:center;justify-content:flex-end;gap:12px;min-width:230px}
+.workbench-view #content .automation-controls input[type=number]{width:100px;margin:0}
+.workbench-view #content .automation-controls input[type=checkbox]{margin:0}
+@media(max-width:760px){.workbench-view #content .automation-settings{padding:0 18px}.workbench-view #content .automation-row{flex-direction:column;align-items:stretch;gap:14px}.workbench-view #content .automation-controls{min-width:0;justify-content:flex-start}.workbench-view #content .automation-controls button{margin-left:auto}}

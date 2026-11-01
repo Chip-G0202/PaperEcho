@@ -104,7 +104,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
         if (decoded === '/api/doctor/configuration') return send(200, await services.doctor.configuration());
         if (decoded === '/api/doctor') return send(200, await services.doctor.status());
         if (decoded === '/api/setup') return send(200, await services.setup.status());
-        if (decoded === '/api/schedule-status') return send(200, await services.schedule.status());
+        if (decoded === '/api/schedule-status') return send(200, { ...await services.schedule.status(), registration: await services.automation?.status() || { state: 'unknown' } });
         if (decoded === '/api/status') return send(200, await services.review.status());
         if (decoded === '/api/weekly') return send(200, await services.review.weekly({ offset: Number(url.searchParams.get('offset') || 0), limit: Number(url.searchParams.get('limit') || 50) }));
         if (decoded === '/api/pending-summary') return send(200, await services.review.pendingSummary());
@@ -144,8 +144,11 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
         return send(202, { status: 'stopping' });
       }
       if (decoded === '/api/credentials') {
-        if (input.action === 'replace') return send(200, await services.secrets.replace(input.id, input.value), true);
-        if (input.action === 'clear') return send(200, await services.secrets.clear(input.id), true);
+        if (['replace', 'clear'].includes(input.action)) {
+          const result = await services.secrets[input.action](input.id, ...(input.action === 'replace' ? [input.value] : []));
+          await services.automation?.reconcile();
+          return send(200, result, true);
+        }
         return send(400, { error: 'CREDENTIAL_ACTION_NOT_SUPPORTED' });
       }
       if (decoded === '/api/feedback') {
@@ -167,6 +170,8 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
   server.headersTimeout = 10000;
   server.maxHeadersCount = 40;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
+  // Called once per owned local backend, not on GET, tab navigation or Headless runs.
+  await services.automation?.reconcile();
   return { server, url: `http://${host === '::1' ? '[::1]' : host}:${server.address().port}` };
 }
 

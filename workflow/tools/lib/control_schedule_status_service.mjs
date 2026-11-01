@@ -30,11 +30,11 @@ export class ControlScheduleStatusService {
       if (result.runtimePath === 'local') { result.status = 'unsupported'; return result; }
       if (!['desktop', 'web'].includes(result.runtimePath)) throw new Error('SCHEDULE_MODE_UNSUPPORTED');
       const intervalDays = Number(owner.weekly?.intervalDays || this.context.env?.review_results_RUN_INTERVAL_DAYS || 7);
-      const weeklyMode = owner.profile || 'standard';
+      const weeklyMode = owner.profile === 'radar' ? 'standard' : owner.profile || 'standard';
       const state = await readScheduledRuntimeState(path.join(this.context.researchRoot, 'runtime_state.json'), this.fsApi);
       // Preview no earlier than the planned slot. A Weekly may finish later that day.
-      const preview = decideScheduledDaily({ now: new Date(now) < new Date(plannedSlot) ? plannedSlot : now, ...state, weeklyMode, radarEnabled: true, intervalDays });
-      const decision = decideScheduledDaily({ now, ...state, weeklyMode, radarEnabled: result.radarEnabled, intervalDays });
+      const preview = decideScheduledDaily({ now: new Date(now) < new Date(plannedSlot) ? plannedSlot : now, ...state, weeklyMode, radarEnabled: true, weeklyEnabled: owner.profile !== 'radar' && owner.weekly?.enabled !== false, intervalDays });
+      const decision = decideScheduledDaily({ now, ...state, weeklyMode, radarEnabled: result.radarEnabled, weeklyEnabled: owner.profile !== 'radar' && owner.weekly?.enabled !== false, intervalDays });
       result.today = { plannedSlot, selectedFlow: preview.selectedFlow, reason: decision.reason };
       result.weekly = { lastSuccessfulPlannedSlot: preview.referenceSlot || null, nextDuePlannedSlot: preview.nextWeeklySlot || null };
       result.status = decision.reason === 'before_scheduled_slot' ? 'before_slot'

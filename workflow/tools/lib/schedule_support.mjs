@@ -245,11 +245,12 @@ export function decideScheduledDaily({
   weeklyMode = "standard",
   radarEnabled = false,
   intervalDays = 7,
+  weeklyEnabled = true,
 } = {}) {
   const current = new Date(now);
   if (!Number.isFinite(current.getTime())) throw new Error("SCHEDULE_TIME_INVALID");
   if (!["standard", "complete"].includes(weeklyMode)) throw new Error("SCHEDULE_WEEKLY_MODE_INVALID");
-  if (intervalDays !== 7) throw new Error("SCHEDULE_INTERVAL_UNSUPPORTED");
+  if (!Number.isSafeInteger(intervalDays) || intervalDays < 1) throw new Error("SCHEDULE_INTERVAL_UNSUPPORTED");
   if (statePresent && (!runtimeState || typeof runtimeState !== "object" || Array.isArray(runtimeState))) throw new Error("SCHEDULE_STATE_INVALID:root");
   const state = runtimeState || {};
   const slot = resolvePlannedSlotAt(current);
@@ -279,18 +280,18 @@ export function decideScheduledDaily({
   }
   if (referenceSlot && referenceSlot > slot) throw new Error("SCHEDULE_STATE_INVALID:future_weekly_slot");
   if (current < slot) return { allowed: false, reason: "before_scheduled_slot", plannedSlot, selectedFlow: null, weeklyMode: null, referenceField };
-  const due = !referenceSlot || slot.getTime() - referenceSlot.getTime() >= 7 * 86400000;
+  const due = weeklyEnabled && (!referenceSlot || slot.getTime() - referenceSlot.getTime() >= intervalDays * 86400000);
   const selectedFlow = due ? "weekly" : "radar";
   if (!due && !radarEnabled) return { allowed: false, reason: "scheduled_radar_disabled", plannedSlot, selectedFlow, weeklyMode: null, referenceField };
   return {
     allowed: true,
-    reason: !referenceSlot ? "first_weekly" : due ? "weekly_due" : "weekly_not_due",
+    reason: !weeklyEnabled ? "weekly_disabled" : !referenceSlot ? "first_weekly" : due ? "weekly_due" : "weekly_not_due",
     plannedSlot,
     selectedFlow,
     weeklyMode: due ? weeklyMode : null,
     referenceField,
     referenceSlot: referenceSlot?.toISOString() || null,
-    nextWeeklySlot: referenceSlot ? new Date(referenceSlot.getTime() + 7 * 86400000).toISOString() : plannedSlot,
+    nextWeeklySlot: !weeklyEnabled ? null : referenceSlot ? new Date(referenceSlot.getTime() + intervalDays * 86400000).toISOString() : plannedSlot,
   };
 }
 

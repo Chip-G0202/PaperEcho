@@ -1,3 +1,4 @@
+import { ControlAutomationService } from './control_automation_service.mjs';
 import path from 'node:path';
 import { FeedbackService } from './control_feedback_service.mjs';
 import { ConfigService } from './control_config_service.mjs';
@@ -27,10 +28,12 @@ export function createControlServices({ root, reviewRoot, env = process.env, llm
     researchEvaluation: input => research.submit(input),
   });
   const review = new ReviewQueryService({ root, reviewRoot, feedback, rules, context });
+  const automation = new ControlAutomationService({ config, context, env });
+  config.afterSave = updates => automation.changed(updates);
   const schedule = new ControlScheduleStatusService({ context: { ...context, reviewRoot }, config });
   const notifications = new NotificationChannelService({ config, secrets, review, context, env, transport: notificationTransport, qqTransport, channelTransports });
   const setup = new SetupService({ config, context, env });
   const doctor = new DoctorService({ config, secrets, research, review, context, env });
   const supportBundle = new SupportBundleService({ doctor, secrets, context, env });
-  return { feedback, config, rules, secrets, review, schedule, notifications, research, setup, doctor, supportBundle };
+  return { feedback, config, rules, secrets, review, schedule, automation, notifications, research, setup, doctor, supportBundle };
 }

@@ -22,7 +22,7 @@ export function validateMacScheduleSpec(spec) {
 function content(spec) { return scheduleDefinition(spec).content + marker + Buffer.from(JSON.stringify(spec)).toString('base64') + ' -->\n'; }
 
 // Explicit adapter. Management requires local safety checks independently of
-// platform release acceptance; never register during ordinary startup.
+// platform release acceptance; startup reconciliation uses this same ownership boundary.
 export class MacLaunchAgent {
   constructor({ fsApi = fs, execute = nativeExec, platform = process.platform, identity = () => os.userInfo(), timezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone } = {}) {
     Object.assign(this, { fs: fsApi, command: execute, platform, identity, timezone });
@@ -47,7 +47,8 @@ export class MacLaunchAgent {
     // list has documented PID/exit-status/label columns. Never parse `print`'s
     // explicitly unstable diagnostics or localized error strings as security data.
     if ((await cmd(['manageruid'])).stdout.trim() !== String(user.uid) || (await cmd(['managername'])).stdout.trim() !== 'Aqua') fail('SCHEDULER_GUI_SESSION_REQUIRED');
-    await cmd(['print', domain]);
+    // manageruid + Aqua bind this process to the current GUI domain. Avoid
+    // `print gui/UID`: its unbounded diagnostic dump is neither parsed nor needed.
     const query = async () => {
       const lines = (await cmd(['list'])).stdout.trim().split(/\r?\n/);
       if (lines.shift() !== 'PID\tStatus\tLabel') fail('SCHEDULER_QUERY_FAILED');
@@ -61,8 +62,11 @@ export class MacLaunchAgent {
     };
     const guard = async (p, directory = false, ancestor = false) => {
       const stat = await this.fs.lstat(p);
+      // macOS ships /Applications as root:admin 0775. Trust only this exact
+      // system ancestor; user data, app contents and all other paths stay private.
+      const systemApplications = ancestor && directory && p === '/Applications' && stat.uid === 0 && stat.gid === 80 && (stat.mode & 0o777) === 0o775;
       if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1)
-        || ![user.uid, ...(ancestor ? [0] : [])].includes(stat.uid) || stat.mode & 0o022) fail('SCHEDULER_PATH_UNSAFE');
+        || ![user.uid, ...(ancestor ? [0] : [])].includes(stat.uid) || (stat.mode & 0o022) && !systemApplications) fail('SCHEDULER_PATH_UNSAFE');
       return stat;
     };
     const parents = async p => { for (const part of p.split('/').filter(Boolean).reduce((a, b) => [...a, path.join(a.at(-1) || '/', b)], [])) await guard(part, true, !part.startsWith(user.homedir)); };
@@ -106,7 +110,7 @@ export class MacLaunchAgent {
       if (await read(backup)) fail('SCHEDULER_RECOVERY_REQUIRED');
       const old = await read(file), loaded = await query();
       if (!old && loaded) fail('SCHEDULER_TASK_OWNERSHIP_MISMATCH');
-      if (op === 'status') return { status: loaded ? 'loaded' : old ? 'installed-not-loaded' : 'not-installed', operation: op, taskId: spec.taskId, ...loaded };
+      if (op === 'status') return { status: loaded ? 'loaded' : old ? 'installed-not-loaded' : 'not-installed', operation: op, taskId: spec.taskId, definitionMatches: Boolean(old && old.text === content(spec)), ...loaded };
       if (loaded?.pid) fail('SCHEDULER_TASK_RUNNING');
       if (op === 'register' && old && old.text !== content(spec)) fail('SCHEDULER_TASK_DEFINITION_MISMATCH');
       if (op === 'update' && !old) fail('SCHEDULER_TASK_NOT_FOUND');

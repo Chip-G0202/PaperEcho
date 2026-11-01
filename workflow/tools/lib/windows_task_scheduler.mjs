@@ -36,7 +36,7 @@ function Matches-Definition($task, $request) {
 }
 
 try {
-  if ($PSVersionTable.PSVersion.Major -lt 7) { Fail 'SCHEDULER_POWERSHELL_7_REQUIRED' }
+  if ($PSVersionTable.PSVersion.Major -lt 7 -or $PSVersionTable.PSEdition -ne 'Core') { Fail 'SCHEDULER_POWERSHELL_7_REQUIRED' }
   [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
   $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
   if ($request.schemaVersion -ne 1 -or $request.operation -notin @('register','query','enable','disable','update','run','delete')) { Fail 'SCHEDULER_ARGUMENT_INVALID' }
@@ -57,6 +57,22 @@ try {
   if (-not $folder -and $request.operation -eq 'register') {
     try { $folder = $service.GetFolder('\').CreateFolder('PaperEcho', $null) }
     catch { $folder = $service.GetFolder('\PaperEcho') }
+  }
+  if ($request.installationCleanup -and $request.operation -eq 'delete') {
+    # Only tasks owned by this user and pointing at this exact installed binary.
+    $removed = 0
+    if ($folder) { foreach ($candidate in @($folder.GetTasks(0))) {
+      $n = $candidate.Name; $d = $candidate.Definition; $p = $d.Principal
+      if ($n -notmatch '^PaperEcho-[a-f0-9]{24}$' -or $d.RegistrationInfo.Description -cne ('PaperEcho scheduler v1 ' + $n)) { continue }
+      $owner = if ($p.UserId -match '^S-1-') { $p.UserId } else { ([Security.Principal.NTAccount]::new($p.UserId)).Translate([Security.Principal.SecurityIdentifier]).Value }
+      if ($owner -ne $sid -or $p.LogonType -ne 3 -or $p.RunLevel -ne 0 -or $d.Actions.Count -ne 1 -or $d.Actions.Item(1).Type -ne 0 -or $d.Actions.Item(1).Path -ine $request.executable) { continue }
+      if ($candidate.GetInstances(0).Count -gt 0) { Fail 'SCHEDULER_TASK_RUNNING' }
+      $folder.DeleteTask($n, 0)
+      try { $null = $folder.GetTask($n); Fail 'SCHEDULER_DELETE_UNCONFIRMED' } catch { if (-not (Missing $_)) { throw } }
+      $removed++
+    } }
+    [Console]::Out.Write((@{schemaVersion=1;status='PASS';exists=$false;removedCount=$removed} | ConvertTo-Json -Compress))
+    exit 0
   }
   if ($folder) {
     try { $task = $folder.GetTask($name) } catch { if (-not (Missing $_)) { throw } }
@@ -122,12 +138,18 @@ export class WindowsTaskScheduler {
       scheduler: { schemaVersion: 1, enabled: false, time: '15:00', timezone: 'Asia/Shanghai' } } });
     return { ...await this.execute('query', probe), presenceOnly: true };
   }
-  async execute(operation, input) {
+  async removeInstallationTasks(paths) {
+    const spec = scheduleSpec({ paths, platform: 'win32', config: { schemaVersion: 6, mode: 'desktop',
+      scheduler: { schemaVersion: 1, enabled: false, time: '15:00', timezone: 'Asia/Shanghai' } } });
+    return this.execute('delete', spec, { installationCleanup: true });
+  }
+  async execute(operation, input, { installationCleanup = false } = {}) {
     if (!taskOperations.includes(operation)) fail('SCHEDULER_ARGUMENT_INVALID');
     const spec = validateWindowsScheduleSpec(input);
     const name = (this.sandboxOnly ? 'PaperEcho-Sandbox-Test-' : 'PaperEcho-') + spec.taskId.slice('PaperEcho-'.length);
     // COM XmlText receives a UTF-16 BSTR; the downloadable UTF-8 template stays unchanged.
     const request = { schemaVersion: 1, operation, sandboxOnly: this.sandboxOnly, name, taskId: spec.taskId,
+      ...(installationCleanup ? { installationCleanup: true } : {}),
       triggerEnabled: spec.enabled, executable: spec.executable, arguments: spec.args.map(windowsArgument).join(' '), workingDirectory: spec.workingDirectory,
       ...(['register', 'update'].includes(operation) ? { definition: scheduleDefinition(spec).content.replace('encoding="UTF-8"', 'encoding="UTF-16"') } : {}) };
     let report;
@@ -160,7 +182,7 @@ export class WindowsTaskScheduler {
     // Explicit projection; native XML, account names and paths never leave the adapter.
     const safe = { schemaVersion: 1, status: 'PASS', operation, taskId: spec.taskId, osMutation: operation !== 'query', exists: report.exists };
     for (const key of ['definitionMatches', 'currentUser', 'leastPrivilege', 'interactiveToken', 'enabled']) if (typeof report[key] === 'boolean') safe[key] = report[key];
-    for (const key of ['state', 'runningInstances', 'lastTaskResult', 'missedRuns']) if (Number.isSafeInteger(report[key])) safe[key] = report[key];
+    for (const key of ['state', 'runningInstances', 'lastTaskResult', 'missedRuns', 'removedCount']) if (Number.isSafeInteger(report[key])) safe[key] = report[key];
     if (typeof report.lastRunAt === 'string' && Number.isFinite(Date.parse(report.lastRunAt))) safe.lastRunAt = report.lastRunAt;
     return safe;
   }
