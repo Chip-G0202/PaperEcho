@@ -15,7 +15,7 @@ const same = (a, b) => a.dev === b.dev && a.ino === b.ino && a.size === b.size &
 export function validateMacScheduleSpec(spec) {
   if (spec?.platform !== 'darwin') fail('SCHEDULER_MACOS_REQUIRED');
   const expected = scheduleSpec({ paths: { applicationRoot: spec.workingDirectory, userDataRoot: spec.userDataRoot, cacheRoot: spec.cacheRoot, layout: spec.layout },
-    platform: 'darwin', config: { schemaVersion: 6, mode: spec.args?.[10], profile: spec.args?.[12], scheduler: { schemaVersion: 1, enabled: spec.enabled, time: '15:00', timezone: 'Asia/Shanghai' } } });
+    platform: 'darwin', config: { schemaVersion: 6, mode: spec.args?.[10], profile: spec.args?.[12], scheduler: { schemaVersion: 1, enabled: spec.enabled, time: spec.time, timezone: 'Asia/Shanghai' } } });
   if (!isDeepStrictEqual(spec, expected) || [spec.workingDirectory, spec.userDataRoot, spec.cacheRoot].some(p => p === '/' || path.normalize(p) !== p)) fail('SCHEDULER_SPEC_INVALID');
   return expected;
 }

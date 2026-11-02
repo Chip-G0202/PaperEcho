@@ -24,7 +24,7 @@ export function windowsArgument(value) {
 export function scheduleSpec({ paths, config, platform = process.platform, existingTaskIds = [] }) {
   validateRunnerConfigObject(config);
   if (!config?.scheduler || config.scheduler.schemaVersion !== 1 || typeof config.scheduler.enabled !== 'boolean'
-    || config.scheduler.time !== '15:00' || config.scheduler.timezone !== 'Asia/Shanghai') fail('SCHEDULER_CONFIG_REQUIRED');
+    || !/^([01]\d|2[0-3]):[0-5]\d$/.test(config.scheduler.time) || config.scheduler.timezone !== 'Asia/Shanghai') fail('SCHEDULER_CONFIG_REQUIRED');
   if (!['desktop', 'web'].includes(config.mode) || !['standard', 'complete', 'radar'].includes(config.profile || 'standard')) fail('SCHEDULER_MODE_UNSUPPORTED');
   if (!['portable', 'installed'].includes(paths.layout)) fail('SCHEDULER_PACKAGED_LAYOUT_REQUIRED');
   if (!['win32', 'darwin'].includes(platform)) fail('SCHEDULER_PLATFORM_UNSUPPORTED');
@@ -38,7 +38,7 @@ export function scheduleSpec({ paths, config, platform = process.platform, exist
     '--run', '--scheduled-daily', '--mode', config.mode, '--profile', config.profile === 'radar' ? 'standard' : config.profile || 'standard', '--fixed-mode'];
   parseRunnerArgs(args.slice(7), { allowUnresolvedMode: true });
   return { schemaVersion: 1, taskId, enabled: config.scheduler.enabled, platform, layout: paths.layout,
-    time: '15:00', timezone: 'Asia/Shanghai', utcTime: '07:00', dst: 'fixed-zone-no-dst',
+    time: config.scheduler.time, timezone: 'Asia/Shanghai', utcTime: `${String((Number(config.scheduler.time.slice(0, 2)) + 16) % 24).padStart(2, '0')}:${config.scheduler.time.slice(3)}`, dst: 'fixed-zone-no-dst',
     missedRun: 'one-current-day-slot-only', duplicateTask: 'reject-no-overwrite', concurrentRun: 'ignore-new-and-runner-lease',
     identity: 'current-user-interactive-least-privilege', executable, args, workingDirectory: paths.applicationRoot,
     userDataRoot: paths.userDataRoot, cacheRoot: paths.cacheRoot };
@@ -48,7 +48,7 @@ export function scheduleDefinition(spec) {
   if (spec.platform === 'win32') return { format: 'task-scheduler-xml', registration: 'not-performed', content: `<?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
 <RegistrationInfo><URI>\\PaperEcho\\${xml(spec.taskId)}</URI></RegistrationInfo>
-<Triggers><CalendarTrigger><StartBoundary>2026-01-01T07:00:00Z</StartBoundary><Enabled>${spec.enabled}</Enabled><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger></Triggers>
+<Triggers><CalendarTrigger><StartBoundary>2026-01-01T${spec.utcTime}:00Z</StartBoundary><Enabled>${spec.enabled}</Enabled><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger></Triggers>
 <Principals><Principal id="CurrentUser"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
 <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable><Enabled>${spec.enabled}</Enabled><WakeToRun>false</WakeToRun><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>
 <Actions Context="CurrentUser"><Exec><Command>${xml(spec.executable)}</Command><Arguments>${xml(spec.args.map(windowsArgument).join(' '))}</Arguments><WorkingDirectory>${xml(spec.workingDirectory)}</WorkingDirectory></Exec></Actions></Task>` };
@@ -57,7 +57,7 @@ export function scheduleDefinition(spec) {
   // this is a LaunchAgent contract, never a system daemon or a loaded plist.
   return { format: 'launchagent-plist', registration: 'not-performed', content: `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>Label</key><string>${xml(spec.taskId)}</string><key>ProgramArguments</key><array>${[spec.executable, ...spec.args].map(x => `<string>${xml(x)}</string>`).join('')}</array><key>WorkingDirectory</key><string>${xml(spec.workingDirectory)}</string><key>Disabled</key><${spec.enabled ? 'false' : 'true'}/><key>StartCalendarInterval</key><dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict><key>RunAtLoad</key><false/><key>KeepAlive</key><false/></dict></plist>` };
+<plist version="1.0"><dict><key>Label</key><string>${xml(spec.taskId)}</string><key>ProgramArguments</key><array>${[spec.executable, ...spec.args].map(x => `<string>${xml(x)}</string>`).join('')}</array><key>WorkingDirectory</key><string>${xml(spec.workingDirectory)}</string><key>Disabled</key><${spec.enabled ? 'false' : 'true'}/><key>StartCalendarInterval</key><dict><key>Hour</key><integer>${Number(spec.time.slice(0, 2))}</integer><key>Minute</key><integer>${Number(spec.time.slice(3))}</integer></dict><key>RunAtLoad</key><false/><key>KeepAlive</key><false/></dict></plist>` };
 }
 
 async function trustedFile(file, fsApi = fs, executable = false) {

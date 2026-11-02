@@ -15,7 +15,7 @@ export class ControlScheduleStatusService {
 
   async status() {
     const now = this.clock();
-    const plannedSlot = resolvePlannedSlotAt(now).toISOString();
+    let plannedSlot = resolvePlannedSlotAt(now).toISOString();
     const result = {
       status: 'ready', timezone: 'Asia/Shanghai', scheduledTime: '15:00',
       runtimePath: this.context.mode || null, radarEnabled: false,
@@ -25,6 +25,8 @@ export class ControlScheduleStatusService {
     };
     try {
       const owner = (await this.config.readOwnerOrTemplate('paperecho.config.json')).value;
+      result.scheduledTime = owner.scheduler?.time || '15:00';
+      plannedSlot = resolvePlannedSlotAt(now, result.scheduledTime).toISOString();
       result.runtimePath = owner.mode || this.context.mode || null;
       result.radarEnabled = owner.common?.radar?.enabled === true;
       if (result.runtimePath === 'local') { result.status = 'unsupported'; return result; }
@@ -33,8 +35,8 @@ export class ControlScheduleStatusService {
       const weeklyMode = owner.profile === 'radar' ? 'standard' : owner.profile || 'standard';
       const state = await readScheduledRuntimeState(path.join(this.context.researchRoot, 'runtime_state.json'), this.fsApi);
       // Preview no earlier than the planned slot. A Weekly may finish later that day.
-      const preview = decideScheduledDaily({ now: new Date(now) < new Date(plannedSlot) ? plannedSlot : now, ...state, weeklyMode, radarEnabled: true, weeklyEnabled: owner.profile !== 'radar' && owner.weekly?.enabled !== false, intervalDays });
-      const decision = decideScheduledDaily({ now, ...state, weeklyMode, radarEnabled: result.radarEnabled, weeklyEnabled: owner.profile !== 'radar' && owner.weekly?.enabled !== false, intervalDays });
+      const preview = decideScheduledDaily({ time: result.scheduledTime, now: new Date(now) < new Date(plannedSlot) ? plannedSlot : now, ...state, weeklyMode, radarEnabled: true, weeklyEnabled: owner.profile !== 'radar' && owner.weekly?.enabled !== false, intervalDays });
+      const decision = decideScheduledDaily({ time: result.scheduledTime, now, ...state, weeklyMode, radarEnabled: result.radarEnabled, weeklyEnabled: owner.profile !== 'radar' && owner.weekly?.enabled !== false, intervalDays });
       result.today = { plannedSlot, selectedFlow: preview.selectedFlow, reason: decision.reason };
       result.weekly = { lastSuccessfulPlannedSlot: preview.referenceSlot || null, nextDuePlannedSlot: preview.nextWeeklySlot || null };
       result.status = decision.reason === 'before_scheduled_slot' ? 'before_slot'
@@ -46,7 +48,7 @@ export class ControlScheduleStatusService {
       catch (error) { if (error?.code !== 'ENOENT') throw new Error('SCHEDULE_DAY_DECISION_UNREADABLE'); }
       if (!claim) return result;
       if (new Date(now) < new Date(plannedSlot)) throw new Error('SCHEDULE_DAY_DECISION_BEFORE_SLOT');
-      if (claim.schemaVersion !== 1 || claim.dateKey !== dateKey || claim.plannedSlotAt !== plannedSlot
+      if (claim.schemaVersion !== 1 || claim.dateKey !== dateKey || plannedSlotCalendarDateKey(claim.plannedSlotAt) !== dateKey
         || !['weekly_takeover', 'radar'].includes(claim.decision) || typeof claim.businessRunId !== 'string'
         || (claim.businessRunId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(claim.businessRunId))) throw new Error('SCHEDULE_DAY_DECISION_INVALID');
       const flow = claim.decision === 'weekly_takeover' ? 'weekly' : 'radar';

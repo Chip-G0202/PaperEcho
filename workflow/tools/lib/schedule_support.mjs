@@ -3,7 +3,7 @@ import path from "node:path";
 import { withAtomicJsonLock, writeAtomicJson } from "./atomic_json.mjs";
 
 const ASIA_SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
-const SLOT_HOUR_LOCAL = 15;
+
 
 // Central ownership map for runtime_state.json fields that influence scheduling
 // or stateful stage gates. Keep this descriptive only; do not migrate or rename
@@ -110,9 +110,11 @@ function toBeijingDate(date) {
   return new Date(date.getTime() + ASIA_SHANGHAI_OFFSET_MS);
 }
 
-export function resolvePlannedSlotAt(date) {
+export function resolvePlannedSlotAt(date, time = process.env.PAPERECHO_SCHEDULE_TIME || '15:00') {
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error('SCHEDULE_TIME_INVALID');
+  const [hour, minute] = time.split(':').map(Number);
   const bj = toBeijingDate(new Date(date));
-  const slot = new Date(Date.UTC(bj.getUTCFullYear(), bj.getUTCMonth(), bj.getUTCDate(), SLOT_HOUR_LOCAL, 0, 0, 0));
+  const slot = new Date(Date.UTC(bj.getUTCFullYear(), bj.getUTCMonth(), bj.getUTCDate(), hour, minute, 0, 0));
   return new Date(slot.getTime() - ASIA_SHANGHAI_OFFSET_MS);
 }
 
@@ -128,7 +130,7 @@ export function scheduleDayDecisionPath(stateRoot, dateKey) {
 }
 export function validateScheduleDayClaim(claim, now) {
   if (claim?.schemaVersion !== 1 || claim.dateKey !== plannedSlotCalendarDateKey(now)
-    || claim.plannedSlotAt !== resolvePlannedSlotAt(now).toISOString()
+    || !Number.isFinite(Date.parse(claim.plannedSlotAt)) || claim.plannedSlotAt !== new Date(claim.plannedSlotAt).toISOString() || claim.dateKey !== plannedSlotCalendarDateKey(claim.plannedSlotAt) || new Date(claim.plannedSlotAt).getUTCSeconds() !== 0 || new Date(claim.plannedSlotAt).getUTCMilliseconds() !== 0
     || !['weekly_takeover', 'radar'].includes(claim.decision) || typeof claim.businessRunId !== 'string'
     || (claim.businessRunId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(claim.businessRunId))
     || (!claim.businessRunId && claim.decision !== 'weekly_takeover')) throw new Error('SCHEDULE_DAY_DECISION_INVALID');
@@ -230,7 +232,7 @@ function scheduleInstant(value, field, { plannedSlot = false } = {}) {
   }
   const instant = new Date(value);
   if (!Number.isFinite(instant.getTime()) || instant.toISOString() !== value
-    || (plannedSlot && resolvePlannedSlotAt(instant).toISOString() !== value)) {
+    || (plannedSlot && (instant.getUTCSeconds() !== 0 || instant.getUTCMilliseconds() !== 0))) {
     throw new Error(`SCHEDULE_STATE_INVALID:${field}`);
   }
   return instant;
@@ -246,6 +248,7 @@ export function decideScheduledDaily({
   radarEnabled = false,
   intervalDays = 7,
   weeklyEnabled = true,
+  time = process.env.PAPERECHO_SCHEDULE_TIME || '15:00',
 } = {}) {
   const current = new Date(now);
   if (!Number.isFinite(current.getTime())) throw new Error("SCHEDULE_TIME_INVALID");
@@ -253,7 +256,7 @@ export function decideScheduledDaily({
   if (!Number.isSafeInteger(intervalDays) || intervalDays < 1) throw new Error("SCHEDULE_INTERVAL_UNSUPPORTED");
   if (statePresent && (!runtimeState || typeof runtimeState !== "object" || Array.isArray(runtimeState))) throw new Error("SCHEDULE_STATE_INVALID:root");
   const state = runtimeState || {};
-  const slot = resolvePlannedSlotAt(current);
+  const slot = resolvePlannedSlotAt(current, time);
   const plannedSlot = slot.toISOString();
   const has = (field) => Object.hasOwn(state, field);
   const plannedField = "last_successful_scheduled_run_at";
@@ -264,7 +267,7 @@ export function decideScheduledDaily({
     referenceSlot = scheduleInstant(state[plannedField], plannedField, { plannedSlot: true });
     referenceField = plannedField;
   } else if (has(legacyField)) {
-    referenceSlot = resolvePlannedSlotAt(scheduleInstant(state[legacyField], legacyField));
+    referenceSlot = resolvePlannedSlotAt(scheduleInstant(state[legacyField], legacyField), time);
     referenceField = legacyField;
   } else if (statePresent && Object.keys(state).length) {
     throw new Error("SCHEDULE_STATE_INVALID:missing_weekly_success");
@@ -278,9 +281,9 @@ export function decideScheduledDaily({
     const accepted = scheduleInstant(state.last_accepted_planned_slot_at, "last_accepted_planned_slot_at", { plannedSlot: true });
     if (!referenceSlot || accepted > referenceSlot) throw new Error("SCHEDULE_STATE_INVALID:accepted_slot");
   }
-  if (referenceSlot && referenceSlot > slot) throw new Error("SCHEDULE_STATE_INVALID:future_weekly_slot");
+  if (referenceSlot && plannedSlotCalendarDateKey(referenceSlot) > plannedSlotCalendarDateKey(slot)) throw new Error("SCHEDULE_STATE_INVALID:future_weekly_slot");
   if (current < slot) return { allowed: false, reason: "before_scheduled_slot", plannedSlot, selectedFlow: null, weeklyMode: null, referenceField };
-  const due = weeklyEnabled && (!referenceSlot || slot.getTime() - referenceSlot.getTime() >= intervalDays * 86400000);
+  const due = weeklyEnabled && (!referenceSlot || Date.parse(plannedSlotCalendarDateKey(slot)) - Date.parse(plannedSlotCalendarDateKey(referenceSlot)) >= intervalDays * 86400000);
   const selectedFlow = due ? "weekly" : "radar";
   if (!due && !radarEnabled) return { allowed: false, reason: "scheduled_radar_disabled", plannedSlot, selectedFlow, weeklyMode: null, referenceField };
   return {

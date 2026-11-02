@@ -984,7 +984,7 @@ async function settings(group = settingsGroup, view = settingsView) {
   const body = el('div', undefined, 'settings-body page-content'); main.append(body);
   if (settingsGroup === 'automation') {
     const registrationText = registration => {
-      if (registration?.state === 'registered') return '系统任务已注册：北京时间 15:00 自动运行，退出工作台后仍有效。';
+      if (registration?.state === 'registered') return `系统任务已注册：北京时间 ${registration.time || '15:00'} 自动运行，退出工作台后仍有效。`;
       if (registration?.state === 'disabled') return '系统自动化已关闭，任务已注销。';
       const reasons = { SCHEDULER_PREVIEW_ONLY: '当前为模拟预览，不会创建系统任务。', SCHEDULER_HOST_TIMEZONE_REQUIRED: '当前 macOS 时区不受支持，需使用 Asia/Shanghai 时区。', SCHEDULER_PREFLIGHT_BLOCKED: '配置或运行状态未通过安全检查。', SCHEDULER_GUI_SESSION_REQUIRED: '需要在当前用户的桌面会话中启动。', SCHEDULER_TASK_RUNNING: '任务正在执行，请完成后重新保存。', SCHEDULER_PACKAGED_LAYOUT_REQUIRED: '开发或源码工作台不会注册系统任务。' };
       return `${registration?.state === 'failed' ? '系统任务注册失败。' : '系统任务注册尚未确认。'}${reasons[registration?.code] || '请检查配置后重新保存，或重新启动应用。'}`;
@@ -995,6 +995,7 @@ async function settings(group = settingsGroup, view = settingsView) {
       ['radar.enabled', '每日雷达', '在研究简报间隔期间运行每日检索。'],
       ['weekly.interval', '研究简报', '按间隔生成研究简报，默认每 7 天一次。'],
       ['integrity.enabled', '撤稿检测', '运行时检查文献的撤稿与更正状态。'],
+      ['scheduler.time', '自动执行时间', '北京时间（Asia/Shanghai），每日雷达与研究简报共用。'],
     ]) {
       const entry = data.find(item => item.id === id); const row = el('div', undefined, 'automation-row'); row.dataset.setting = id;
       const copy = el('div', undefined, 'automation-copy'); const controlId = `automation-${id.replaceAll('.', '-')}`;
@@ -1003,12 +1004,14 @@ async function settings(group = settingsGroup, view = settingsView) {
       copy.append(titleLabel, hint); row.append(copy);
       const controls = el('div', undefined, 'automation-controls');
       if (!entry?.available) { controls.append(el('p', '配置暂不可用，请稍后重试。', 'field-error')); row.append(controls); card.append(row); continue; }
-      const input = id === 'weekly.interval' ? el('input') : settingControl(entry); input.id = controlId;
+      const input = ['weekly.interval', 'scheduler.time'].includes(id) ? el('input') : settingControl(entry); input.id = controlId;
       if (id === 'weekly.interval') { input.type = 'number'; input.min = entry.validation.min; input.max = entry.validation.max; input.step = '1'; input.required = true; input.value = entry.value; input.setAttribute('aria-describedby', `${controlId}-unit`); }
+      if (id === 'scheduler.time') { input.type = 'time'; input.step = '60'; input.required = true; input.value = entry.value; }
       controls.append(input);
       if (id === 'weekly.interval') { const unit = el('span', '天'); unit.id = `${controlId}-unit`; controls.append(unit); }
       const save = button('保存', async () => {
-        const value = id === 'weekly.interval' ? Number(input.value) : input.checked;
+        const value = id === 'scheduler.time' ? input.value : id === 'weekly.interval' ? Number(input.value) : input.checked;
+        if (id === 'scheduler.time' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) { notice.textContent = '请输入有效的 HH:mm 时间，未保存。'; return; }
         if (id === 'weekly.interval' && (!input.value.trim() || !Number.isInteger(value) || value < Number(input.min) || value > Number(input.max))) {
           input.setCustomValidity(`请输入 ${input.min}–${input.max} 之间的正整数天数。`); input.reportValidity(); notice.textContent = `研究简报间隔须为 ${input.min}–${input.max} 天的正整数，未保存。`; return;
         }

@@ -39,7 +39,7 @@ export function validateApplicationSections(config) {
   if (config.scheduler !== undefined) {
     const s = config.scheduler;
     if (!object(s) || Object.keys(s).some(key => !['schemaVersion', 'enabled', 'time', 'timezone'].includes(key))
-      || s.schemaVersion !== 1 || typeof s.enabled !== 'boolean' || s.time !== '15:00' || s.timezone !== 'Asia/Shanghai') throw new Error('APPLICATION_CONFIG_SCHEDULER_INVALID');
+      || s.schemaVersion !== 1 || typeof s.enabled !== 'boolean' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(s.time) || s.timezone !== 'Asia/Shanghai') throw new Error('APPLICATION_CONFIG_SCHEDULER_INVALID');
   }
   for (const section of Object.values(DOMAIN_SECTIONS)) {
     const value = config[section];

@@ -177,3 +177,20 @@ test('changed Mac host timezone revokes only the owned task and reports a failur
   assert.equal((await f.service.reconcile()).code,'SCHEDULER_HOST_TIMEZONE_REQUIRED');
   assert.equal(f.native.spec,null);assert.equal(JSON.parse(await fs.readFile(f.file,'utf8')).common.radar.enabled,true);
 });
+
+for (const platform of ['darwin', 'win32']) test(`${platform}: editable Beijing time persists and updates only the owned task`, async t => {
+ const f = await fixture(t, platform);
+ assert.equal((await f.config.list()).find(row=>row.id==='scheduler.time').value,'15:00');
+ await f.config.update('radar.enabled',true);
+ const id=f.native.spec.taskId;
+ const saved=await f.config.update('scheduler.time','09:25');
+ assert.equal(saved.scheduling.state,'registered');assert.equal(saved.scheduling.time,'09:25');
+ assert.equal(f.native.spec.time,'09:25');assert.equal(f.native.spec.utcTime,'01:25');assert.equal(f.native.spec.taskId,id);
+ assert.equal((await f.config.list()).find(row=>row.id==='scheduler.time').value,'09:25');
+ await f.config.update('scheduler.time','09:25');assert.equal(f.native.calls.filter(op=>op==='update').length,1);
+ for (const invalid of ['24:00','7:30','12:60','12:30:00','']) await assert.rejects(f.config.update('scheduler.time',invalid),/SETTING_VALUE_INVALID/);
+ assert.equal(JSON.parse(await fs.readFile(f.file,'utf8')).weekly.enabled,false);
+ assert.equal((await f.service.reconcile()).state,'registered');
+ const definition=scheduleDefinition(f.native.spec).content;
+ assert.match(definition,platform==='darwin'?/<integer>9<\/integer><key>Minute<\/key><integer>25<\/integer>/:/T01:25:00Z/);
+});

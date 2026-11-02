@@ -320,6 +320,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   }
   if (configSchemaVersion >= 3) {
     effectiveEnv.PAPERECHO_APPLICATION_CONFIG = loaded.configPath;
+    effectiveEnv.PAPERECHO_SCHEDULE_TIME = config.scheduler?.time || '15:00';
     effectiveEnv.review_results_RUN_INTERVAL_DAYS = String(config.weekly?.intervalDays || 7);
   }
   setEnvValue(effectiveEnv, "PAPERECHO_WEEKLY_ENABLED", config?.profile !== 'radar' && config?.weekly?.enabled !== false);

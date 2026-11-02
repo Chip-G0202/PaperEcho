@@ -13,7 +13,7 @@ export function validateWindowsScheduleSpec(spec) {
   const expected = scheduleSpec({ paths: { applicationRoot: spec.workingDirectory, userDataRoot: spec.userDataRoot,
     cacheRoot: spec.cacheRoot, layout: spec.layout }, platform: 'win32',
     config: { schemaVersion: 6, mode: spec.args?.[10], profile: spec.args?.[12],
-      scheduler: { schemaVersion: 1, enabled: spec.enabled, time: '15:00', timezone: 'Asia/Shanghai' } } });
+      scheduler: { schemaVersion: 1, enabled: spec.enabled, time: spec.time, timezone: 'Asia/Shanghai' } } });
   if (!isDeepStrictEqual(spec, expected)) fail('SCHEDULER_SPEC_INVALID');
   return expected;
 }
@@ -29,7 +29,7 @@ function Matches-Definition($task, $request) {
     $trigger = if ($d.Triggers.Count -eq 1) { $d.Triggers.Item(1) } else { $null }
     $boundary = if ($trigger -and $trigger.Type -eq 2) { ([DateTimeOffset]::Parse($trigger.StartBoundary)).UtcDateTime } else { $null }
     $matches = $a.Count -eq 1 -and $a.Item(1).Type -eq 0 -and $a.Item(1).Path -ieq $request.executable -and $a.Item(1).Arguments -ceq $request.arguments -and $a.Item(1).WorkingDirectory -ieq $request.workingDirectory
-    $matches = $matches -and $null -ne $boundary -and $boundary -eq ([DateTimeOffset]::Parse('2026-01-01T07:00:00Z')).UtcDateTime -and $trigger.DaysInterval -eq 1 -and $trigger.Enabled -eq $request.triggerEnabled
+    $matches = $matches -and $null -ne $boundary -and $boundary -eq ([DateTimeOffset]::Parse($request.startBoundary)).UtcDateTime -and $trigger.DaysInterval -eq 1 -and $trigger.Enabled -eq $request.triggerEnabled
     $matches = $matches -and $d.Settings.MultipleInstances -eq 2 -and $d.Settings.StartWhenAvailable -and -not $d.Settings.WakeToRun -and -not $d.Settings.RunOnlyIfNetworkAvailable
     $matches = $matches -and -not $d.Settings.DisallowStartIfOnBatteries -and -not $d.Settings.StopIfGoingOnBatteries -and $d.Settings.ExecutionTimeLimit -eq 'PT0S'
     return [bool]$matches
@@ -150,7 +150,7 @@ export class WindowsTaskScheduler {
     // COM XmlText receives a UTF-16 BSTR; the downloadable UTF-8 template stays unchanged.
     const request = { schemaVersion: 1, operation, sandboxOnly: this.sandboxOnly, name, taskId: spec.taskId,
       ...(installationCleanup ? { installationCleanup: true } : {}),
-      triggerEnabled: spec.enabled, executable: spec.executable, arguments: spec.args.map(windowsArgument).join(' '), workingDirectory: spec.workingDirectory,
+      startBoundary: `2026-01-01T${spec.utcTime}:00Z`, triggerEnabled: spec.enabled, executable: spec.executable, arguments: spec.args.map(windowsArgument).join(' '), workingDirectory: spec.workingDirectory,
       ...(['register', 'update'].includes(operation) ? { definition: scheduleDefinition(spec).content.replace('encoding="UTF-8"', 'encoding="UTF-16"') } : {}) };
     let report;
     if (this.transport) report = await this.transport(request);

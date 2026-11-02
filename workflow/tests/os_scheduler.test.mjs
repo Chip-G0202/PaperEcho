@@ -16,6 +16,14 @@ import { SecretService } from '../tools/lib/control_credentials_service.mjs';
 import { selectScheduledDailyRun } from '../tools/runner/scheduled_daily.mjs';
 import { XMLValidator, XMLParser } from 'fast-xml-parser';
 const repo = fileURLToPath(new URL('../../', import.meta.url));
+const macHost = process.platform === 'darwin';
+const readyStatus = macHost ? 'UNKNOWN' : 'PASS';
+// A Mac inspection intentionally retains its platform acceptance boundary.
+function assertReady(report) {
+  assert.equal(report.status, readyStatus, JSON.stringify(report.checks));
+  assert.ok(report.checks.length > 0);
+  for (const check of report.checks) assert.equal(check.status, macHost && check.checkId === 'scheduler.platform' ? 'UNKNOWN' : 'PASS', check.checkId);
+}
 const schedule = { schemaVersion: 1, enabled: true, time: '15:00', timezone: 'Asia/Shanghai' };
 const config = () => ({ schemaVersion: 6, mode: 'desktop', profile: 'standard', scheduler: { ...schedule },
   common: { llm: { enabled: false, mode: 'disabled' }, email: { enabled: false }, radar: { enabled: true } }, desktop: { enabled: true } });
@@ -23,15 +31,19 @@ async function write(file, value) { await fs.mkdir(path.dirname(file), { recursi
 async function fixture(t, layout = 'installed') {
   const base = path.join(repo, 'tests/runs/scheduler'); await fs.mkdir(base, { recursive: true });
   const root = await fs.mkdtemp(path.join(base, '离线 & (安全)-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const app = path.join(root, '程序'); const data = layout === 'portable' ? path.join(app, 'data') : layout === 'dev' ? app : path.join(root, '数据');
-  const resource = path.join(app, 'resources/core');
+  const app = path.join(root, '程序', ...(macHost ? ['PaperEcho.app', 'Contents'] : [])); const data = layout === 'portable' ? path.join(app, 'data') : layout === 'dev' ? app : path.join(root, '数据');
+  const resources = macHost ? 'Resources' : 'resources';
+  const resource = path.join(app, resources, 'core');
+  const executable = path.join(app, macHost ? 'MacOS/PaperEcho' : 'PaperEcho.exe');
   for (const name of ['workflow/tools/runner/main.mjs', 'workflow/tools/web/static/index.html', 'desktop/electron-poc/headless.mjs']) await write(path.join(resource, name), 'fixture-only');
-  for (const name of ['PaperEcho.exe', 'Zotero.exe', 'bridge.exe', 'resources/app.asar']) await write(path.join(app, name), 'MZ-dummy-only');
+  for (const name of ['Zotero.exe', 'bridge.exe', `${resources}/app.asar`]) await write(path.join(app, name), 'MZ-dummy-only');
+  await write(executable, macHost ? '#!/bin/sh\nexit 0\n' : 'MZ-dummy-only');
+  if (macHost) await fs.chmod(executable, 0o700);
   const value = config(); value.desktop.zoteroExe = path.join(app, 'Zotero.exe'); value.desktop.cliTool = path.join(app, 'bridge.exe');
   const env = { PAPERECHO_APPLICATION_ROOT: app, PAPERECHO_RESOURCE_ROOT: resource, PAPERECHO_LAYOUT: layout,
     ...(layout === 'dev' ? {} : { PAPERECHO_DATA_ROOT: data }), PATH: '', PAPERECHO_SKIP_DOTENV: '1' };
   const paths = resolveRuntimePaths({ env }); await write(paths.configPath, value); await fs.mkdir(paths.cacheRoot, { recursive: true });
-  return { root, app, data, env, paths, value, inspect: input => inspectOsSchedule({ env, ...input }) };
+  return { root, app, data, env, paths, value, executable, inspect: input => inspectOsSchedule({ env, ...input }) };
 }
 async function snapshot(root) {
   const result = {};
@@ -44,12 +56,16 @@ async function snapshot(root) {
 }
 test('canonical scheduler schema rejects unknown fields, altered cadence, DST zones and invalid types; legacy remains accepted', () => {
   assert.doesNotThrow(() => validateRunnerConfigObject(config()));
-  for (const changes of [{ enabled: 'true' }, { time: '02:30' }, { timezone: 'America/New_York' }, { schemaVersion: 2 }, { command: 'untrusted' }]) assert.throws(() => validateRunnerConfigObject({ ...config(), scheduler: { ...schedule, ...changes } }));
+  for (const changes of [{ enabled: 'true' }, { time: '24:00' }, { timezone: 'America/New_York' }, { schemaVersion: 2 }, { command: 'untrusted' }]) assert.throws(() => validateRunnerConfigObject({ ...config(), scheduler: { ...schedule, ...changes } }));
   const old = config(); delete old.scheduler; assert.doesNotThrow(() => validateRunnerConfigObject(old));
   assert.throws(() => validateRunnerConfigObject({ ...config(), schemaVersion: 5 }));
 });
 test('offline native definitions keep argv separate, escape XML, stable workspace identity and safe enabled/disabled policy', async t => {
-  const f = await fixture(t); const s = scheduleSpec({ paths: f.paths, config: f.value });
+  const f = await fixture(t);
+  // Pure Windows data contract: never use the host's POSIX fixture as Windows paths.
+  const paths = { layout: 'installed', applicationRoot: 'C:\\PaperEcho & (test)', userDataRoot: 'C:\\Users\\test\\PaperEcho', cacheRoot: 'C:\\Users\\test\\Cache' };
+  const windowsSpec = (input = {}) => scheduleSpec({ paths, config: f.value, ...input, platform: 'win32' });
+  const s = windowsSpec();
   assert.equal(s.args[0], '--headless'); assert.ok(s.args.includes('--scheduled-daily')); assert.equal(s.utcTime, '07:00');
   assert.equal(s.dst, 'fixed-zone-no-dst'); assert.equal(s.missedRun, 'one-current-day-slot-only');
   const definition = scheduleDefinition(s); assert.match(definition.content, /&amp;/); assert.match(definition.content, /InteractiveToken/);
@@ -57,35 +73,43 @@ test('offline native definitions keep argv separate, escape XML, stable workspac
   const parsed = new XMLParser().parse(definition.content); assert.equal(parsed.Task.Actions.Exec.Command, s.executable);
   assert.equal(parsed.Task.Triggers.CalendarTrigger.ScheduleByDay.DaysInterval, 1);
   assert.match(definition.content, /LeastPrivilege/); assert.match(definition.content, /IgnoreNew/); assert.doesNotMatch(definition.content, /cmd\.exe|powershell|SYSTEM|node\.exe|npm|<UserId>/i);
-  assert.equal(definition.registration, 'not-performed'); assert.throws(() => scheduleSpec({ paths: f.paths, config: f.value, existingTaskIds: [s.taskId] }), /DUPLICATE/);
-  assert.equal(scheduleSpec({ paths: f.paths, config: f.value }).taskId, s.taskId);
-  const other = await fixture(t); assert.notEqual(scheduleSpec({ paths: other.paths, config: other.value }).taskId, s.taskId);
+  assert.equal(definition.registration, 'not-performed'); assert.throws(() => windowsSpec({ existingTaskIds: [s.taskId] }), /DUPLICATE/);
+  assert.equal(windowsSpec().taskId, s.taskId);
+  assert.notEqual(windowsSpec({ paths: { ...paths, userDataRoot: 'C:\\Users\\other\\PaperEcho' } }).taskId, s.taskId);
   assert.match(scheduleDefinition({ ...s, enabled: false }).content, /<Enabled>false<\/Enabled>/);
   await assert.rejects(selectScheduledDailyRun({ options: {}, env: {}, config: { scheduler: { enabled: false } } }), /SCHEDULE_DISABLED/);
-  await write(f.paths.configPath, { ...f.value, scheduler: { ...schedule, enabled: false } }); assert.equal((await f.inspect()).status, 'PASS');
+  await write(f.paths.configPath, { ...f.value, scheduler: { ...schedule, enabled: false } }); assertReady(await f.inspect());
+  let output = '';
+  assert.equal(await main(['--schedule-dry-run'], { env: { PAPERECHO_SKIP_DOTENV: '1' }, stdout: { write: text => output += text },
+    schedulerInspect: async () => ({ status: 'PASS', checks: [], spec: s, definition, osMutation: false }),
+    schedulerAdapter: { execute: () => assert.fail('formatter cannot call native OS') } }), 0);
+  const rendered = JSON.parse(output); assert.match(rendered.definition.content, /__USER_DATA_ROOT__/); assert.match(rendered.definition.content, /__APPLICATION_ROOT__/);
+  assert.ok(!output.includes('C:\\\\Users'));
   const mac = scheduleDefinition({ ...s, platform: 'darwin' }); assert.match(mac.content, /StartCalendarInterval/); assert.match(mac.content, /<key>KeepAlive<\/key><false\/>/);
   assert.equal(XMLValidator.validate(mac.content), true);
   assert.equal(windowsArgument('a b\\'), '"a b\\\\"'); assert.equal(windowsArgument('a"b'), '"a\\"b"');
   assert.throws(() => windowsArgument('bad\narg'));
-  for (const value of ['C:\\bad" --run', 'C:\\%COMSPEC%']) assert.throws(() => scheduleSpec({ paths: { ...f.paths, applicationRoot: value }, config: f.value }));
-  assert.throws(() => scheduleSpec({ paths: { ...f.paths, applicationRoot: '\\\\server\\share\\app' }, config: f.value }), /LOCAL_DRIVE_REQUIRED/);
+  for (const value of ['C:\\bad" --run', 'C:\\%COMSPEC%']) assert.throws(() => windowsSpec({ paths: { ...paths, applicationRoot: value } }));
+  assert.throws(() => windowsSpec({ paths: { ...paths, applicationRoot: '\\\\server\\share\\app' } }), /LOCAL_DRIVE_REQUIRED/);
 });
-test('readonly preflight and repeated dry-run PASS with no writes or OS adapter calls across Portable/Installed; Dev fails closed', async t => {
+test('readonly host preflight and repeated dry-run preserve PASS or Mac UNKNOWN without writes; Dev fails closed', async t => {
   for (const layout of ['installed', 'portable', 'dev']) {
     const f = await fixture(t, layout); const before = await snapshot(f.root); const result = await f.inspect();
-    assert.equal(result.status, layout === 'dev' ? 'FAIL' : 'PASS', JSON.stringify(result.checks)); assert.equal(result.osMutation, false);
+    if (layout === 'dev') assert.equal(result.status, 'FAIL'); else assertReady(result); assert.equal(result.osMutation, false);
     let text = ''; const stdout = { write: x => { text += x; } };
     for (let i = 0; i < 2; i++) {
       text = ''; const code = await main(['--schedule-dry-run'], { env: f.env, stdout, runProductionImpl: () => assert.fail('workflow forbidden'), runtimeLog: { write: () => assert.fail('no logging') }, schedulerAdapter: { execute: () => assert.fail('readonly command must not call OS') } });
-      assert.equal(code, layout === 'dev' ? 2 : 0); assert.ok(!text.includes(f.root));
-      if (layout !== 'dev') { const report = JSON.parse(text); assert.match(report.definition.content, /__USER_DATA_ROOT__/); assert.match(report.definition.content, /__APPLICATION_ROOT__/); }
+      assert.equal(code, layout === 'dev' ? 2 : macHost ? 3 : 0); assert.ok(!text.includes(f.root));
+      if (layout !== 'dev') { const report = JSON.parse(text); assert.equal(report.status, readyStatus);
+        if (macHost) { assert.equal(report.definition, undefined); assert.equal(report.registration, 'not-tested'); }
+        else { assert.match(report.definition.content, /__USER_DATA_ROOT__/); assert.match(report.definition.content, /__APPLICATION_ROOT__/); } }
     }
     assert.deepEqual(await snapshot(f.root), before);
   }
 });
 test('missing executable, redirected resources, bad data root and unsupported Local cannot generate a runnable dry-run', async t => {
-  const f = await fixture(t); await fs.unlink(path.join(f.app, 'PaperEcho.exe')); assert.equal((await f.inspect()).status, 'FAIL');
-  await write(path.join(f.app, 'PaperEcho.exe'), 'not-an-executable'); assert.equal((await f.inspect()).status, 'FAIL');
+  const f = await fixture(t); await fs.unlink(f.executable); assert.equal((await f.inspect()).status, 'FAIL');
+  await write(f.executable, 'not-an-executable'); if (macHost) await fs.chmod(f.executable, 0o600); assert.equal((await f.inspect()).status, 'FAIL');
   assert.equal((await f.inspect({ env: { ...f.env, PAPERECHO_RESOURCE_ROOT: f.data } })).status, 'FAIL');
   assert.equal((await f.inspect({ env: { ...f.env, PAPERECHO_DATA_ROOT: f.app } })).status, 'FAIL');
   assert.equal((await f.inspect({ env: { ...f.env, PAPERECHO_CONFIG: path.join(f.root, 'other/config.json') } })).status, 'FAIL');
@@ -135,7 +159,7 @@ test('real Secret owner validates ACL and local dotenv in Web noninteractive pre
   const env = { ...f.env }; delete env.PAPERECHO_SKIP_DOTENV;
   const secrets = new SecretService({ root: f.app, env });
   await secrets.replace('ZOTERO_API_KEY', 'dummy-local-offline-scheduler-key');
-  const before = await snapshot(f.root); const report = await f.inspect({ env }); assert.equal(report.status, 'PASS', JSON.stringify(report.checks));
+  const before = await snapshot(f.root); const report = await f.inspect({ env }); assertReady(report);
   assert.equal(report.checks.find(c => c.checkId === 'scheduler.secretSource').status, 'PASS'); assert.deepEqual(await snapshot(f.root), before);
   assert.ok(!JSON.stringify(report).includes('dummy-local-offline-scheduler-key'));
 });

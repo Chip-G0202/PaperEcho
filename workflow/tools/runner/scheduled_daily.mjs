@@ -37,13 +37,13 @@ export async function selectScheduledDailyRun(resolved, {
     throw new Error("SCHEDULE_FORCE_CONFLICT");
   }
   const runtime = buildRuntimeConfig({ cwd: repoRoot, env, now });
-  const plannedSlot = resolvePlannedSlotAt(now).toISOString();
+  const plannedSlot = resolvePlannedSlotAt(now, env.PAPERECHO_SCHEDULE_TIME).toISOString();
   const claim = await existingClaim({ stateRoot: path.join(runtime.researchRoot, "schedule_decisions"), now, fsApi });
   if (claim) {
     if (new Date(now) < new Date(plannedSlot)) throw new Error("SCHEDULE_DAY_DECISION_BEFORE_SLOT");
     if (!claim.businessRunId) {
       const state = await readScheduledRuntimeState(path.join(runtime.researchRoot, "runtime_state.json"), fsApi);
-      const decision = decideScheduledDaily({ now, ...state, weeklyMode: options.profile,
+      const decision = decideScheduledDaily({ time: env.PAPERECHO_SCHEDULE_TIME, now, ...state, weeklyMode: options.profile,
         radarEnabled: resolved.config?.common?.radar?.enabled === true,
         weeklyEnabled: resolved.config?.profile !== 'radar' && resolved.config?.weekly?.enabled !== false,
         intervalDays: Number(env.review_results_RUN_INTERVAL_DAYS || 7) });
@@ -69,7 +69,7 @@ export async function selectScheduledDailyRun(resolved, {
   }
   const statePath = path.join(runtime.researchRoot, "runtime_state.json");
   const state = await readScheduledRuntimeState(statePath, fsApi);
-  const decision = decideScheduledDaily({
+  const decision = decideScheduledDaily({ time: env.PAPERECHO_SCHEDULE_TIME,
     now, ...state, weeklyMode: options.profile,
     radarEnabled: resolved.config?.common?.radar?.enabled === true,
     weeklyEnabled: resolved.config?.profile !== 'radar' && resolved.config?.weekly?.enabled !== false,

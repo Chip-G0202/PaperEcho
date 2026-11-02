@@ -64,6 +64,7 @@ for (const [id, key, type, description, validation] of [
 for (const [id, category, key, type, description, validation] of [
   ['general.profile', 'General', 'profile', 'enum', '运行配置', { values: ['standard', 'complete', 'radar'] }],
   ['radar.enabled', 'Radar', 'common.radar.enabled', 'boolean', '启用每日雷达'],
+  ['scheduler.time', 'Weekly', 'scheduler.time', 'string', '自动执行时间', { pattern: '^([01]\\d|2[0-3]):[0-5]\\d$', maxLength: 5 }],
   ['weekly.interval', 'Weekly', 'weekly.intervalDays', 'integer', '研究简报间隔', { min: 1, max: 366 }],
   ['integrity.enabled', 'Integrity', 'common.integrity.enabled', 'boolean', '监测撤稿与更正状态'],
   ['email.enabled', 'Notifications', 'common.email.enabled', 'boolean', '启用邮箱通知'],
@@ -187,6 +188,7 @@ export class ConfigService {
         const owner = owners.get(definition.file);
         value = get(owner.value, definition.key) ?? (['translation.enabled', 'review.enabled', 'review.master', 'notification.radar', 'notification.weekly'].includes(definition.id) ? true : null);
         // Show the existing SMTP transport defaults so saving the form preserves TLS.
+        if (definition.id === 'scheduler.time') value ??= '15:00';
         if (definition.id === 'weekly.interval') value ??= Number(this.env.review_results_RUN_INTERVAL_DAYS || 7);
         if (definition.id === 'smtp.port' && value == null) value = 465;
         if (definition.id === 'smtp.secure' && value == null) value = Number(owner.value.common?.email?.smtp?.port ?? 465) === 465;
@@ -290,7 +292,7 @@ export class ConfigService {
           if (definition.key.startsWith('keyword_groups.')) owner.query = buildPubMedQueryFromKeywordGroups(owner.keyword_groups);
           await this.verify(owner, definition);
         }
-        if (automationEdit) candidate.scheduler = schedulerConfig(automationEnabled(candidate));
+        if (automationEdit) candidate.scheduler = schedulerConfig(automationEnabled(candidate), candidate.scheduler?.time);
         validateRunnerConfigObject(candidate);
         await writeAtomicJson(target, candidate, { ...this.atomicOptions, validateTemporary: async (temporary) => {
           const readback = JSON.parse(await fs.readFile(temporary, 'utf8'));

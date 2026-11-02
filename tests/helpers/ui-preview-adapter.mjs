@@ -8,7 +8,7 @@ function installPaperEchoPreview(seed) {
     'translation.model': 'gpt-5.1', 'preference.model': 'gpt-5.1', 'ai.provider': 'openai', 'ai.thinking': true, 'ai.model': 'gpt-5.1', 'ai.endpoint': 'https://preview.invalid/v1',
     'runtime.projectRoot': '/模拟工作空间', 'local.input': '/模拟输入', 'local.output': '/模拟结果',
     'desktop.zoteroExe': '/模拟路径/Zotero', 'web.userId': '123456', 'radar.enabled': true,
-    'weekly.interval': 7, 'rss.sources': [{ name: '[模拟] 研究动态', url: 'https://preview.invalid/feed', enabled: true, publicationTitle: '模拟期刊' }],
+    'scheduler.time': '15:00', 'weekly.interval': 7, 'rss.sources': [{ name: '[模拟] 研究动态', url: 'https://preview.invalid/feed', enabled: true, publicationTitle: '模拟期刊' }],
   };
   const defaults = row => row.type === 'boolean' ? false : ['list', 'sources'].includes(row.type) ? [] : ['integer', 'number'].includes(row.type) ? row.validation?.min ?? 1 : row.type === 'enum' ? row.validation?.values?.[0] || '' : '';
   const settings = seed.registry.map(({ file, key, ...row }) => ({ ...row, value: values[row.id] ?? defaults(row), available: true, ownerPresent: true }));

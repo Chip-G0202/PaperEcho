@@ -21,7 +21,7 @@ export class ControlAutomationService {
     const owner = record.value;
     const spec = scheduleSpec({ paths, platform: this.platform, config: { ...owner, schemaVersion: 6,
       mode: ['desktop', 'web'].includes(owner.mode) ? owner.mode : 'desktop',
-      scheduler: { schemaVersion: 1, enabled, time: '15:00', timezone: 'Asia/Shanghai' } } });
+      scheduler: { schemaVersion: 1, enabled, time: owner.scheduler?.time || '15:00', timezone: 'Asia/Shanghai' } } });
     return { enabled, spec };
   }
   async native() {
@@ -36,7 +36,7 @@ export class ControlAutomationService {
     if (this.platform === 'darwin' && !['loaded', 'installed-not-loaded', 'not-installed'].includes(query?.status)) throw new Error('SCHEDULER_QUERY_FAILED');
     const exists = this.platform === 'darwin' ? ['loaded', 'installed-not-loaded'].includes(query.status) : query.exists;
     const registered = exists && query.definitionMatches === true && (this.platform === 'darwin' ? query.status === 'loaded' : query.enabled === true);
-    return { enabled: desired.enabled, state: desired.enabled ? registered ? 'registered' : 'unknown' : !exists ? 'disabled' : 'unknown',
+    return { time: desired.spec.time, timezone: desired.spec.timezone, enabled: desired.enabled, state: desired.enabled ? registered ? 'registered' : 'unknown' : !exists ? 'disabled' : 'unknown',
       ...(exists ? { taskPresent: true } : { taskPresent: false }) };
   }
   async status() {
