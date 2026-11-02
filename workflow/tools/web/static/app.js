@@ -930,11 +930,11 @@ async function appendLoginStartup(container) {
   const input = el('input'); input.type = 'checkbox'; input.disabled = true;
   label.prepend(input);
   const notice = el('p', '正在读取系统登录项…', 'meta'); notice.setAttribute('role', 'status');
-  section.append(label, notice, el('p', '默认关闭，仅在当前用户登录后启动，可随时关闭。macOS 未公证应用可能需要系统批准，或无法注册。', 'meta'));
+  section.append(label, notice, el('p', '默认关闭，仅在当前用户登录后启动，可随时关闭。', 'meta'));
   container.append(section);
   const messages = {
     LOGIN_STARTUP_APPROVAL_REQUIRED: '系统尚未批准。请在 macOS“系统设置 → 通用 → 登录项”中确认后重新读取。',
-    LOGIN_STARTUP_NOT_CONFIRMED: '系统未确认此设置。未公证的 macOS 应用可能无法注册；未报告成功。',
+    LOGIN_STARTUP_NOT_CONFIRMED: '系统未确认此设置，请检查系统登录项后重试。',
     LOGIN_STARTUP_UNAVAILABLE: '当前运行方式不支持登录启动，请使用安装后的桌面应用。',
     LOGIN_STARTUP_FAILED: '无法读取或修改系统登录项；请检查系统登录项设置。',
   };
@@ -1019,8 +1019,9 @@ async function settings(group = settingsGroup, view = settingsView) {
   if (settingsGroup === 'automation') {
     const registrationText = registration => {
       if (registration?.state === 'registered') return `系统任务已注册：北京时间 ${registration.time || '15:00'} 自动运行，退出工作台后仍有效。`;
-      if (registration?.state === 'disabled') return '系统自动化已关闭，任务已注销。';
-      const reasons = { SCHEDULER_PREVIEW_ONLY: '当前为模拟预览，不会创建系统任务。', SCHEDULER_HOST_TIMEZONE_REQUIRED: '当前 macOS 时区不受支持，需使用 Asia/Shanghai 时区。', SCHEDULER_PREFLIGHT_BLOCKED: '配置或运行状态未通过安全检查。', SCHEDULER_GUI_SESSION_REQUIRED: '需要在当前用户的桌面会话中启动。', SCHEDULER_TASK_RUNNING: '任务正在执行，请完成后重新保存。', SCHEDULER_PACKAGED_LAYOUT_REQUIRED: '开发或源码工作台不会注册系统任务。' };
+      if (registration?.state === 'paused') return '自动化配置已保留，系统定时执行尚未启用。请重新保存自动化设置。';
+      if (registration?.state === 'disabled' && registration.enabled === false && registration.taskPresent === false) return '系统自动化已关闭，任务已注销。';
+      const reasons = { SCHEDULER_MODE_UNSUPPORTED: '当前本地运行模式不支持系统自动化，请在运行路径中配置 Zotero Desktop 或 Web。', SCHEDULER_LAUNCHCTL_FAILED: '无法连接 macOS 任务服务，请在当前用户桌面会话中重试。', SCHEDULER_PATH_UNSAFE: '任务路径权限不符合安全要求。', SCHEDULER_REGISTER_UNCONFIRMED: 'macOS 未确认任务注册，请检查系统状态后重试。', SCHEDULER_PREVIEW_ONLY: '当前为模拟预览，不会创建系统任务。', SCHEDULER_HOST_TIMEZONE_REQUIRED: '当前 macOS 时区不受支持，需使用 Asia/Shanghai 时区。', SCHEDULER_PREFLIGHT_BLOCKED: '配置或运行状态未通过安全检查。', SCHEDULER_GUI_SESSION_REQUIRED: '需要在当前用户的桌面会话中启动。', SCHEDULER_TASK_RUNNING: '任务正在执行，请完成后重新保存。', SCHEDULER_PACKAGED_LAYOUT_REQUIRED: '当前启动方式不支持系统任务，请使用安装后的桌面应用。' };
       return `${registration?.state === 'failed' ? '系统任务注册失败。' : '系统任务注册尚未确认。'}${reasons[registration?.code] || '请检查配置后重新保存，或重新启动应用。'}`;
     };
     const taskStatus = el('p', '正在核对系统任务…', 'meta'); taskStatus.setAttribute('aria-live', 'polite');

@@ -2,7 +2,7 @@ import { resolveRuntimePaths, prepareRuntimePaths } from './runtime_config.mjs';
 import { scheduleSpec, inspectOsSchedule } from './os_scheduler.mjs';
 import { manageOsSchedule } from './os_scheduler_management.mjs';
 import { WindowsTaskScheduler } from './windows_task_scheduler.mjs';
-import { automationSetting, automationEnabled } from './automation_schedule_policy.mjs';
+import { automationSetting, automationEnabled, weeklyAutomationEnabled } from './automation_schedule_policy.mjs';
 
 const queues = new Map();
 const safeCode = error => /^SCHEDULER_[A-Z_]+$/.test(error?.message || '') ? error.message : 'SCHEDULER_SYNC_FAILED';
@@ -12,6 +12,8 @@ export class ControlAutomationService {
   }
   async desired() {
     const record = await this.config.readOwnerOrTemplate('paperecho.config.json');
+    const configured = record.present && (weeklyAutomationEnabled(record.value) || record.value.common?.radar?.enabled === true);
+    if (configured && !['desktop', 'web'].includes(record.value.mode)) return { enabled: false, unavailable: true, code: 'SCHEDULER_MODE_UNSUPPORTED' };
     const enabled = record.present && automationEnabled(record.value) && record.value.scheduler?.enabled !== false;
     const paths = this.paths || resolveRuntimePaths({ env: this.env, applicationRoot: this.env.PAPERECHO_APPLICATION_ROOT, platform: this.platform });
     if (!record.present || paths.layout === 'dev' || !['darwin', 'win32'].includes(this.platform)) return { enabled, unavailable: true };
@@ -22,7 +24,7 @@ export class ControlAutomationService {
     const spec = scheduleSpec({ paths, platform: this.platform, config: { ...owner, schemaVersion: 6,
       mode: ['desktop', 'web'].includes(owner.mode) ? owner.mode : 'desktop',
       scheduler: { schemaVersion: 1, enabled, time: owner.scheduler?.time || '15:00', timezone: 'Asia/Shanghai' } } });
-    return { enabled, spec };
+    return { enabled, configured, spec };
   }
   async native() {
     if (this.adapter) return this.adapter;
@@ -36,13 +38,13 @@ export class ControlAutomationService {
     if (this.platform === 'darwin' && !['loaded', 'installed-not-loaded', 'not-installed'].includes(query?.status)) throw new Error('SCHEDULER_QUERY_FAILED');
     const exists = this.platform === 'darwin' ? ['loaded', 'installed-not-loaded'].includes(query.status) : query.exists;
     const registered = exists && query.definitionMatches === true && (this.platform === 'darwin' ? query.status === 'loaded' : query.enabled === true);
-    return { time: desired.spec.time, timezone: desired.spec.timezone, enabled: desired.enabled, state: desired.enabled ? registered ? 'registered' : 'unknown' : !exists ? 'disabled' : 'unknown',
+    return { time: desired.spec.time, timezone: desired.spec.timezone, enabled: desired.enabled, state: desired.enabled ? registered ? 'registered' : 'unknown' : !exists ? desired.configured ? 'paused' : 'disabled' : 'unknown',
       ...(exists ? { taskPresent: true } : { taskPresent: false }) };
   }
   async status() {
     try {
       const desired = await this.desired();
-      if (desired.unavailable) return { enabled: desired.enabled, state: 'unknown', code: 'SCHEDULER_PACKAGED_LAYOUT_REQUIRED' };
+      if (desired.unavailable) return { enabled: desired.enabled, state: desired.code ? 'failed' : 'unknown', code: desired.code || 'SCHEDULER_PACKAGED_LAYOUT_REQUIRED' };
       if (desired.enabled && this.platform === 'darwin' && this.timezone() !== 'Asia/Shanghai') return { enabled: true, state: 'failed', code: 'SCHEDULER_HOST_TIMEZONE_REQUIRED' };
       const result = this.project(await (await this.native()).execute('query', desired.spec), desired);
       if (result.state === 'unknown' && this.lastError) return { ...result, state: 'failed', code: this.lastError };
@@ -62,7 +64,7 @@ export class ControlAutomationService {
   async sync() {
     try {
       let desired = await this.desired();
-      if (desired.unavailable) return { enabled: desired.enabled, state: 'unknown', code: 'SCHEDULER_PACKAGED_LAYOUT_REQUIRED' };
+      if (desired.unavailable) return { enabled: desired.enabled, state: desired.code ? 'failed' : 'unknown', code: desired.code || 'SCHEDULER_PACKAGED_LAYOUT_REQUIRED' };
       if (desired.enabled) {
         await this.config.ensureAutomationSchedule();
         desired = await this.desired();
@@ -86,7 +88,7 @@ export class ControlAutomationService {
         });
       }
       const confirmed = this.project(await adapter.execute('query', desired.spec), desired);
-      if (!['registered', 'disabled'].includes(confirmed.state)) throw new Error('SCHEDULER_REGISTRATION_UNCONFIRMED');
+      if (!['registered', 'disabled', 'paused'].includes(confirmed.state)) throw new Error('SCHEDULER_REGISTRATION_UNCONFIRMED');
       this.lastError = null;
       return confirmed;
     } catch (error) {

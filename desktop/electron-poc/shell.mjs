@@ -56,6 +56,10 @@ export function startupDiagnostic(error, stage) {
 export function allowedDocument(value, origin) {
   try { const u = new URL(value); return u.origin === origin && u.pathname === '/' && !u.search && !u.username && !u.password; } catch { return false; }
 }
+// External navigation is limited to this exact public repository, never arbitrary URLs.
+export function allowedExternalLink(value, documentURL, origin) {
+  return allowedDocument(documentURL, origin) && value === 'https://github.com/Chip-G0202/PaperEcho';
+}
 export function allowedSupportDownload({ url, mime, filename, bytes, documentURL }, origin) {
   return Boolean(origin && allowedDocument(documentURL, origin) && url.startsWith(`blob:${origin}/`)
     && mime === 'application/zip' && filename === 'paperecho-support.zip'

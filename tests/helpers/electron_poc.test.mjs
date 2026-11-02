@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
-import { sandboxWorkspace, sandboxBase, acquireServer, allowedDocument, allowedSupportDownload, preferences } from '../../desktop/electron-poc/shell.mjs';
+import { sandboxWorkspace, sandboxBase, acquireServer, allowedDocument, allowedExternalLink, allowedSupportDownload, preferences } from '../../desktop/electron-poc/shell.mjs';
 process.env.PAPERECHO_SKIP_DOTENV = '1';
 test('only bounded same-origin support ZIP blobs may use the desktop save dialog', () => {
   const origin = 'http://127.0.0.1:8765';
@@ -55,4 +55,11 @@ test('real HTTP session/Host/Origin/CSRF and credentials remain guarded', async 
   const credentials = await requestLocal(a.url + '/api/credentials', { headers: { Cookie: cookie } });
   assert.equal(credentials.status, 200);
   assert.equal(JSON.stringify(credentials.json).includes('process.env'), false);
+});
+
+test('desktop external links allow only the exact public repository from the trusted workbench', () => {
+ const origin='http://127.0.0.1:8765', url='https://github.com/Chip-G0202/PaperEcho';
+ assert.equal(allowedExternalLink(url, origin+'/#home', origin),true);
+ for (const value of [url+'?token=private',url+'#fragment',url+'/',url+'/issues','http://github.com/Chip-G0202/PaperEcho','https://github.com.evil.invalid/Chip-G0202/PaperEcho','file:///tmp/test','javascript:alert(1)']) assert.equal(allowedExternalLink(value, origin+'/#home', origin),false);
+ for (const page of ['https://evil.invalid/',origin+'/api/session',origin+'/?x', 'data:text/html,test']) assert.equal(allowedExternalLink(url,page,origin),false);
 });

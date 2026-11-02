@@ -88,7 +88,7 @@ test('startup derives policy only from persisted enabled features and never over
   assert.equal((await f.service.reconcile()).state, 'registered');
   assert.equal(JSON.parse(await fs.readFile(f.file, 'utf8')).scheduler.enabled, true);
   const disabled = JSON.parse(await fs.readFile(f.file, 'utf8')); disabled.scheduler.enabled = false; await fs.writeFile(f.file, JSON.stringify(disabled));
-  assert.equal((await f.service.reconcile()).state, 'disabled'); assert.equal(f.native.spec, null);
+  assert.equal((await f.service.reconcile()).state, 'paused'); assert.equal(f.native.spec, null);
   f.service.paths = { ...f.paths, layout: 'dev' };
   const calls = f.native.calls.length; assert.equal((await f.service.reconcile()).state, 'unknown'); assert.equal(f.native.calls.length, calls);
 });
@@ -193,4 +193,26 @@ for (const platform of ['darwin', 'win32']) test(`${platform}: editable Beijing 
  assert.equal((await f.service.reconcile()).state,'registered');
  const definition=scheduleDefinition(f.native.spec).content;
  assert.match(definition,platform==='darwin'?/<integer>9<\/integer><key>Minute<\/key><integer>25<\/integer>/:/T01:25:00Z/);
+});
+
+test('enabled Local automation reports unsupported mode, never disabled or registered; saves retain independent values', async t => {
+  const f = await fixture(t);
+  const owner = JSON.parse(await fs.readFile(f.file, 'utf8'));
+  owner.mode = 'local'; owner.scheduler = {schemaVersion:1, enabled:false, time:'13:37', timezone:'Asia/Shanghai'};
+  await fs.writeFile(f.file, JSON.stringify(owner));
+  const result = await f.config.update('radar.enabled', true);
+  assert.equal(result.saved, true);
+  assert.equal(result.scheduling.state, 'failed');
+  assert.equal(result.scheduling.code, 'SCHEDULER_MODE_UNSUPPORTED');
+  assert.equal((await f.service.status()).code, 'SCHEDULER_MODE_UNSUPPORTED');
+  assert.equal(f.native.calls.length, 0);
+  await f.config.update('integrity.enabled', true);
+  await f.config.update('scheduler.time', '09:25');
+  const after = JSON.parse(await fs.readFile(f.file, 'utf8'));
+  assert.equal(after.common.radar.enabled, true);
+  assert.equal(after.common.integrity.enabled, true);
+  assert.equal(after.weekly.enabled, false);
+  assert.equal(after.weekly.intervalDays, 14);
+  assert.equal(after.scheduler.time, '09:25');
+  assert.equal(f.native.calls.length, 0);
 });
