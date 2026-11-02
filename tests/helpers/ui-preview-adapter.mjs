@@ -26,16 +26,26 @@ function installPaperEchoPreview(seed) {
   // Owned entirely by the mock adapter: never shipped as application code.
   const runOutcome = document.createElement('select'); runOutcome.setAttribute('aria-label', '模拟运行结果');
   for (const [value, text] of [['success', '运行演示：成功'], ['failed', '运行演示：失败']]) { const option = document.createElement('option'); option.value = value; option.textContent = text; runOutcome.append(option); }
+  // Research-brief branch, ordered from Stage1 and Stage0 calls; not progress events.
   const runStages = [
-    ['stage1', '检索与筛选', '模拟检索、去重与初步评级。'],
-    ['zotero_backend_ready', 'Zotero 就绪检查', '模拟检查所选文献库连接。'],
-    ['stage2_writeback', '写入 Zotero', '模拟写入本次入选文献。'],
-    ['stage3_translation', '标题翻译', '模拟补充文献中文标题。'],
-    ['stage4_exports', '生成研究简报', '模拟整理并导出研究结果。'],
-    ['stage5_notification', '结果通知', '模拟发送运行结果通知。'],
+    ['feedback_learning', '处理上次反馈与学习', '按自适应学习配置处理上次反馈。', 'preference.enabled'],
+    ['retrieval', '获取文献', '按已选来源获取候选文献。'],
+    ['dedupe', '候选文献去重', '按标识与标准化标题合并重复候选。'],
+    ['rule_based_triage', '规则筛选与初步评级', '规则筛选同时给出初步等级，并非两个独立阶段。'],
+    ['journal_quality_gate', '期刊过滤', '本示例未启用期刊质量过滤。', 'preview.journal'],
+    ['pre_llm_dedupe', '文献库去重', '在 AI 复审前排除已有条目。'],
+    ['llm_grade_review', 'AI 等级复审', '按复审配置与候选范围执行。', 'review.enabled'],
+    ['manual_title_translation', '人工复核标题补译', '仅有待复核条目且翻译开启时执行；本示例无待补译条目。', 'preview.manualTitles'],
+    ['rule_suggestions', '整理规则建议', '按本次反馈整理筛选规则建议。'],
+    ['feedback_item_actions', '处理反馈条目', '按反馈执行条目动作并准备写回候选。'],
+    ['literature_integrity', '撤稿与更正检测', '按完整性检测配置执行。', 'integrity.enabled'],
+    ['stage2_writeback', '按配置写回 Zotero', '通过后端就绪检查后写回入选文献。'],
+    ['stage3_translation', '标题翻译与补翻', '写回成功后，按翻译配置补充中文标题。', 'translation.enabled'],
+    ['stage4_exports', '生成运行结果与简报', '写回与翻译阶段完成后导出本次结果。'],
   ];
   const runListeners = new Set(); let runTimer;
-  let run = { status: 'idle', startedAt: null, endedAt: null, elapsed: 0, current: -1, stages: runStages.map(([id, name, description]) => ({ id, name, description, status: 'pending' })), products: [], error: null };
+  const makeStages = () => runStages.map(([id, name, description, setting]) => ({ id, name, description, elapsed: 0, status: 'pending', skip: Boolean(setting && !settings.find(row => row.id === setting)?.value) }));
+  let run = { status: 'idle', startedAt: null, endedAt: null, elapsed: 0, current: -1, stages: makeStages(), products: [], error: null };
   const runSnapshot = () => structuredClone(run);
   const publishRun = () => runListeners.forEach(listener => listener(runSnapshot()));
   window.paperEchoWorkflowPreview = Object.freeze({
@@ -44,19 +54,26 @@ function installPaperEchoPreview(seed) {
     start() {
       if (run.status === 'running') return;
       const outcome = runOutcome.value;
-      run = { status: 'running', startedAt: new Date().toISOString(), endedAt: null, elapsed: 0, current: 0, stages: runStages.map(([id, name, description], i) => ({ id, name, description, status: i ? 'pending' : 'running' })), products: [], error: null };
-      runOutcome.disabled = true; publishRun();
+      run = { status: 'running', startedAt: new Date().toISOString(), endedAt: null, elapsed: 0, current: -1, stages: makeStages(), products: [], error: null };
+      const advance = () => {
+        while (++run.current < run.stages.length) {
+          const stage = run.stages[run.current];
+          if (stage.skip) { stage.status = 'skipped'; continue; }
+          stage.status = 'running'; return;
+        }
+        run.current = run.stages.length - 1; run.status = 'success';
+        run.products = [{ name: '周报.xlsx', path: '/模拟工作空间/预览演示/周报.xlsx' }];
+      };
+      advance(); runOutcome.disabled = true; publishRun();
       runTimer = setInterval(() => {
-        run.elapsed = Math.floor((Date.now() - Date.parse(run.startedAt)) / 1000);
-        const next = Math.floor(run.elapsed / 2);
-        if (outcome === 'failed' && next >= 4) {
-          run.status = 'failed'; run.current = 3; run.error = '模拟连接失败：标题翻译未完成。没有发送真实 API 请求。';
-          run.stages.forEach((stage, i) => stage.status = i < 3 ? 'completed' : i === 3 ? 'failed' : 'pending');
-        } else if (next >= run.stages.length) {
-          run.status = 'success'; run.current = run.stages.length - 1; run.stages.forEach(stage => stage.status = 'completed');
-          run.products = [{ name: '周报.xlsx', path: '/模拟工作空间/预览演示/周报.xlsx' }];
-        } else { run.current = next; run.stages.forEach((stage, i) => stage.status = i < next ? 'completed' : i === next ? 'running' : 'pending'); }
-        if (run.status !== 'running') { clearInterval(runTimer); run.endedAt = new Date().toISOString(); runOutcome.disabled = false; }
+        run.elapsed++;
+        const stage = run.stages[run.current]; stage.elapsed++;
+        if (stage.elapsed >= 2) {
+          if (outcome === 'failed' && stage.id === 'stage3_translation') {
+            stage.status = 'failed'; run.status = 'failed'; run.error = '模拟连接失败：标题翻译未完成。没有发送真实 API 请求。';
+          } else { stage.status = 'completed'; advance(); }
+        }
+        if (run.status !== 'running') { run.endedAt = new Date().toISOString(); clearInterval(runTimer); runOutcome.disabled = false; }
         publishRun();
       }, 1000);
     },

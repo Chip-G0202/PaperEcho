@@ -270,7 +270,7 @@ input[role=switch]{appearance:none;width:48px;height:28px;border-radius:20px;bac
 .workbench-view #content .manual-run-facts dd{margin:5px 0 0;font-weight:600;font-size:15px}
 .workbench-view #content .manual-run-current{font-size:14px;font-weight:600;margin:12px 0 6px}
 .workbench-view #content .manual-run-details progress{display:block;width:100%;height:8px;accent-color:var(--primary);margin-bottom:16px}
-.workbench-view #content .manual-run-stages{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0;padding:0;list-style:none}
+.workbench-view #content .manual-run-stages{display:grid;grid-template-columns:minmax(0,1fr);gap:0;margin:0;padding:0;list-style:none}
 .workbench-view #content .manual-run-stages li{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:start;border:1px solid var(--border);border-radius:var(--radius);padding:12px;min-width:0}
 .workbench-view #content .manual-stage-marker{display:grid;place-items:center;width:28px;height:28px;border:1px solid var(--border);border-radius:50%;font-size:13px;color:var(--muted)}
 .workbench-view #content .manual-run-stages strong{font-size:14px}
@@ -288,3 +288,9 @@ input[role=switch]{appearance:none;width:48px;height:28px;border-radius:20px;bac
 .workbench-view #content .manual-run-heading>div:first-child{display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:center;gap:6px 12px}
 .workbench-view #content .manual-run-heading .manual-run-state{margin:0}
 .workbench-view #content .manual-run-heading .meta{grid-column:1/-1}
+
+.workbench-view #content .manual-run-details[hidden]{display:none}
+.workbench-view #content .manual-run-stages li{border:0;border-bottom:1px solid var(--border);border-radius:0;padding:12px 0}
+.workbench-view #content .manual-run-follow-up{margin:18px 0 0;font-weight:600}
+.workbench-view #content .manual-run-entry:has(.manual-run-details:not([hidden])){border-bottom:0;padding-bottom:0}
+@media(max-width:760px){.workbench-view #content .manual-run-stages li{grid-template-columns:28px minmax(0,1fr)}.workbench-view #content .manual-stage-status{grid-column:2;line-height:1.4}}
