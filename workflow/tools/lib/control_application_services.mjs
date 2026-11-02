@@ -1,3 +1,4 @@
+import { ControlRunService } from './control_run_service.mjs';
 import { ControlAutomationService } from './control_automation_service.mjs';
 import path from 'node:path';
 import { FeedbackService } from './control_feedback_service.mjs';
@@ -35,5 +36,6 @@ export function createControlServices({ root, reviewRoot, env = process.env, llm
   const setup = new SetupService({ config, context, env });
   const doctor = new DoctorService({ config, secrets, research, review, context, env });
   const supportBundle = new SupportBundleService({ doctor, secrets, context, env });
-  return { feedback, config, rules, secrets, review, schedule, automation, notifications, research, setup, doctor, supportBundle };
+  const manualRun = new ControlRunService({ config, doctor, review, context, env });
+  return { manualRun, feedback, config, rules, secrets, review, schedule, automation, notifications, research, setup, doctor, supportBundle };
 }

@@ -28,12 +28,18 @@ test('preview clock advances, rejects duplicate starts, completes or fails witho
  const failed=mock.snapshot();assert.equal(failed.status,'failed');assert.equal(failed.stages.find(s=>s.id==='stage3_translation').id,'stage3_translation');assert.equal(failed.stages.find(s=>s.id==='stage3_translation').status,'failed');assert.equal(failed.stages.at(-1).status,'pending');assert.equal(failed.products.length,0);assert.match(failed.error,/模拟/);assert.ok(failed.endedAt);assert.equal(cleared,2);
  unsubscribe();const before=updates;mock.start();assert.equal(updates,before);
 });
-test('real-mode renderer is explicitly unavailable and cannot start any operation',()=>{
- const nodes=[],navigation=[];const el=(tag,text,className)=>{const node={tag,textContent:text,className,append(){},setAttribute(){},dataset:{},replaceChildren(){}};nodes.push(node);return node};
- const scope={window:{},el,button:(text,action)=>Object.assign(el('button',text),{action}),navigate:route=>navigation.push(route),disposeManualRunView:()=>{},manualRunExpanded:false,fetch:()=>assert.fail('no backend request')};
- const code=app.slice(app.indexOf('function workflowPreview()'),app.indexOf('function empty('));
- vm.runInNewContext(code+';manualRunView(true)',scope);
- const start=nodes.find(n=>n.tag==='button'&&n.textContent==='立即运行');assert.equal(start.disabled,true);start.action();assert.deepEqual(navigation,[]);assert.ok(nodes.some(n=>n.textContent==='待接入'));
- const toggle=nodes.find(n=>n.textContent==='展开详情');toggle.action();assert.equal(toggle.textContent,'收起详情');assert.equal(nodes.find(n=>n.className==='manual-run-details').hidden,false);toggle.action();assert.equal(nodes.find(n=>n.className==='manual-run-details').hidden,true);assert.deepEqual(navigation,[]);
- assert.doesNotMatch(code,/fetch\(|api\(|paperEchoLoginStartup|localStorage|sessionStorage/);
+test('live controller only reads on open, starts once on explicit click, restores state and keeps disconnect unknown',async()=>{
+ let listener,timer,posts=0,reads=0;
+ const state={status:'idle',stages:[],products:[],elapsed:0};
+ const scope={api:async(_url,body)=>{if(body){posts++;return {...state,status:'running'}}reads++;return state},setTimeout:fn=>{timer=fn;return 1},clearTimeout:()=>{}};
+ const code=app.slice(app.indexOf('function liveRunController()'),app.indexOf('function manualRunView()'));
+ vm.runInNewContext(code+';globalThis.controller=liveRunController()',scope);
+ const controller=scope.controller;let updates=0;const stop=controller.subscribe(()=>updates++);
+ await new Promise(r=>setImmediate(r));assert.equal(reads,1);assert.equal(posts,0);assert.equal(controller.snapshot().status,'idle');
+ await Promise.all([controller.start(),controller.start()]);assert.equal(posts,1);assert.equal(controller.snapshot().status,'running');
+ state.status='success';state.elapsed=7;await timer();assert.equal(controller.snapshot().status,'success');assert.equal(controller.snapshot().elapsed,7);
+ scope.api=async()=>{throw Error('secret-must-not-leak')};await controller.start();assert.equal(controller.snapshot().status,'unknown');assert.ok(!controller.snapshot().error.includes('secret'));assert.equal(posts,1);
+ stop();assert.ok(updates>0);
+ assert.ok(app.includes("const controller = preview || liveRunController()"));
+ assert.doesNotMatch(code,/localStorage|sessionStorage|setInterval/);
 });

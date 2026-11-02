@@ -1,3 +1,4 @@
+import { emitRunProgress, finishRunPhase } from '../lib/control_run_progress.mjs';
 import { writeAtomicJson } from "../lib/atomic_json.mjs";
 import { loadPubMedPmcSearchConfig, loadWorkflowRules } from "../lib/literature_config.mjs";
 import { resolveLlmRuntime } from "../lib/llm_json_support.mjs";
@@ -189,6 +190,7 @@ export async function runResearchOsPipeline({
       ms: Date.now() - startedMs,
       ...extra,
     };
+    finishRunPhase(name === 'llm_preference_learning' ? 'feedback_learning' : name, { ...report.steps[name], ...extra }, Date.now()-startedMs);
     lastCompletedTimingName = name;
     lastKnownPhase = name;
     flushTimingDiagnostics("recordTiming", { timing_name: name });
@@ -196,6 +198,7 @@ export async function runResearchOsPipeline({
   // --- Preference learning phase ---
   const pubmedPmcConfigPath = path.join(ROOT, "config", "pubmed_pmc_search.json");
   const pubmedPmcConfig = loadPubMedPmcSearchConfig({ root: ROOT, now: new Date() });
+  emitRunProgress('feedback_learning', 'running');
   const llmPreferenceStarted = Date.now();
   const preferenceLearning = radarProfile ? radarPreferenceLearningPlaceholder() : await runPreferenceLearningPhase({
     reviewRoot: REVIEW_ROOT,
@@ -261,6 +264,7 @@ export async function runResearchOsPipeline({
 
   // --- Source selection: determine which retrieval sources to run ---
   const fetchStarted = Date.now();
+  emitRunProgress('retrieval', 'running');
   const fixture = await loadFixtureCandidates({
     fixtureRoot: RUNTIME.fixtureRoot,
     dryRun: buildRuntimeSafetyConfig({ runtime: RUNTIME, argv }).dry_run,
@@ -312,6 +316,7 @@ export async function runResearchOsPipeline({
         sourceStateRoot: process.env.PAPERECHO_SOURCE_STATE_ROOT || path.join(RESEARCH_ROOT, "source_state"),
         deferCommit: radarProfile,
       });
+  finishRunPhase('retrieval');
   const { sourceSelection, sourceCollectionSummary, rss, db, openalex, semanticScholar, crossref, europePmc, retrievalHealth = null, retrievalAuditPath = "", retrievalTransaction = null } = sourceResult;
   const rssEnabled = sourceSelection.enabled_sources?.includes("rss") ?? false;
   const pubmedEnabled = sourceSelection.enabled_sources?.includes("pubmed_pmc") ?? false;
@@ -378,6 +383,7 @@ export async function runResearchOsPipeline({
     ? await preparePendingPaperReview({ reviewRoot: REVIEW_ROOT, candidates: currentCandidates })
     : null;
   const dedupeInput = pendingPreparation?.input || currentCandidates;
+  emitRunProgress('dedupe', 'running');
   const dedupeStarted = Date.now();
   const dedupeResult = dedupWithDiagnostics(dedupeInput);
   const merged = dedupeResult.items;
@@ -399,6 +405,7 @@ export async function runResearchOsPipeline({
     deduped_count: dedupeResult.diagnostics.deduped_count,
     duplicate_removed_count: dedupeResult.diagnostics.duplicate_removed_count,
   };
+  finishRunPhase('dedupe', {}, Date.now()-dedupeStarted);
   const triageStandards = loadScreeningStandards(REVIEW_ROOT);
   report.triage_standards = {
     path: triageStandards.path || "",
@@ -410,6 +417,7 @@ export async function runResearchOsPipeline({
   if (!triageStandards.parsed) {
     report.failures.push({ stage: "triage_standards", reason: "screening_standards_unavailable_using_fallback", fallback: "hardcoded_keywords_only" });
   }
+  emitRunProgress('rule_based_triage', 'running');
   const triageStarted = Date.now();
   let triagedAll = merged.map((it) => {
     const scored = classifyItem(it, report.steps.feedback_learning || { hardPositiveTerms: [], hardNegativeTerms: [] }, triageStandards);
@@ -473,11 +481,13 @@ export async function runResearchOsPipeline({
   let gradeReviewBatchSizeSource = "default";
   const preferenceAuditPath = path.join(pipeDir, "preference_learning_audit.json");
   const { preferenceAuditWithImpact, preferenceLearningInputs } = preserveStage1PreferenceLearningContext(preferenceLearning);
+  emitRunProgress('journal_quality_gate', 'running');
   const qualityGateStarted = Date.now();
   const qualityGate = await applyJournalQualityGate(triagedAll, {
     config: buildJournalQualityConfig(workflowRulesForQualityGate.config || workflowRulesForQualityGate),
     cachePath: path.join(RESEARCH_ROOT, "journal_quality_cache.json"),
   });
+  finishRunPhase('journal_quality_gate', qualityGate.report, Date.now()-qualityGateStarted);
   triagedAll = qualityGate.items;
   const weeklyReuse = weeklyRadarMergeEnabled
     ? applyWeeklyClassificationReuse(triagedAll, classificationContext)
@@ -501,6 +511,7 @@ export async function runResearchOsPipeline({
   report.stage_timings.journal_quality_gate = { status: "completed", ms: Date.now() - qualityGateStarted };
   await fs.writeFile(report.steps.journal_quality_gate.audit_path, JSON.stringify(report.steps.journal_quality_gate, null, 2), "utf8");
 
+  emitRunProgress('pre_llm_zotero_existing_dedupe', 'running');
   const preLlmExistingDedupeStarted = Date.now();
   const preLlmDedupeStep = await runPreLlmDedupeStep({
     triagedItems: triagedAll,
@@ -549,6 +560,7 @@ export async function runResearchOsPipeline({
   });
 
   // ─── LLM Grade Review Pass ──────────────────────────────────────────
+  emitRunProgress('llm_grade_review', 'running');
   const { llmGradeReport, semanticGradingReport } = await runLlmGradeReviewStep({
     triagedAll,
     llmReviewItems,
@@ -587,6 +599,7 @@ export async function runResearchOsPipeline({
     report.steps.weekly_radar_merge = { ...report.steps.weekly_radar_merge, lifecycle: weeklyFinalize };
   }
   if (!radarProfile) {
+    emitRunProgress('manual_title_translation', 'running');
     const translationStarted = Date.now();
     const enrichment = await enrichManualReviewTitles(triagedAll, { cachePath:RUNTIME.translationCachePath, context:{current:pendingPreparation?.current || []} });
     triagedAll = enrichment.items;
@@ -603,6 +616,7 @@ export async function runResearchOsPipeline({
   });
 
   // ─── Rule Suggestion Generation ──────────────────────────────────────
+  emitRunProgress('rule_suggestions', 'running');
   const ruleSuggestionsStarted = Date.now();
   const ruleSuggestionsReport = radarProfile ? { status: "skipped", reason: "radar_profile", standards_rule_suggestions_count: 0 } : await runRuleSuggestionStep({
     reviewRoot: REVIEW_ROOT,
@@ -629,6 +643,7 @@ export async function runResearchOsPipeline({
   });
 
   // ─── Feedback Item Actions ──────────────────────────────────────────
+  emitRunProgress('feedback_item_actions', 'running');
   const feedbackItemActionsStarted = Date.now();
   const feedbackActionsResult = await runFeedbackActionsAndWriteback({
     report,
@@ -657,6 +672,7 @@ export async function runResearchOsPipeline({
   lastKnownPhase = feedbackActionsResult.lastKnownPhase;
   let { writebackReady } = feedbackActionsResult;
   const { triaged, abcAllItems, translationConfig } = feedbackActionsResult;
+  emitRunProgress('literature_integrity', 'running');
   let integrityResult;
   try {
     integrityResult = await runWeeklyIntegrityMonitor({
@@ -669,6 +685,7 @@ export async function runResearchOsPipeline({
   } catch (error) {
     integrityResult = { status: "degraded", reason: String(error?.message || error).slice(0, 200), checkedCount: 0, plan: [] };
   }
+  finishRunPhase('literature_integrity', integrityResult);
   report.steps.literature_integrity = {
     status: integrityResult.status,
     reason: integrityResult.reason || "",

@@ -342,24 +342,47 @@ async function home() {
   const strip = el('div', undefined, 'summary-strip page-summary'); strip.append(el('p', `最近运行：${status.lastRun?.status === 'completed' ? '已完成' : status.lastRun?.status === 'failed' ? '未完成，请检查运行报告' : '暂无可靠状态'}`), el('p', `需人工复核：${status.needsReview ?? '暂无统计'}`)); main.append(strip);
   if (status.integrity) main.append(el('p', `完整性提醒：新撤稿 ${status.integrity.newlyConfirmedRetractions ?? 0} · 更正 ${status.integrity.newCorrections ?? 0} · 关注声明 ${status.integrity.newExpressionsOfConcern ?? 0}`, 'meta'));
 }
-// No execution endpoint, IPC or local history: only the isolated preview may run.
+// Preview and real execution use separate controllers with the same view.
 function workflowPreview() {
   const preview = window.paperEchoWorkflowPreview;
   return preview?.kind === 'PAPERECHO_MEMORY_RUN_PREVIEW' && typeof preview.start === 'function' && typeof preview.snapshot === 'function' && typeof preview.subscribe === 'function' ? preview : null;
 }
+function liveRunController() {
+  let state = {status:'unknown', stages:[], products:[], elapsed:0, current:-1}, listener, timer, active = true;
+  const publish = () => listener?.();
+  const read = async () => {
+    try { const next = await api('/api/run'); if (active) state = next; }
+    catch { if (active) state = {...state,status:'unknown',error:'连接中断，运行结果尚未确认。'}; }
+    if (!active) return;
+    publish();
+    if (state.status === 'running') timer = setTimeout(read, 3000);
+  };
+  return { snapshot: () => state,
+    subscribe(fn) { listener = fn; void read(); return () => {active = false; clearTimeout(timer);}; },
+    async start() {
+      if (['running','unknown'].includes(state.status)) return;
+      state = {...state,status:'running',error:null}; publish(); clearTimeout(timer);
+      try { state = await api('/api/run', {}); }
+      catch { state = {...state,status:'unknown',error:'无法确认启动结果，请刷新状态；不会自动重试启动。'}; }
+      if (active) {publish(); if(state.status === 'running')timer = setTimeout(read,3000);}
+    },
+  };
+}
 function manualRunView() {
   const preview = workflowPreview();
+  const controller = preview || liveRunController();
+  let previousStatus;
   const view = el('section', undefined, 'manual-run-entry');
   const heading = el('div', undefined, 'manual-run-heading');
   const copy = el('div'); const stateText = el('p', undefined, 'manual-run-state'); stateText.setAttribute('role', 'status');
-  const description = el('p', preview ? '模拟演示，不执行真实业务。' : '手动运行待接入，暂不可启动。', 'meta');
+  const description = el('p', preview ? '模拟演示，不执行真实业务。' : '运行会调用已配置的 AI、生成文件并写回 Zotero；关闭本地后端可能中断任务。', 'meta');
   copy.append(el('h3', '工作流运行'), stateText, description);
   const actions = el('div', undefined, 'actions manual-run-actions');
-  const start = button('立即运行', () => { if (!preview) return; manualRunExpanded = true; preview.start(); syncExpanded(); }); start.className = 'primary';
-  start.syncDisabled = () => { start.disabled = !preview || preview.snapshot().status === 'running'; };
+  const start = button('立即运行', async () => { manualRunExpanded = true; syncExpanded(); await controller.start(); }); start.className = 'primary';
+  start.syncDisabled = () => { start.disabled = ['running', 'unknown'].includes(controller.snapshot().status); };
   const toggle = button('展开详情', () => { manualRunExpanded = !manualRunExpanded; syncExpanded(); });
   actions.append(start, toggle); heading.append(copy, actions); view.append(heading);
-  const labels = { idle: '未运行', running: '运行中', success: '成功', failed: '失败' };
+  const labels = { idle: '未运行', running: '运行中', success: '成功', failed: '失败', unknown: '状态未知' };
   const recent = el('span', undefined, 'meta'); view.append(recent);
   const detail = el('div', undefined, 'manual-run-details'); detail.id = 'manual-run-detail'; view.append(detail);
   toggle.setAttribute('aria-controls', detail.id);
@@ -372,35 +395,46 @@ function manualRunView() {
   }
   const stageRows = []; let progress; const current = el('p', undefined, 'manual-run-current');
   const output = el('div', undefined, 'manual-run-output'); const error = el('p', undefined, 'field-error'); error.setAttribute('role', 'alert'); error.hidden = true;
-  if (preview) {
-    detail.append(el('p', '研究简报分支演示 · 各阶段及耗时均为模拟；每日雷达不执行后续写回与简报导出。', 'meta'), el('p', '运行前检查：模拟通过。实际入口另有配置、间隔及后端就绪检查，失败会阻断后续步骤。', 'meta'));
-    progress = el('progress'); progress.max = preview.snapshot().stages.length; progress.setAttribute('aria-label', '模拟阶段完成进度');
+  {
+    if (preview) detail.append(el('p', '研究简报分支演示 · 各阶段及耗时均为模拟；每日雷达不执行后续写回与简报导出。', 'meta'), el('p', '运行前检查：模拟通过。实际入口另有配置、间隔及后端就绪检查，失败会阻断后续步骤。', 'meta'));
+    progress = el('progress'); progress.max = Math.max(1, controller.snapshot().stages.length); progress.setAttribute('aria-label', '模拟阶段完成进度');
     detail.append(current, progress);
     const stages = el('ol', undefined, 'manual-run-stages');
-    for (const [i, stage] of preview.snapshot().stages.entries()) {
+    for (const [i, stage] of controller.snapshot().stages.entries()) {
       const row = el('li'); const marker = el('span', String(i + 1), 'manual-stage-marker'); const body = el('div');
       const status = el('span', undefined, 'manual-stage-status'); body.append(el('strong', stage.name), el('p', stage.description, 'meta')); row.append(marker, body, status); stages.append(row); stageRows.push({ row, marker, status });
     }
     detail.append(stages, error, output);
-  } else detail.append(el('p', '运行服务尚未接入，暂不展示真实进度或产物。', 'meta'));
+  }
   const time = value => value ? new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
   const refresh = () => {
-    const state = preview?.snapshot(); start.syncDisabled();
-    stateText.textContent = preview ? `${labels[state.status]} · 模拟运行` : '待接入';
+    const state = controller.snapshot(); start.syncDisabled();
+    if (!preview && state.status === 'running' && previousStatus !== 'running') manualRunExpanded = true;
+    previousStatus = state.status;
+    stateText.textContent = `${labels[state.status] || '状态未知'}${preview ? ' · 模拟运行' : state.runId ? ' · ' + state.runId : ''}`;
     view.dataset.state = state?.status || 'unavailable';
-    recent.textContent = state?.startedAt ? `最近模拟运行：${time(state.startedAt)} · ${labels[state.status]}` : '';
+    recent.textContent = state?.startedAt ? `最近${preview ? '模拟' : ''}运行：${time(state.startedAt)} · ${labels[state.status]}` : '';
     followUp.hidden = !manualRunExpanded; syncExpanded();
-    if (!preview) return;
-    values.elapsed.textContent = `${Math.floor(state.elapsed / 60)} 分 ${state.elapsed % 60} 秒`; values.startedAt.textContent = time(state.startedAt); values.endedAt.textContent = time(state.endedAt);
-    current.textContent = state.status === 'idle' ? '尚未开始' : `${state.status === 'failed' ? '失败阶段' : state.status === 'success' ? '已完成阶段' : '当前阶段'}：${state.stages[state.current].name}`;
+    values.elapsed.textContent = state.startedAt && Number.isFinite(state.elapsed) ? `${Math.floor(state.elapsed / 60)} 分 ${state.elapsed % 60} 秒` : '—'; values.startedAt.textContent = time(state.startedAt); values.endedAt.textContent = time(state.endedAt);
+    current.textContent = state.status === 'idle' ? '尚未开始' : `${state.status === 'failed' ? '失败阶段' : '当前阶段'}：${state.phase || state.stages[state.current]?.name || '尚未确认'}`;
+    progress.hidden = !preview;
+    const list = detail.querySelector('ol');
+    if (stageRows.length !== state.stages.length) {
+      stageRows.length = 0; list.replaceChildren();
+      state.stages.forEach((stage, i) => {
+        const row = el('li'), marker = el('span', String(i + 1), 'manual-stage-marker'), body = el('div'), status = el('span', '', 'manual-stage-status');
+        body.append(el('strong', stage.name)); row.append(marker, body, status); list.append(row); stageRows.push({row,marker,status});
+      });
+    }
     progress.value = state.stages.filter(stage => ['completed', 'skipped'].includes(stage.status)).length;
     const stageLabels = { pending: '待执行', running: '进行中', completed: '完成', failed: '失败', skipped: '跳过' };
-    state.stages.forEach((stage, i) => { const item = stageRows[i]; item.row.dataset.state = stage.status; item.status.textContent = `${stageLabels[stage.status]} · 模拟 ${stage.elapsed || 0} 秒`; item.marker.textContent = stage.status === 'completed' ? '✓' : String(i + 1); });
+    state.stages.forEach((stage, i) => { const item = stageRows[i]; item.row.dataset.state = stage.status; item.status.textContent = `${stageLabels[stage.status] || '未确认'}${Number.isFinite(stage.elapsed) ? ` · ${preview ? '模拟 ' : ''}${Math.round(stage.elapsed * 10) / 10} 秒` : ''}`; item.marker.textContent = stage.status === 'completed' ? '✓' : String(i + 1); });
     error.hidden = !state.error; error.textContent = state.error || '';
-    output.replaceChildren(); output.append(el('p', '结果通知：模拟未配置，跳过；仅在导出成功后按通知配置执行。', 'meta')); output.append(el('strong', state.status === 'success' ? '模拟产物 · 未创建文件' : '最终产物'), el('p', state.status === 'failed' ? '本次模拟未生成最终产物。' : state.products.length ? '' : '尚无产物。', 'meta'));
+    output.replaceChildren(); if (preview) output.append(el('p', '结果通知：模拟未配置，跳过；仅在导出成功后按通知配置执行。', 'meta'));
+    if (state.settingTarget) output.append(button('前往设置', () => state.settingTarget === 'runtime.path' ? navigate('settings/runtime/path') : goToSetting(state.settingTarget))); output.append(el('strong', preview && state.status === 'success' ? '模拟产物 · 未创建文件' : '本次运行产物'), el('p', state.status === 'failed' && !state.products.length ? (preview ? '本次模拟未生成最终产物。' : '尚无已确认产物。') : state.products.length ? '' : '尚无产物。', 'meta'));
     for (const product of state.products) output.append(el('p', product.name), el('code', product.path));
   };
-  refresh(); disposeManualRunView = preview?.subscribe(refresh) || (() => {}); return view;
+  refresh(); disposeManualRunView = controller.subscribe(refresh); return view;
 }
 function empty(title, text) { const box = el('section', undefined, 'empty-state'); box.append(el('h3', title), el('p', text)); main.append(box); }
 async function downloadSupportBundle() {

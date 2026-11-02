@@ -1,6 +1,7 @@
 // Must be first import: sets review_results_OVERRIDE_DATE from --date= CLI arg before stage modules load.
 import "../lib/date_override_bootstrap.mjs";
 import "../lib/env_file_bootstrap.mjs";
+import { emitRunProgress, finishRunPhase } from '../lib/control_run_progress.mjs';
 import { installWorkflowCancellation, throwIfWorkflowCanceled } from "../lib/workflow_cancellation.mjs";
 
 // Pipeline directory set early by main() so the global unhandledRejection
@@ -362,7 +363,12 @@ export async function runZoteroLiteratureFilter({
     process.env.PAPERECHO_RUN_ID = runId;
     process.env.PAPERECHO_RUN_PROFILE = profile;
     try {
-      return await baseStageRunner(stage);
+      emitRunProgress(stage.name, 'running');
+      const progressStarted = Date.now();
+      const result = await baseStageRunner(stage);
+      if (result.exitCode !== 0) emitRunProgress(stage.name, 'failed', {ms: Date.now()-progressStarted});
+      else finishRunPhase(stage.name, result.data?.output?.translation_summary || result.data || {}, Date.now()-progressStarted);
+      return result;
     } finally {
       if (originalForceRun === undefined) delete process.env.review_results_FORCE_RUN;
       else process.env.review_results_FORCE_RUN = originalForceRun;
@@ -729,6 +735,7 @@ export async function runZoteroLiteratureFilter({
   const stage3FailureCount = Number(artifacts.translation_backfill.data?.failure_count || 0);
   if (stage3.exitCode === 2 || (stage3.exitCode === 0 && stage3FailureCount > 0)) {
     stage3.status = "partial_failed";
+    emitRunProgress('stage3_translation', 'failed');
   }
   stages.push(stage3);
 
@@ -769,6 +776,7 @@ export async function runZoteroLiteratureFilter({
   if (stage4.exitCode === 0 && (!stage4ReportFresh || !stage4AuditFresh || !stage4OutputFresh)) {
     stage4.exitCode = 1;
     stage4.status = "failed";
+    emitRunProgress('stage4_exports', 'failed');
     stage4.stderr = trimLog(`${stage4.stderr}\n[orchestrator] stage4 postcheck failed: reportFresh=${stage4ReportFresh} auditFresh=${stage4AuditFresh} outputFresh=${stage4OutputFresh} outputPath=${stage4OutputPath || "null"}`);
   }
   if (stage4.exitCode === 0 && exportOperation) {

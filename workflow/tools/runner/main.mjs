@@ -58,6 +58,7 @@ export function runProduction(plan, dependencies = {}) {
       onStop: (status) => stderr.write(`[runner] ${status}: terminating owned production child\n`),
       onUnreaped: (status) => { flush('stdout', '', true); flush('stderr', '', true); watchdog.cleanup(); child.unref?.(); child.stdout?.destroy?.(); child.stderr?.destroy?.(); if (child.connected) child.disconnect?.(); resolve({ code: 1, status, childExitConfirmed: false, stdout: rawStdout, stderr: stderrSeen ? 'CHILD_STDERR_OMITTED' : '' }); },
     });
+    child.on('message', message => { try { dependencies.onProgress?.(message); } catch {} });
     child.stdout?.on("data", (chunk) => {
       rawStdout += chunk;
       flush('stdout', chunk);

@@ -100,6 +100,7 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       const cookie = String(req.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
       if (!equal(cookie, session)) return send(403, { error: 'SESSION_REQUIRED' });
       if (req.method === 'GET') {
+        if (decoded === '/api/run') return send(200, await services.manualRun.status());
         if (decoded === '/api/version') return send(200, { version });
         if (decoded === '/api/doctor/configuration') return send(200, await services.doctor.configuration());
         if (decoded === '/api/doctor') return send(200, await services.doctor.status());
@@ -133,6 +134,10 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
           res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="paperecho-support.zip"', 'Content-Length': zip.length });
           return res.end(zip);
         } finally { res.off('close', cancel); req.off('aborted', cancel); }
+      }
+      if (decoded === '/api/run') {
+        if (Object.keys(input).length) return send(400, { error: 'RUN_INPUT_INVALID' });
+        return send(202, await services.manualRun.start());
       }
       if (decoded === '/api/ai/test') return send(200, await testModelConnection(input, { secrets: services.secrets }));
       if (decoded === '/api/notifications/test') return send(200, await services.notifications.test(input));
