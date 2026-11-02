@@ -11,13 +11,14 @@ let settingsGroup = 'common';
 let settingsView = 'sources';
 let reviewSection = 'normal';
 let activeReview = null;
+let disposeManualRunView = () => {};
 let activeChannelModal = null;
 let setupState = null;
 let setupStep = 0;
 const setupDraft = new Map(); // Non-secret unsaved fields only; no browser persistence.
 const notificationChannelIds = ['email', 'qq', 'wechat', 'feishu', 'wecom'];
 const decisionReceipts = new Map();
-const pageNames = { home: '概览 · Overview', weekly: '文献 · Literature', feedback: '反馈 · Feedback', settings: '设置 · Settings', system: '系统 · System', setup: '首次配置 · Setup' };
+const pageNames = { run: '运行详情 · Run', home: '概览 · Overview', weekly: '文献 · Literature', feedback: '反馈 · Feedback', settings: '设置 · Settings', system: '系统 · System', setup: '首次配置 · Setup' };
 const errorMessages = { SHARED_MODEL_PROVIDER_MISMATCH: '请检查 AI 服务地址；API Key 未保存。', SETTING_VALUE_INVALID: '请检查字段格式或允许范围，原设置未改变。', SEARCH_KEYWORD_OWNER_REQUIRED: '请使用检索词分组修改检索式。', CREDENTIAL_VALUE_INVALID: '请输入有效单行凭据（最多 4096 字符）；请勿同时包含两种引号。', CREDENTIAL_EXTERNALLY_MANAGED: '该凭据由外部环境管理，请在原入口修改。', CREDENTIAL_WRITE_FAILED: '凭据未保存，请检查本地配置权限后重试。', CREDENTIAL_ENV_FORMAT_UNSUPPORTED: '凭据文件格式无法安全编辑，原文件未改变。', WEEKLY_CHANGED_RELOAD: '当前文献已更新，请刷新页面后重试。' };
 // Keep the existing API/canonical values; the stored learning action is unchanged.
 Object.assign(errorMessages, { SESSION_REQUIRED: '会话已失效，请刷新页面后重试。', CSRF_REQUIRED: '安全校验未通过，请刷新页面后重试。', ORIGIN_REJECTED: '请求来源未通过安全校验。', CREDENTIAL_ACL_UNSAFE: '文件权限无法安全确认，凭据未保存，请在原配置入口检查权限。', CREDENTIAL_CONCURRENT_CHANGE: '凭据文件已被其他操作更改，请重新读取后重试。', CREDENTIAL_RECOVERY_REQUIRED: '凭据恢复未完成，请通过原配置入口检查后再继续。', CREDENTIAL_KEY_NOT_ALLOWED: '此凭据字段不允许修改。' });
@@ -329,6 +330,7 @@ async function home() {
   const [status, schedule, weeklyData] = await Promise.all([api('/api/status'), api('/api/schedule-status'), loadWeekly()]); const visibleWeekly = displayablePapers(weeklyData.items); const grades = gradeCounts(visibleWeekly);
   main.append(pageIntro('研究工作空间', '从最近的文献开始，让每次反馈帮助下一次推荐。'));
   const planCard = taskCard(schedule); main.append(planCard);
+  planCard.append(manualRunView());
   const actions = el('div', undefined, 'actions quick-links page-toolbar'); const review = button('开始文献评级', () => navigate('feedback/rating/normal')); review.className = 'primary'; actions.append(review, button('提交研究方向反馈', () => navigate('feedback/research'))); planCard.append(actions);
   const grid = el('div', undefined, 'grid page-summary');
   const date = (value) => value ? new Date(value).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }) : '暂无记录';
@@ -338,6 +340,63 @@ async function home() {
   main.append(grid, el('p', `A级 ${grades.A} · B级 ${grades.B} · C级 ${grades.C} · 待处理反馈 ${visibleWeekly.filter((item) => !item.feedback).length}`, 'overview-summary'));
   const strip = el('div', undefined, 'summary-strip page-summary'); strip.append(el('p', `最近运行：${status.lastRun?.status === 'completed' ? '已完成' : status.lastRun?.status === 'failed' ? '未完成，请检查运行报告' : '暂无可靠状态'}`), el('p', `需人工复核：${status.needsReview ?? '暂无统计'}`)); main.append(strip);
   if (status.integrity) main.append(el('p', `完整性提醒：新撤稿 ${status.integrity.newlyConfirmedRetractions ?? 0} · 更正 ${status.integrity.newCorrections ?? 0} · 关注声明 ${status.integrity.newExpressionsOfConcern ?? 0}`, 'meta'));
+}
+// No execution endpoint, IPC or local history: only the isolated preview may run.
+function workflowPreview() {
+  const preview = window.paperEchoWorkflowPreview;
+  return preview?.kind === 'PAPERECHO_MEMORY_RUN_PREVIEW' && typeof preview.start === 'function' && typeof preview.snapshot === 'function' && typeof preview.subscribe === 'function' ? preview : null;
+}
+function manualRunView(detail = false) {
+  const preview = workflowPreview();
+  const view = el('section', undefined, detail ? 'card manual-run-details' : 'manual-run-entry');
+  const heading = el('div', undefined, 'manual-run-heading');
+  const copy = el('div'); const stateText = el('p', undefined, 'manual-run-state'); stateText.setAttribute('role', 'status');
+  const description = el('p', preview ? '模拟演示，不执行真实业务。' : '手动运行待接入，暂不可启动。', 'meta');
+  copy.append(el('h3', detail ? '本次运行' : '工作流运行'), stateText, description);
+  const actions = el('div', undefined, 'actions manual-run-actions');
+  const start = button('立即运行', () => { if (!preview) return; preview.start(); if (!detail) navigate('run'); }); start.className = 'primary';
+  start.syncDisabled = () => { start.disabled = !preview || preview.snapshot().status === 'running'; };
+  actions.append(start, button(detail ? '返回概览' : '查看详情', () => navigate(detail ? 'home' : 'run'))); heading.append(copy, actions); view.append(heading);
+  const labels = { idle: '未运行', running: '运行中', success: '成功', failed: '失败' };
+  const recent = el('span', undefined, 'meta'); if (!detail) view.append(recent);
+  const facts = el('dl', undefined, 'manual-run-facts'); const values = {};
+  if (detail) {
+    for (const [key, title] of [['elapsed', '已运行耗时'], ['startedAt', '开始时间'], ['endedAt', '结束时间']]) { const pair = el('div'); values[key] = el('dd', '—'); pair.append(el('dt', title), values[key]); facts.append(pair); }
+    view.append(facts);
+  }
+  const stageRows = []; let progress; const current = el('p', undefined, 'manual-run-current');
+  const output = el('div', undefined, 'manual-run-output'); const error = el('p', undefined, 'field-error'); error.setAttribute('role', 'alert'); error.hidden = true;
+  if (detail && preview) {
+    view.append(el('p', '参考 Stage0 的完整流程展示；阶段推进、时间和产物均为模拟，实际分支可能不同。', 'meta'));
+    progress = el('progress'); progress.max = preview.snapshot().stages.length; progress.setAttribute('aria-label', '模拟阶段完成进度');
+    view.append(current, progress);
+    const stages = el('ol', undefined, 'manual-run-stages');
+    for (const [i, stage] of preview.snapshot().stages.entries()) {
+      const row = el('li'); const marker = el('span', String(i + 1), 'manual-stage-marker'); const body = el('div');
+      const status = el('span', undefined, 'manual-stage-status'); body.append(el('strong', stage.name), el('p', stage.description, 'meta')); row.append(marker, body, status); stages.append(row); stageRows.push({ row, marker, status });
+    }
+    view.append(stages, error, output);
+  } else if (detail) view.append(el('p', '运行服务尚未接入，暂不展示真实进度或产物。', 'meta'));
+  const time = value => value ? new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
+  const refresh = () => {
+    const state = preview?.snapshot(); start.syncDisabled();
+    stateText.textContent = preview ? `${labels[state.status]} · 模拟运行` : '待接入';
+    view.dataset.state = state?.status || 'unavailable';
+    if (!detail) { recent.textContent = state?.startedAt ? `最近模拟运行：${time(state.startedAt)}` : ''; return; }
+    if (!preview) return;
+    values.elapsed.textContent = `${Math.floor(state.elapsed / 60)} 分 ${state.elapsed % 60} 秒`; values.startedAt.textContent = time(state.startedAt); values.endedAt.textContent = time(state.endedAt);
+    current.textContent = state.status === 'idle' ? '尚未开始' : `${state.status === 'failed' ? '失败阶段' : state.status === 'success' ? '已完成阶段' : '当前阶段'}：${state.stages[state.current].name}`;
+    progress.value = state.stages.filter(stage => stage.status === 'completed').length;
+    const stageLabels = { pending: '待开始', running: '进行中', completed: '已完成', failed: '失败' };
+    state.stages.forEach((stage, i) => { const item = stageRows[i]; item.row.dataset.state = stage.status; item.status.textContent = stageLabels[stage.status]; item.marker.textContent = stage.status === 'completed' ? '✓' : String(i + 1); });
+    error.hidden = !state.error; error.textContent = state.error || '';
+    output.replaceChildren(); output.append(el('strong', state.status === 'success' ? '模拟产物 · 未创建文件' : '最终产物'), el('p', state.status === 'failed' ? '本次模拟未生成最终产物。' : state.products.length ? '' : '尚无产物。', 'meta'));
+    for (const product of state.products) output.append(el('p', product.name), el('code', product.path));
+  };
+  refresh(); disposeManualRunView = preview?.subscribe(refresh) || (() => {}); return view;
+}
+async function runDetails() {
+  main.append(pageIntro('工作流运行详情', '查看本次运行的阶段、耗时与结果。'), manualRunView(true));
 }
 function empty(title, text) { const box = el('section', undefined, 'empty-state'); box.append(el('h3', title), el('p', text)); main.append(box); }
 async function downloadSupportBundle() {
@@ -1302,6 +1361,7 @@ async function setup() {
   section.append(actions); main.replaceChildren(section);
 }
 async function render() {
+  disposeManualRunView(); disposeManualRunView = () => {};
   clearCredentialInputs();
   activeChannelModal?.close(true, false);
   document.body.classList.toggle('ai-settings-view', page === 'settings' && settingsGroup === 'review');
@@ -1309,14 +1369,14 @@ async function render() {
   main.dataset.workbenchPage = page;
   activeReview = null; main.setAttribute('aria-busy', 'true'); main.replaceChildren(el('p', '正在读取当前工作空间…', 'loading'));
   document.querySelector('#page-title').textContent = pageNames[page];
-  document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = true; node.setAttribute('aria-current', node.dataset.page === page ? 'page' : 'false'); });
+  document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = true; node.setAttribute('aria-current', node.dataset.page === (page === 'run' ? 'home' : page) ? 'page' : 'false'); });
   document.querySelectorAll('[data-nav-group]').forEach((group) => { group.querySelector('.secondary-nav').hidden = group.dataset.navGroup !== page; });
   document.querySelectorAll('[data-nav-route]').forEach((node) => {
     const [, section] = node.dataset.navRoute.split('/');
     const active = page === 'feedback' ? section === feedbackView : page === 'settings' ? section === ({ common: 'general', review: 'models', runtime: 'runtime', automation: 'automation', connections: 'connections' }[settingsGroup]) : false;
     node.setAttribute('aria-current', active ? 'page' : 'false');
   });
-  try { await ({ home, weekly, feedback, settings, system, setup })[page](); }
+  try { await ({ home, run: runDetails, weekly, feedback, settings, system, setup })[page](); }
   catch { notice.dataset.kind = 'error'; notice.textContent = '无法读取当前页面，请检查本地服务后重试。'; empty('页面暂不可用', '没有更改你的数据。'); main.append(button('重新读取', render)); }
   finally { main.querySelector('.loading')?.remove(); main.setAttribute('aria-busy', 'false'); document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = false; }); }
 }

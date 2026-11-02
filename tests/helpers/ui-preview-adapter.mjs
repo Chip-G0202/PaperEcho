@@ -23,9 +23,47 @@ function installPaperEchoPreview(seed) {
   const activity = document.createElement('span'); activity.setAttribute('role', 'status'); activity.textContent = '禁止输入真实密钥；原生操作、联网调用及文件导出不可用。';
   const scenario = document.createElement('select'); scenario.setAttribute('aria-label', '模拟模型配置场景');
   for (const [value, text] of [['missing', '模拟：Key 缺失'], ['configured', '模拟：Key 已配置'], ['conflict', '模拟：旧 Key 不同（采用学习 Key）'], ['incompatible', '模拟：Key 与服务不匹配']]) { const option = document.createElement('option'); option.value = value; option.textContent = text; scenario.append(option); }
+  // Owned entirely by the mock adapter: never shipped as application code.
+  const runOutcome = document.createElement('select'); runOutcome.setAttribute('aria-label', '模拟运行结果');
+  for (const [value, text] of [['success', '运行演示：成功'], ['failed', '运行演示：失败']]) { const option = document.createElement('option'); option.value = value; option.textContent = text; runOutcome.append(option); }
+  const runStages = [
+    ['stage1', '检索与筛选', '模拟检索、去重与初步评级。'],
+    ['zotero_backend_ready', 'Zotero 就绪检查', '模拟检查所选文献库连接。'],
+    ['stage2_writeback', '写入 Zotero', '模拟写入本次入选文献。'],
+    ['stage3_translation', '标题翻译', '模拟补充文献中文标题。'],
+    ['stage4_exports', '生成研究简报', '模拟整理并导出研究结果。'],
+    ['stage5_notification', '结果通知', '模拟发送运行结果通知。'],
+  ];
+  const runListeners = new Set(); let runTimer;
+  let run = { status: 'idle', startedAt: null, endedAt: null, elapsed: 0, current: -1, stages: runStages.map(([id, name, description]) => ({ id, name, description, status: 'pending' })), products: [], error: null };
+  const runSnapshot = () => structuredClone(run);
+  const publishRun = () => runListeners.forEach(listener => listener(runSnapshot()));
+  window.paperEchoWorkflowPreview = Object.freeze({
+    kind: 'PAPERECHO_MEMORY_RUN_PREVIEW', snapshot: runSnapshot,
+    subscribe(listener) { runListeners.add(listener); return () => runListeners.delete(listener); },
+    start() {
+      if (run.status === 'running') return;
+      const outcome = runOutcome.value;
+      run = { status: 'running', startedAt: new Date().toISOString(), endedAt: null, elapsed: 0, current: 0, stages: runStages.map(([id, name, description], i) => ({ id, name, description, status: i ? 'pending' : 'running' })), products: [], error: null };
+      runOutcome.disabled = true; publishRun();
+      runTimer = setInterval(() => {
+        run.elapsed = Math.floor((Date.now() - Date.parse(run.startedAt)) / 1000);
+        const next = Math.floor(run.elapsed / 2);
+        if (outcome === 'failed' && next >= 4) {
+          run.status = 'failed'; run.current = 3; run.error = '模拟连接失败：标题翻译未完成。没有发送真实 API 请求。';
+          run.stages.forEach((stage, i) => stage.status = i < 3 ? 'completed' : i === 3 ? 'failed' : 'pending');
+        } else if (next >= run.stages.length) {
+          run.status = 'success'; run.current = run.stages.length - 1; run.stages.forEach(stage => stage.status = 'completed');
+          run.products = [{ name: '周报.xlsx', path: '/模拟工作空间/预览演示/周报.xlsx' }];
+        } else { run.current = next; run.stages.forEach((stage, i) => stage.status = i < next ? 'completed' : i === next ? 'running' : 'pending'); }
+        if (run.status !== 'running') { clearInterval(runTimer); run.endedAt = new Date().toISOString(); runOutcome.disabled = false; }
+        publishRun();
+      }, 1000);
+    },
+  });
   const reset = document.createElement('button'); reset.textContent = '重置模拟数据'; reset.onclick = () => location.reload();
   const wizard = document.createElement('button'); wizard.textContent = '首次配置向导'; wizard.onclick = () => { location.hash = '#setup'; };
-  banner.append(intro, scenario, fault, wizard, reset, activity); document.body.prepend(banner);
+  banner.append(intro, scenario, fault, runOutcome, wizard, reset, activity); document.body.prepend(banner);
   const style = document.createElement('style'); style.textContent = '#preview-banner{padding:12px 20px;background:#fff4d6;border-bottom:1px solid #dec897;display:flex;gap:10px;align-items:center;flex-wrap:wrap;position:sticky;top:0;z-index:1000;font-size:13px}#preview-banner strong{flex:1 1 400px}#preview-banner span{flex-basis:100%;color:#6d5c36}#preview-banner button,#preview-banner select{font-size:13px;padding:5px 10px}#preview-banner select{width:auto;max-width:100%;height:auto;display:inline-block;min-width:0}.ai-service [data-mock-key]{min-height:30px!important;margin:6px 0 0;font-size:12px!important;padding:4px 10px!important}.sidebar{top:var(--preview-banner-height,112px);height:calc(100vh - var(--preview-banner-height,112px))}'; document.head.append(style);
   new ResizeObserver(() => document.documentElement.style.setProperty('--preview-banner-height', banner.getBoundingClientRect().height + 'px')).observe(banner);
   // The same real renderer is used, but secret inputs are read-only before paint.

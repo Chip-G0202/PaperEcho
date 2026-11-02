@@ -255,3 +255,36 @@ input[role=switch]{appearance:none;width:48px;height:28px;border-radius:20px;bac
 .workbench-view #content .automation-controls input[type=number]{width:100px;margin:0}
 .workbench-view #content .automation-controls input[type=checkbox]{margin:0}
 @media(max-width:760px){.workbench-view #content .automation-settings{padding:0 18px}.workbench-view #content .automation-row{flex-direction:column;align-items:stretch;gap:14px}.workbench-view #content .automation-controls{min-width:0;justify-content:flex-start}.workbench-view #content .automation-controls button{margin-left:auto}}
+
+/* Manual-run surfaces reuse workbench cards and controls; mock state lives elsewhere. */
+.workbench-view #content .manual-run-entry{border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:18px 0;margin-top:16px}
+.workbench-view #content .manual-run-heading{display:flex;align-items:center;justify-content:space-between;gap:16px 24px}
+.workbench-view #content .manual-run-heading>div{min-width:0}
+.workbench-view #content .manual-run-heading h3{margin:0;font-size:17px}
+.workbench-view #content .manual-run-state{margin:6px 0 0;font-weight:650;color:var(--primary)}
+.workbench-view #content .manual-run-heading .meta{margin:4px 0 0;font-size:13px}
+.workbench-view #content .manual-run-actions{margin:0;gap:10px;flex:none;flex-wrap:wrap}
+.workbench-view #content .manual-run-entry>span:not(:empty){display:block;margin-top:8px;font-size:13px}
+.workbench-view #content .manual-run-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:18px 0;padding:14px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.workbench-view #content .manual-run-facts dt{font-size:13px;color:var(--muted)}
+.workbench-view #content .manual-run-facts dd{margin:5px 0 0;font-weight:600;font-size:15px}
+.workbench-view #content .manual-run-current{font-size:14px;font-weight:600;margin:12px 0 6px}
+.workbench-view #content .manual-run-details progress{display:block;width:100%;height:8px;accent-color:var(--primary);margin-bottom:16px}
+.workbench-view #content .manual-run-stages{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0;padding:0;list-style:none}
+.workbench-view #content .manual-run-stages li{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:start;border:1px solid var(--border);border-radius:var(--radius);padding:12px;min-width:0}
+.workbench-view #content .manual-stage-marker{display:grid;place-items:center;width:28px;height:28px;border:1px solid var(--border);border-radius:50%;font-size:13px;color:var(--muted)}
+.workbench-view #content .manual-run-stages strong{font-size:14px}
+.workbench-view #content .manual-run-stages .meta{font-size:13px;line-height:1.5;margin:5px 0 0}
+.workbench-view #content .manual-stage-status{font-size:12px;color:var(--muted);white-space:nowrap;line-height:28px}
+.workbench-view #content .manual-run-stages [data-state=running]{border-color:var(--primary);background:var(--surface-subtle)}
+.workbench-view #content .manual-run-stages [data-state=completed] .manual-stage-marker{color:var(--primary);background:var(--tint)}
+.workbench-view #content .manual-run-stages [data-state=failed]{border-color:var(--danger)}
+.workbench-view #content .manual-run-output{margin-top:16px;border-top:1px solid var(--border);padding-top:14px;font-size:14px}
+.workbench-view #content .manual-run-output p{margin:5px 0}
+.workbench-view #content .manual-run-output code{display:block;overflow-wrap:anywhere;font-size:13px;color:var(--secondary)}
+@media(max-width:760px){.workbench-view #content .manual-run-heading{align-items:stretch;flex-direction:column;gap:12px}.workbench-view #content .manual-run-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}.workbench-view #content .manual-run-facts{grid-template-columns:minmax(0,1fr);gap:12px}.workbench-view #content .manual-run-stages{grid-template-columns:minmax(0,1fr)}}
+.workbench-view #content[data-workbench-page=home] .daily-plan:has(.manual-run-entry){grid-template-columns:minmax(0,1fr)}
+.workbench-view #content[data-workbench-page=home] .daily-plan:has(.manual-run-entry)>.quick-links{grid-column:1;grid-row:auto;flex-direction:row;align-self:stretch;align-items:center;margin-top:14px}
+.workbench-view #content .manual-run-heading>div:first-child{display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:center;gap:6px 12px}
+.workbench-view #content .manual-run-heading .manual-run-state{margin:0}
+.workbench-view #content .manual-run-heading .meta{grid-column:1/-1}
