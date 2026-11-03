@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 function installedRuntime() {
-  if (!process.versions.electron || process.platform !== 'darwin') return null;
-  const root = path.resolve(process.execPath, '../..');
-  const resources = path.join(root, 'Resources/core');
+  if (!process.versions.electron) return null;
+  const root = process.platform === 'darwin' ? path.resolve(process.execPath, '../..') : path.dirname(process.execPath);
+  const resources = path.join(root, process.platform === 'darwin' ? 'Resources/core' : 'resources/core');
   return fs.existsSync(path.join(resources, 'desktop/electron-poc/headless.mjs')) ? { root, resources } : null;
 }
 function locations(applicationRoot, env) {

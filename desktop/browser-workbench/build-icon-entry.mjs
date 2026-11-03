@@ -56,13 +56,14 @@ exit 0
   await fs.writeFile(stopInfo, (await fs.readFile(stopInfo, 'utf8')).replaceAll('com.paperecho.browser-workbench.launcher', 'com.paperecho.browser-workbench.stop').replaceAll('<string>PaperEcho 浏览器工作台</string>', '<string>停止 PaperEcho 浏览器工作台</string>'));
   const stopExe = path.join(stopApp, 'Contents/MacOS/open-workbench');
   await fs.writeFile(stopExe, (await fs.readFile(stopExe, 'utf8')).replace('/bin/zsh "$folder/Start-Workbench-Quiet.command" </dev/null', '/bin/zsh "$folder/Start-Workbench-Quiet.command" --stop </dev/null'));
-  return { app, output, runtime: 'INSTALLED_PAPERECHO_OR_SOURCE_NODE', pageAcceptance: 'PREVIOUS_FAILURE_UNRESOLVED' };
+  return { app, output, runtime: 'INSTALLED_PAPERECHO_OR_SOURCE_NODE', pageAcceptance: 'VERIFY_NEW_DELIVERY' };
 }
 // MS-SHLLINK: relative target + environment-based icon. No machine paths,
 // LinkInfo, target ID list, tracking block or elevation request is serialized.
 // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/17b69472-0f34-4bcf-b290-eccdb8de224b
 // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/9e6b7dfe-2ca2-4875-a0c9-8d75ee4f9b65
-export function relativeShortcut(iconPath) {
+export function relativeShortcut(iconPath, target = '.\\Start-Workbench.cmd') {
+  if (!['.\\Start-Workbench.cmd', '.\\Open-Workbench.vbs', '.\\Stop-Workbench.vbs'].includes(target)) throw new Error('SHORTCUT_TARGET_INVALID');
   if (!/^%LOCALAPPDATA%\\PaperEcho\\launcher-icons\\paperecho-[a-f0-9]{12}\.ico$/.test(iconPath)) throw new Error('ICON_CACHE_PATH_INVALID');
   const header = Buffer.alloc(76);
   header.writeUInt32LE(76, 0);
@@ -72,7 +73,7 @@ export function relativeShortcut(iconPath) {
   const string = value => { const bytes = Buffer.from(value, 'utf16le'), count = Buffer.alloc(2); count.writeUInt16LE(bytes.length / 2); return Buffer.concat([count, bytes]); };
   const icon = Buffer.alloc(0x314); icon.writeUInt32LE(0x314, 0); icon.writeUInt32LE(0xa0000007, 4);
   icon.write(iconPath, 8, 'ascii'); icon.write(iconPath, 268, 'utf16le');
-  return Buffer.concat([header, string('PaperEcho 浏览器工作台'), string('.\\Start-Workbench.cmd'), string(iconPath), icon, Buffer.alloc(4)]);
+  return Buffer.concat([header, string('PaperEcho 浏览器工作台'), string(target), string('.\\paperecho.ico'), icon, Buffer.alloc(4)]);
 }
 export async function buildWindowsIconEntry(destination) {
   const output = path.resolve(destination); await fs.mkdir(output);
@@ -80,9 +81,11 @@ export async function buildWindowsIconEntry(destination) {
   const digest = createHash('sha256').update(bytes).digest('hex');
   const iconPath = `%LOCALAPPDATA%\\PaperEcho\\launcher-icons\\paperecho-${digest.slice(0, 12)}.ico`;
   await fs.writeFile(path.join(output, 'paperecho.ico'), bytes, { flag: 'wx' });
-  await fs.writeFile(path.join(output, 'PaperEcho 浏览器工作台.lnk'), relativeShortcut(iconPath), { flag: 'wx' });
-  for (const name of ['Prepare-Workbench-Icon.cmd', 'Prepare-Workbench-Icon.ps1']) await fs.copyFile(path.join(here, name), path.join(output, name));
-  return { output, target: '.\\Start-Workbench.cmd', iconPath, nativeWindows: 'UNVERIFIED', usage: 'DROP_IN_BESIDE_EXISTING_CMD_AND_PREPARE_ICON_ONCE' };
+  await fs.writeFile(path.join(output, 'PaperEcho 浏览器工作台.lnk'), relativeShortcut(iconPath, '.\\Open-Workbench.vbs'), { flag: 'wx' });
+  await fs.writeFile(path.join(output, '停止 PaperEcho 浏览器工作台.lnk'), relativeShortcut(iconPath, '.\\Stop-Workbench.vbs'), { flag: 'wx' });
+  for (const name of ['Prepare-Workbench-Icon.cmd', 'Prepare-Workbench-Icon.ps1', 'Start-Workbench.cmd', 'Start-Workbench.ps1', 'start.mjs', 'quiet-workbench.mjs', 'Start-Workbench-Quiet.ps1', 'Open-Workbench.vbs', 'Workbench-Error.vbs']) await fs.copyFile(path.join(here, name), path.join(output, name));
+  await fs.copyFile(path.join(here, 'Open-Workbench.vbs'), path.join(output, 'Stop-Workbench.vbs'));
+  return { output, target: '.\\Open-Workbench.vbs', iconPath, nativeWindows: 'UNVERIFIED', usage: 'WSCRIPT_HIDDEN_PS7_NODE_AUTOMATIC_ICON_PREPARATION' };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv.length !== 3) throw new Error('ONE_NEW_OUTPUT_DIRECTORY_REQUIRED');

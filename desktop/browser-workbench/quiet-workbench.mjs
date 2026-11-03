@@ -23,6 +23,7 @@ async function execute(file, args) {
 export async function showError(code) {
   const message = codes[code] || '工作台启动失败。请确认已安装 PaperEcho，或源码环境具备 Node.js 18+ 与项目依赖。';
   if(process.platform==='darwin') await execute('/usr/bin/osascript',['-e','on run argv\ndisplay alert "PaperEcho 浏览器工作台" message (item 1 of argv) giving up after 10\nend run',message]);
+  else if(process.platform==='win32') await execute(path.join(process.env.SystemRoot||'C:\\Windows','System32/wscript.exe'),[path.join(here,'Workbench-Error.vbs'),code]);
 }
 async function privateDirectory(folder) {
   await fs.mkdir(folder,{recursive:true,mode:0o700});
@@ -35,10 +36,10 @@ async function owner(folder) {
 export async function runQuiet({ stop=false, env=process.env, openBrowser, onReady=()=>{} }={}) {
   const { browserEnvironment,startBrowserWorkbench }=await import('./start.mjs');
   const selected=await browserEnvironment({env});
-  // This dedicated Mac GUI process also hosts legacy configuration readers.
+  // This dedicated GUI process also hosts legacy configuration readers.
   // They consult process.env after startup; retain the same resolved layout
   // and paths used by the service instead of falling back to dev mode.
-  if (process.platform === 'darwin') {
+  if (process.platform === 'darwin' || process.platform === 'win32') {
     for (const key of ['PAPERECHO_LAYOUT','PAPERECHO_APPLICATION_ROOT','PAPERECHO_RESOURCE_ROOT','PAPERECHO_DATA_ROOT','PAPERECHO_CACHE_ROOT','PAPERECHO_WORKSPACE_ID']) {
       if (selected[key] !== undefined) process.env[key] = selected[key];
     }
@@ -56,6 +57,7 @@ export async function runQuiet({ stop=false, env=process.env, openBrowser, onRea
   const result=await startBrowserWorkbench({env,openBrowser:true,openBrowserImpl:openBrowser || (async url=>{
     const target=new URL(url);if(target.protocol!=='http:'||target.hostname!=='127.0.0.1'||target.pathname!=='/'||target.search||target.hash)throw Error('BROWSER_FAILED');
     if(process.platform==='darwin')await execute('/usr/bin/open',[target.origin+'/#home']);
+    else if(process.platform==='win32')await execute(path.join(env.SystemRoot||'C:\\Windows','System32/rundll32.exe'),['url.dll,FileProtocolHandler',target.origin+'/#home']);
     else throw Error('BROWSER_FAILED');
   })});
   if(!result.browserOpened){await result.close();throw Error('BROWSER_FAILED')}
