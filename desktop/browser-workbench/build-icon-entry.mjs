@@ -28,16 +28,34 @@ export async function buildMacIconEntry(destination) {
 `, { flag: 'wx' });
   await fs.writeFile(path.join(contents, 'MacOS/open-workbench'), `#!/bin/zsh
 set -eu
-folder="\${0:A:h}/../../.."
-entry="$folder/Start-Workbench.command"
-if [[ ! -x "$entry" ]]; then
-  /usr/bin/osascript -e 'display alert "PaperEcho 启动入口不完整" message "请保留整个浏览器工作台文件夹，不要单独移动 app。"' >/dev/null
+export LC_CTYPE=UTF-8
+folder="\${0:A:h}"
+folder="\${folder:h}/Resources/workbench"
+entry="$folder/Start-Workbench-Quiet.command"
+if [[ ! -x "$entry" || ! -f "$folder/quiet-workbench.mjs" ]]; then
+  /usr/bin/osascript -e 'display alert "PaperEcho 启动入口不完整" message "请重新获取完整的浏览器工作台应用。"' >/dev/null
   exit 1
 fi
-exec /usr/bin/open -a Terminal "$entry"
+/bin/zsh "$folder/Start-Workbench-Quiet.command" </dev/null >/dev/null 2>&1 &!
+exit 0
 `, { flag: 'wx', mode: 0o755 });
-  for (const name of ['Start-Workbench.command', 'start.mjs']) await fs.copyFile(path.join(here, name), path.join(output, name));
+  for (const name of ['Start-Workbench.command', 'start.mjs', 'Start-Workbench-Quiet.command', 'quiet-workbench.mjs']) await fs.copyFile(path.join(here, name), path.join(output, name));
   await fs.chmod(path.join(output, 'Start-Workbench.command'), 0o755);
+  await fs.chmod(path.join(output, 'Start-Workbench-Quiet.command'), 0o755);
+  // Finder must read its launch resources within its own application bundle.
+  // Keep adjacent files solely for the existing command-line debug entry.
+  const bundledWorkbench = path.join(contents, 'Resources/workbench');
+  await fs.mkdir(bundledWorkbench);
+  for (const name of ['start.mjs', 'Start-Workbench-Quiet.command', 'quiet-workbench.mjs']) {
+    await fs.copyFile(path.join(here, name), path.join(bundledWorkbench, name));
+  }
+  await fs.chmod(path.join(bundledWorkbench, 'Start-Workbench-Quiet.command'), 0o755);
+  const stopApp = path.join(output, '停止 PaperEcho 浏览器工作台.app');
+  await fs.cp(app, stopApp, { recursive: true, errorOnExist: true, force: false });
+  const stopInfo = path.join(stopApp, 'Contents/Info.plist');
+  await fs.writeFile(stopInfo, (await fs.readFile(stopInfo, 'utf8')).replaceAll('com.paperecho.browser-workbench.launcher', 'com.paperecho.browser-workbench.stop').replaceAll('<string>PaperEcho 浏览器工作台</string>', '<string>停止 PaperEcho 浏览器工作台</string>'));
+  const stopExe = path.join(stopApp, 'Contents/MacOS/open-workbench');
+  await fs.writeFile(stopExe, (await fs.readFile(stopExe, 'utf8')).replace('/bin/zsh "$folder/Start-Workbench-Quiet.command" </dev/null', '/bin/zsh "$folder/Start-Workbench-Quiet.command" --stop </dev/null'));
   return { app, output, runtime: 'INSTALLED_PAPERECHO_OR_SOURCE_NODE', pageAcceptance: 'PREVIOUS_FAILURE_UNRESOLVED' };
 }
 // MS-SHLLINK: relative target + environment-based icon. No machine paths,
