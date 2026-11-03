@@ -6,14 +6,15 @@ import { runZoteroLiteratureFilter } from '../tools/stage0/main.mjs';
 import { OperationLedgerStore } from '../tools/recovery/operation_ledger.mjs';
 import { reconcileOperationLedger } from '../tools/recovery/reconciliation.mjs';
 import { terminalWorkflowStatus, workflowLedgerStatus } from '../tools/lib/orchestrator_status.mjs';
-import { finishRunGroup } from '../tools/lib/runtime_housekeeping.mjs';
+import { finishRunGroup, startRunGroup } from '../tools/lib/runtime_housekeeping.mjs';
 import { main as runner } from '../tools/runner/main.mjs';
 const root=path.resolve('tests/runs/status-fixtures');
-async function setup(t) {
+async function setup(t, { ledger = true } = {}) {
  await fs.mkdir(root,{recursive:true});const dir=await fs.mkdtemp(path.join(root,'terminal-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));
  const runId='fixture';const runRoot=path.join(dir,'review','runs');
- const store=await OperationLedgerStore.create({runRoot,runId,mode:'desktop',profile:'standard',configHash:'a'.repeat(64),inputHash:'b'.repeat(64),artifactPath:path.join(dir,'input.json')});
- return {dir,runRoot,runId,store};
+ const ledgerOptions={runRoot,runId,mode:'desktop',profile:'standard',configHash:'a'.repeat(64),inputHash:'b'.repeat(64),artifactPath:path.join(dir,'input.json')};
+ const store=ledger?await OperationLedgerStore.create(ledgerOptions):null;
+ return {dir,runRoot,runId,store,ledgerOptions};
 }
 for(const [failure,ledgerMode] of [['timed_out','absent'],['timed_out','empty'],['timed_out','verified'],['interrupted','empty'],['failed','empty']]) test(`orchestrator ${failure} with ${ledgerMode} ledger preserves outcome`,async t=>{
  const {dir,runRoot,runId,store}=await setup(t);
@@ -34,9 +35,13 @@ test('terminal priority is monotonic over lower summaries',()=>{
  assert.equal(terminalWorkflowStatus('completed','timed_out'),'timed_out');assert.equal(terminalWorkflowStatus('timed_out','interrupted'),'interrupted');assert.equal(terminalWorkflowStatus('completed','failed_stage1'),'failed');
 });
 test('runner watchdog overrides completed child ledger after confirmed exit',async t=>{
- const {runRoot,runId,store}=await setup(t);await store.setRunStatus('completed');
- const manifestPath=path.join(runRoot,runId,'run_group.json');await fs.writeFile(manifestPath,JSON.stringify({status:'completed',artifacts:[]}));
- const output=[];const code=await runner(['--mode','desktop','--run'],{stdout:{write:s=>output.push(s)},stderr:{write:s=>output.push(s)},resolveRunnerConfigurationImpl:async options=>({options,env:{}}),runPreflightImpl:async()=>({canRun:true,checks:[],requiredMissing:[]}),buildExecutionPlanImpl:()=>({runRoot,runId}),runProductionImpl:async()=>({status:'timed_out',code:1,childExitConfirmed:true,stdout:JSON.stringify({status:'completed'})})});
+ const {runRoot,runId,ledgerOptions}=await setup(t,{ledger:false});
+ const manifestPath=path.join(runRoot,runId,'run_group.json');
+ const output=[];const code=await runner(['--mode','desktop','--run'],{stdout:{write:s=>output.push(s)},stderr:{write:s=>output.push(s)},resolveRunnerConfigurationImpl:async options=>({options,env:{}}),runPreflightImpl:async()=>({canRun:true,checks:[],requiredMissing:[]}),buildExecutionPlanImpl:()=>({runRoot,runId}),runProductionImpl:async()=>{
+  const store=await OperationLedgerStore.create(ledgerOptions);await store.setRunStatus('completed');
+  await startRunGroup({runRoot,runId,pipelineMode:'desktop'});await finishRunGroup({manifestPath,status:'completed'});
+  return {status:'timed_out',code:1,childExitConfirmed:true,stdout:JSON.stringify({status:'completed'})};
+ }});
  assert.notEqual(code,0);assert.equal(JSON.parse(await fs.readFile(manifestPath,'utf8')).status,'timed_out');assert.equal((await OperationLedgerStore.load({runRoot,runId})).ledger.status,'timed_out');
  await finishRunGroup({manifestPath,status:'completed'});assert.equal(JSON.parse(await fs.readFile(manifestPath,'utf8')).status,'timed_out');
 });

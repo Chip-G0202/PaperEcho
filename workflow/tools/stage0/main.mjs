@@ -1,6 +1,7 @@
 // Must be first import: sets review_results_OVERRIDE_DATE from --date= CLI arg before stage modules load.
 import "../lib/date_override_bootstrap.mjs";
 import "../lib/env_file_bootstrap.mjs";
+import { emitRunProgress, finishRunPhase } from '../lib/control_run_progress.mjs';
 import { installWorkflowCancellation, throwIfWorkflowCanceled } from "../lib/workflow_cancellation.mjs";
 
 // Pipeline directory set early by main() so the global unhandledRejection
@@ -33,8 +34,9 @@ import { getDefaultZoteroLibraryIndexPath } from "../lib/zotero_library_index_st
 import { recordRadarNotificationOutcome, selectRadarNotificationCandidates } from "../radar/state.mjs";
 import { claimWeeklyRadarWritebackCandidates } from "../stage1/weekly_merge_step.mjs";
 import { radarNotificationReceiptPath, sendRadarAggregateNotification } from "../stage5/radar_notification.mjs";
-import { createRunRecoveryCoordinator, resumeRunFromLedger, RunRecoveryCoordinator } from "../recovery/run_recovery.mjs";
-import { acquireWorkflowLease, releaseRunLease } from "../recovery/operation_ledger.mjs";
+import { createRunRecoveryCoordinator, resumeRunFromLedger, RunRecoveryCoordinator, acquireStartupWorkflowLease } from "../recovery/run_recovery.mjs";
+import { releaseRunLease } from "../recovery/operation_ledger.mjs";
+import { ResearchEvaluationService } from '../lib/research_evaluation_service.mjs';
 import { buildZoteroRecoveryReconcilers } from "../recovery/zotero_reconciliation.mjs";
 import { dayLabel, monthLabel } from "../lib/report_period_support.mjs";
 import {
@@ -215,6 +217,7 @@ export async function runZoteroLiteratureFilter({
   scheduledRuntimeStateReader = readScheduledRuntimeState,
   runId = `zlf-${Date.now()}-${randomUUID().slice(0, 8)}`,
   recoveryCoordinator = null,
+  researchEvaluationService = null,
 } = {}) {
   const startedAt = iso(clock());
   const profile = String(env.PAPERECHO_RUN_PROFILE || "standard").trim().toLowerCase();
@@ -233,6 +236,7 @@ export async function runZoteroLiteratureFilter({
       now: new Date(startedAt), ...state,
       weeklyMode: env.PAPERECHO_SCHEDULED_WEEKLY_MODE || "standard",
       radarEnabled: /^(1|true|yes|on)$/i.test(String(env.PAPERECHO_RADAR_ENABLED || "")),
+      weeklyEnabled: env.PAPERECHO_WEEKLY_ENABLED !== "false",
       intervalDays: Number(env.review_results_RUN_INTERVAL_DAYS || 7),
     });
     if (!scheduledDailyDecision.allowed
@@ -245,6 +249,7 @@ export async function runZoteroLiteratureFilter({
     }
   }
   const dryRun = Boolean(runtimeSafety.dry_run);
+  const research = recoveryCoordinator && !dryRun && !stage1Only ? researchEvaluationService || new ResearchEvaluationService({ root: config.projectRoot, reviewRoot: config.reviewRoot, env }) : null;
   const runContext = buildRunContext({
     automationName: AUTOMATION_NAME,
     runId,
@@ -333,7 +338,9 @@ export async function runZoteroLiteratureFilter({
       }
     }
     if (recoveryCoordinator) {
-      await recoveryCoordinator.store.setRunStatus(workflowLedgerStatus(terminalStatus, recoveryCoordinator.store.ledger.operations), terminalStatus);
+      const channelCompletion = report?.steps?.stage5_notification?.channels && report.steps.stage5_notification.notificationStatus === 'completed'
+        && terminalStatus === 'completed' && recoveryCoordinator.store.ledger.operations.every(operation => operation.status === 'verified');
+      await recoveryCoordinator.store.setRunStatus(channelCompletion ? 'completed' : workflowLedgerStatus(terminalStatus, recoveryCoordinator.store.ledger.operations), terminalStatus);
     }
     return report;
   };
@@ -356,7 +363,12 @@ export async function runZoteroLiteratureFilter({
     process.env.PAPERECHO_RUN_ID = runId;
     process.env.PAPERECHO_RUN_PROFILE = profile;
     try {
-      return await baseStageRunner(stage);
+      emitRunProgress(stage.name, 'running');
+      const progressStarted = Date.now();
+      const result = await baseStageRunner(stage);
+      if (result.exitCode !== 0) emitRunProgress(stage.name, 'failed', {ms: Date.now()-progressStarted});
+      else finishRunPhase(stage.name, result.data?.output?.translation_summary || result.data || {}, Date.now()-progressStarted);
+      return result;
     } finally {
       if (originalForceRun === undefined) delete process.env.review_results_FORCE_RUN;
       else process.env.review_results_FORCE_RUN = originalForceRun;
@@ -459,6 +471,7 @@ export async function runZoteroLiteratureFilter({
     return await completeRunGroup(report);
   }
 
+  if (research) artifacts.research_feedback = await research.safely('prepare', recoveryCoordinator.store);
   stages.push(await executeStage(stageDefs.stage1, runSameProcessStage, clock));
   notificationHealthObservations = Array.isArray(stages.at(-1).data?.report?.notification_health_observations) ? stages.at(-1).data.report.notification_health_observations : [];
   if (stage1Only && stages.at(-1).exitCode === 0) {
@@ -524,30 +537,34 @@ export async function runZoteroLiteratureFilter({
       await recoveryCoordinator.store.setStage("stage4_exports", "skipped", { reason: "radar_json_only" });
     }
     const urgentItems = Array.isArray(radarResult.urgentItems) ? radarResult.urgentItems : [];
+    if (research) artifacts.research_feedback_publication = await research.safely('publish', recoveryCoordinator.store);
     const indexPath = getDefaultZoteroLibraryIndexPath(config.projectRoot);
     const notificationSelection = await selectRadarNotificationCandidates(indexPath, urgentItems);
     const selectedItems = notificationSelection.selected.map((entry) => entry.item);
-    const stage5Request = resolveStage5Request(argv, env);
+    const stage5Request = resolveStage5Request(argv, env, 'radar');
     const stage5StateRoot = runStateRoot(runRoot, runId);
-    const receiptPath = radarNotificationReceiptPath(stage5StateRoot, runId, selectedItems);
+    const receiptPath = radarNotificationReceiptPath(stage5StateRoot, runId, selectedItems, radarResult.audit);
     const notificationOperation = recoveryCoordinator && selectedItems.length && stage5Request.recipient
-      ? await recoveryCoordinator.prepareFileOperation({ type: "notification", targetId: "radar_business", targetPath: receiptPath, input: { fingerprints: notificationSelection.selected.map((entry) => entry.fingerprint) }, retryable: false, intent: { notificationType: "radar_business", eventEpoch: runId } })
+      ? await recoveryCoordinator.prepareFileOperation({ type: "notification", targetId: "radar_business", targetPath: receiptPath, input: { fingerprints: notificationSelection.selected.map((entry) => entry.fingerprint) }, retryable: false, intent: { notificationType: "radar_business", eventEpoch: runId, radarCompletionHash: canonicalQueryHash(notificationSelection.selected) } })
       : null;
-    const stage5Notification = await radarStage5Runner({ runId, urgentItems: selectedItems, recipient: stage5Request.recipient, runStateRoot: stage5StateRoot, env, ledgerOperationId: notificationOperation?.idempotencyKey || "" });
-    await recordRadarNotificationOutcome(indexPath, notificationSelection.selected, stage5Notification, { generatedAt: iso(clock()) });
-    if (notificationOperation && stage5Notification.status === "accepted") {
-      await recoveryCoordinator.completeNotification(notificationOperation, { ...stage5Notification, receiptStatus: "accepted", messageId: stage5Notification.receipt?.messageId || "" });
+    const stage5Notification = await radarStage5Runner({ runId, urgentItems: selectedItems, audit: radarResult.audit, notificationSelection: notificationSelection.selected, recipient: stage5Request.recipient, runStateRoot: stage5StateRoot, env, ledgerOperationId: notificationOperation?.idempotencyKey || "", recoveryCoordinator });
+    const emailNotification = stage5Notification.channels?.email || stage5Notification;
+    const radarOutcome = stage5Notification.channels ? Object.values(stage5Notification.channels).find(value => value.status === 'accepted') || Object.values(stage5Notification.channels).find(value => value.status === 'unknown') || Object.values(stage5Notification.channels).find(value => value.status === 'failed') || stage5Notification : stage5Notification;
+    await recordRadarNotificationOutcome(indexPath, notificationSelection.selected, radarOutcome, { generatedAt: iso(clock()) });
+    if (notificationOperation && emailNotification.status === "accepted") {
+      await recoveryCoordinator.completeNotification(notificationOperation, { ...emailNotification, receiptStatus: "accepted", messageId: emailNotification.receipt?.messageId || "" });
       await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: "accepted" });
-    } else if (notificationOperation && stage5Notification.status === "unknown") {
+    } else if (notificationOperation && emailNotification.status === "unknown") {
       await recoveryCoordinator.store.transition(notificationOperation.idempotencyKey, "remote_observed", { verification: { possibleAccepted: true } });
       await recoveryCoordinator.store.setStage("stage5_notification", "failed", { status: "unknown" });
-    } else if (notificationOperation && stage5Notification.status === "failed") {
+    } else if (notificationOperation && emailNotification.status === "failed") {
       await recoveryCoordinator.store.transition(notificationOperation.idempotencyKey, "failed", { error: `RADAR_NOTIFICATION_${String(stage5Notification.reason || "failed").toUpperCase()}` });
       await recoveryCoordinator.store.setStage("stage5_notification", "failed", { status: "failed" });
     } else if (recoveryCoordinator) {
       await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: "skipped", reason: stage5Notification.reason });
     }
-    const finalStatus = stage5Notification.status === "failed" ? "failed_stage5_notification" : stage5Notification.status === "unknown" ? "completed_with_warnings" : "completed";
+    if (recoveryCoordinator && stage5Notification.channels) await recoveryCoordinator.store.setStage('stage5_notification', stage5Notification.notificationStatus === 'completed' ? 'verified' : 'failed', { status: stage5Notification.notificationStatus });
+    const finalStatus = stage5Notification.channels ? stage5Notification.notificationStatus === 'completed' ? 'completed' : 'completed_with_warnings' : stage5Notification.status === "failed" ? "failed_stage5_notification" : stage5Notification.status === "unknown" ? "completed_with_warnings" : "completed";
     const report = buildOrchestratorReport({
       status: finalStatus,
       runContext,
@@ -718,6 +735,7 @@ export async function runZoteroLiteratureFilter({
   const stage3FailureCount = Number(artifacts.translation_backfill.data?.failure_count || 0);
   if (stage3.exitCode === 2 || (stage3.exitCode === 0 && stage3FailureCount > 0)) {
     stage3.status = "partial_failed";
+    emitRunProgress('stage3_translation', 'failed');
   }
   stages.push(stage3);
 
@@ -758,6 +776,7 @@ export async function runZoteroLiteratureFilter({
   if (stage4.exitCode === 0 && (!stage4ReportFresh || !stage4AuditFresh || !stage4OutputFresh)) {
     stage4.exitCode = 1;
     stage4.status = "failed";
+    emitRunProgress('stage4_exports', 'failed');
     stage4.stderr = trimLog(`${stage4.stderr}\n[orchestrator] stage4 postcheck failed: reportFresh=${stage4ReportFresh} auditFresh=${stage4AuditFresh} outputFresh=${stage4OutputFresh} outputPath=${stage4OutputPath || "null"}`);
   }
   if (stage4.exitCode === 0 && exportOperation) {
@@ -766,6 +785,7 @@ export async function runZoteroLiteratureFilter({
   }
   stages.push(stage4);
   const stage4Ok = stages.at(-1).exitCode === 0;
+  if (stage4Ok && research) artifacts.research_feedback_publication = await research.safely('publish', recoveryCoordinator.store);
   let stage5Notification = { status: "skipped", reason: "stage4_not_completed", attachments: [] };
   if (stage4Ok) {
     const stage5Request = resolveStage5Request(argv, env);
@@ -792,9 +812,10 @@ export async function runZoteroLiteratureFilter({
       });
     }
     stage4RunSummary = { ...stage4RunSummary, pipelineMode: pipelineModeFromBackend(resolvedBackend), finishedAt: stage4RunSummary.finishedAt || iso(clock()) };
-    stage5Notification = await stage5Runner({ runSummary: stage4RunSummary, literatureItems: literatureItems || [], recipient: stage5Request.recipient, forceResend: stage5Request.forceResend, config: { runStateRoot: stage5StateRoot, ledgerOperationId: notificationOperation?.idempotencyKey || "" } });
-    if (notificationOperation && (stage5Notification.status === "sent" || (stage5Notification.status === "skipped" && stage5Notification.reason === "already_sent"))) {
-      await recoveryCoordinator.completeNotification(notificationOperation, stage5Notification);
+    stage5Notification = await stage5Runner({ runSummary: stage4RunSummary, literatureItems: literatureItems || [], recipient: stage5Request.recipient, forceResend: stage5Request.forceResend, config: { env, runStateRoot: stage5StateRoot, ledgerOperationId: notificationOperation?.idempotencyKey || "", recoveryCoordinator } });
+    const emailNotification = stage5Notification.channels?.email || stage5Notification;
+    if (notificationOperation && (emailNotification.status === "sent" || (emailNotification.status === "skipped" && emailNotification.reason === "already_sent"))) {
+      await recoveryCoordinator.completeNotification(notificationOperation, emailNotification);
       await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: stage5Notification.status });
     } else if (notificationOperation) {
       await recoveryCoordinator.store.transition(notificationOperation.idempotencyKey, "failed", { error: `STAGE5_${String(stage5Notification.status || "unknown").toUpperCase()}` });
@@ -802,6 +823,7 @@ export async function runZoteroLiteratureFilter({
     } else if (recoveryCoordinator) {
       await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: "skipped", reason: stage5Notification.reason });
     }
+    if (recoveryCoordinator && stage5Notification.channels) await recoveryCoordinator.store.setStage('stage5_notification', stage5Notification.notificationStatus === 'completed' ? 'verified' : 'failed', { status: stage5Notification.notificationStatus });
   }
   try {
     const performance = await writeWorkflowPerformanceSummary({
@@ -830,7 +852,7 @@ export async function runZoteroLiteratureFilter({
     };
   }
   const finalStatus = deriveWorkflowStatus({
-    explicitStatus: stage4Ok && ["sent", "skipped"].includes(stage5Notification.status) ? "completed" : stage4Ok ? "failed_stage5_notification" : "failed_stage4_export",
+    explicitStatus: stage4Ok && stage5Notification.channels ? stage5Notification.notificationStatus === 'completed' ? 'completed' : 'completed_with_warnings' : stage4Ok && ["sent", "skipped"].includes(stage5Notification.status) ? "completed" : stage4Ok ? "failed_stage5_notification" : "failed_stage4_export",
     stages,
     artifacts,
   });
@@ -885,7 +907,9 @@ async function main() {
     const inputHash = String(process.env.PAPERECHO_INPUT_HASH || canonicalQueryHash({ mode: pipelineMode, profile }));
     const runRoot = path.join(config.reviewRoot, "runs");
     const targetRunId = resumeRunId || String(process.env.PAPERECHO_RUN_ID || `zlf-${Date.now()}-${randomUUID().slice(0, 8)}`);
-    workflowLease = await acquireWorkflowLease({ runRoot, runId: targetRunId, profile });
+    workflowLease = await acquireStartupWorkflowLease({ runRoot, runId: targetRunId, profile, resumeRunId,
+      automatic: process.env.PAPERECHO_SCHEDULED_DAILY === '1', parentOwnerId: process.env.PAPERECHO_PARENT_WORKFLOW_LEASE,
+      researchRoot: config.researchRoot, dataRoots: [config.projectRoot, config.reviewRoot] });
     if (!workflowLease.acquired) {
       report = { runId: targetRunId, run_id: targetRunId, status: "skipped", reason: workflowLease.reason || "active_workflow_lease", profile };
       orchestratorReportWritten = true;
@@ -897,6 +921,8 @@ async function main() {
         profile,
         configHash,
         inputHash: "",
+        onBusinessVerified: ({ store }) => new ResearchEvaluationService({ root: config.projectRoot, reviewRoot: config.reviewRoot, env: process.env }).safely('publish', store),
+        notification: { recipient: resolveStage5Request(process.argv.slice(2), process.env, profile === "radar" ? "radar" : "weekly").recipient, env: process.env, recordRadarOutcome: (selected, outcome) => recordRadarNotificationOutcome(getDefaultZoteroLibraryIndexPath(config.projectRoot), selected, outcome) },
         beforeReconcile: async ({ store, artifact }) => {
           const items = Array.isArray(artifact) ? artifact : [];
           const hasRadarClaimIntent = items.some((item) => item?.weekly_radar_queue_claim_intent || item?.weekly_radar_queue_claim);

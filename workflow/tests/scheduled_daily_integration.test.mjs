@@ -9,6 +9,7 @@ import { selectScheduledDailyRun } from "../tools/runner/scheduled_daily.mjs";
 import { withRunnerProfile } from "../tools/runner/config_loader.mjs";
 import { runZoteroLiteratureFilter } from "../tools/stage0/main.mjs";
 import { buildStage4RuntimeStateUpdate, writeSuccessfulRuntimeState } from "../tools/stage4/export_io.mjs";
+import { buildRuntimeConfig } from '../tools/lib/runtime_config.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const day = (offset, hour = 7) => new Date(Date.UTC(2026, 8, 21 + offset, hour));
@@ -48,40 +49,43 @@ test("daily selection uses only today's mode and rejects force, invalid state, a
   await assert.rejects(selectScheduledDailyRun(resolved(root), { now: day(1), fsApi: stateFiles({ last_accepted_planned_slot_at: day(0).toISOString() }) }), /SCHEDULE_STATE_INVALID/);
 });
 
-test("Runner selects Radar before mode preflight; Weekly preflight failure never falls back to Radar", async () => {
-  const root = path.join(repoRoot, "workflow", "tests");
+test("Runner selects Radar before mode preflight; Weekly preflight failure never falls back to Radar", async t => {
+  const base = path.join(repoRoot, 'tests/runs/phase10'); await fs.mkdir(base, { recursive: true });
+  const root = await fs.mkdtemp(path.join(base, 'schedule-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
   const modes = [];
-  let productions = 0;
+  let productions = 0, output = '';
   const options = {
     cwd: root, env: {}, repoRoot,
     resolveRunnerConfigurationImpl: async () => resolved(root),
     selectScheduledDailyRunImpl: (configuration, { now }) => selectScheduledDailyRun(configuration, { now, fsApi: stateFiles(baseline) }),
     runPreflightImpl: async (selected) => { modes.push(selected.profile); return { status: selected.profile === "radar" ? "ready" : "blocked", mode: "desktop", profile: selected.profile, requiredMissing: selected.profile === "radar" ? [] : [{ name: "Zotero", category: "dependency" }], canRun: selected.profile === "radar" }; },
-    buildExecutionPlanImpl: (selected) => ({ runId: "zlf-test", childEnv: {}, runRoot: root, profile: selected.profile }),
+    buildExecutionPlanImpl: (selected) => ({ runId: "zlf-test", childEnv: {}, runRoot: buildRuntimeConfig({ env: { ZOTERO_PROJECT_ROOT: root } }).runRoot, profile: selected.profile }),
     runProductionImpl: async () => { productions++; return { status: "completed", code: 0, stdout: "{}" }; },
     validateProductionResultImpl: async () => ({ ok: true, exitCode: 0 }),
-    stdout: sink(), stderr: sink(),
+    stdout: { write: value => { output += value; } }, stderr: sink(),
   };
-  assert.equal(await runnerMain(["--run", "--mode", "desktop", "--scheduled-daily"], { ...options, clock: () => day(1) }), 0);
+  assert.equal(await runnerMain(["--run", "--mode", "desktop", "--scheduled-daily"], { ...options, clock: () => day(1) }), 0, output);
   assert.equal(await runnerMain(["--run", "--mode", "desktop", "--scheduled-daily"], { ...options, clock: () => day(7) }), 4);
   assert.deepEqual(modes, ["radar", "standard"]);
   assert.equal(productions, 1);
+  assert.ok((await fs.readdir(root)).includes('logs'), 'workspace logs coexist outside the formal run root');
 });
 
-test("a losing concurrent Runner reports the Stage0 claim as already claimed", async () => {
-  const root = path.join(repoRoot, "workflow", "tests");
+test("a losing concurrent Runner reports the Stage0 claim as already claimed", async t => {
+  const base = path.join(repoRoot, 'tests/runs/phase10'); await fs.mkdir(base, { recursive: true });
+  const root = await fs.mkdtemp(path.join(base, 'schedule-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
   let output = "";
   const code = await runnerMain(["--run", "--mode", "desktop", "--scheduled-daily"], {
     cwd: root, env: {}, clock: () => day(1), repoRoot,
     resolveRunnerConfigurationImpl: async () => resolved(root),
     selectScheduledDailyRunImpl: (configuration, { now }) => selectScheduledDailyRun(configuration, { now, fsApi: stateFiles(baseline) }),
     runPreflightImpl: async () => ({ status: "ready", mode: "desktop", profile: "radar", requiredMissing: [], canRun: true }),
-    buildExecutionPlanImpl: () => ({ runId: "zlf-loser", childEnv: {}, runRoot: root }),
+    buildExecutionPlanImpl: () => ({ runId: "zlf-loser", childEnv: {}, runRoot: buildRuntimeConfig({ env: { ZOTERO_PROJECT_ROOT: root } }).runRoot }),
     runProductionImpl: async () => ({ status: "completed", code: 0, stdout: JSON.stringify({ status: "skipped", skipReport: { reason: "duplicate_schedule_trigger" }, schedule_decision: { businessRunId: "zlf-winner" } }) }),
     validateProductionResultImpl: async () => { throw new Error("duplicate must not enter ordinary validation"); },
     stdout: { write: (value) => { output += value; } }, stderr: sink(),
   });
-  assert.equal(code, 0);
+  assert.equal(code, 0, output);
   assert.match(output, /"status":"already_claimed"/);
   assert.match(output, /zlf-winner/);
 });

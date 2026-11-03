@@ -52,6 +52,7 @@ tests/*
 !tests/spreadsheet_adapter_compat.test.mjs
 !tests/stage4_no_write_fallback.test.mjs
 !tests/unified_pending_rule_suggestions.test.mjs
+!tests/research_evaluation.test.mjs
 !tests/workflow_classifier.test.mjs
 
 # Personal release materials
@@ -125,8 +126,10 @@ review_results/文献评价/screening_standards.backup.docx
 /.paperecho/update/
 
 # Local planning, output, editor and test temp caches
+/logs/
 .hermes/
 .planning/
+/.sandbox-lab/
 output/
 workflow/tests/.control-test-tmp/
 docs/paperecho-architecture*

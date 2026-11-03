@@ -37,6 +37,17 @@ This skill owns the shared execution contract, not a second pipeline invocation.
 
 ## Unified Configuration
 
+Doctor uses the shared read-only `--doctor` service, not a production invocation or `--check` replacement. It never prepares data directories, repairs permissions, releases claims, replays operations or calls external services. UNKNOWN evidence must remain visible; see [configuration](../../docs/configuration.md#doctor--system-health).
+
+First-run setup is GUI-only and derives readiness from existing config/preflight. It must reuse ConfigService and write-only SecretService, preserve partial/legacy configuration, and never gate Headless on a UI completion flag or invoke real providers. See [configuration](../../docs/configuration.md).
+
+Windows packaged runtime uses the same root owner with a pinned read-only Resource Root. Headless delegates to Shared Runner using the embedded runtime; see [configuration](../../docs/configuration.md) for verified build/test commands, required fuses and platform limits.
+
+Deployment layout is resolved only by `runtime_config.mjs`; reuse its Portable/Installed/Dev roots before config or Secret loading. Do not add adapter root resolvers, infer layout from cwd, or migrate real data implicitly. See [configuration](../../docs/configuration.md) for bootstrap inputs and compatibility boundaries.
+
+Windows packaged startup reads the protected first-run location through the shared bootstrap before any owner initialization. Explicit bootstrap overrides retain priority; unknown/nonempty data prevents first-run selection. Validate with `workflow/tests/startup_location.test.mjs` and existing runtime/setup tests; never hot-switch services.
+Windows packaged bootstrap first pins the shipped PowerShell Core executable for GUI/Headless ACL operations; never substitute PATH discovery or PS5.1. Runtime unavailable, unverifiable checks and confirmed unsafe ACLs remain separate fail-closed outcomes; see the configuration guide.
+
 - Use the single schema v1 resolver in `workflow/tools/runner/config_loader.mjs`. The user template is `config/paperecho.config.example.json`; the real `config/paperecho.config.json` stays local and gitignored.
 - Keep settings partitioned as `common`, `desktop`, `web`, and `local`. A path Skill reads only `common` plus its own section and fixes its own mode.
 - Precedence is CLI -> unified config -> environment/`.env` -> existing domain config/defaults. Never infer mode from secret/backend residue.

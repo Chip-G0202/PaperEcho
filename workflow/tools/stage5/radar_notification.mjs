@@ -1,37 +1,41 @@
 import path from "node:path";
 
 import { deliverReliableNotification } from "../notification/delivery.mjs";
-import { notificationIdentity, notificationReceiptPathFor } from "./email_receipt.mjs";
+import { notificationIdentity, notificationReceiptPathFor, notificationRecoveryData } from "./email_receipt.mjs";
 
-function escapeHtml(value) {
-  return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+import { buildRadarNotificationContent } from "./notification_content.mjs";
+import { formatRadarReport } from "./radar_report.mjs";
+import { emailDeliveryPolicy } from '../notification/policy.mjs';
+import { channelDeliveryPolicy } from '../notification/policy.mjs';
+import { deliverBusinessChannels } from '../notification/channel_delivery.mjs';
+import { canonicalQueryHash } from '../stage1/source_state.mjs';
+
+export function buildRadarAggregateMessage(items = [], context = {}) {
+  return formatRadarReport(buildRadarNotificationContent(items, context));
 }
 
-export function buildRadarAggregateMessage(items = []) {
-  const rows = items.map((item) => {
-    const id = item.doi ? `DOI: ${item.doi}` : item.pmid ? `PMID: ${item.pmid}` : "ID: unavailable";
-    const confidence = item.semantic_confidence || item.llm_review?.confidence || "";
-    const text = [item.title, item.journal, id, item.url, `Final: ${item.final_grade}`, `Rule: ${item.rule_grade} — ${item.grade_reason || ""}`, `LLM: ${item.llm_review_grade} — ${item.semantic_reason || ""}`, confidence ? `Confidence: ${confidence}` : ""].filter(Boolean).join("\n");
-    const html = `<li><strong>${escapeHtml(item.title)}</strong><br>${escapeHtml(item.journal || "")}<br>${escapeHtml(id)}<br>${escapeHtml(item.url || "")}<br>Final: ${escapeHtml(item.final_grade)}<br>Rule: ${escapeHtml(item.rule_grade)} — ${escapeHtml(item.grade_reason || "")}<br>LLM: ${escapeHtml(item.llm_review_grade)} — ${escapeHtml(item.semantic_reason || "")}${confidence ? `<br>Confidence: ${escapeHtml(confidence)}` : ""}</li>`;
-    return { text, html };
-  });
-  return {
-    subject: `PaperEcho Daily Radar：${items.length} 篇紧急 A`,
-    text: `PaperEcho Daily Radar\n\n${rows.map((row) => row.text).join("\n\n")}`,
-    html: `<h1>PaperEcho Daily Radar</h1><ol>${rows.map((row) => row.html).join("")}</ol>`,
-    attachments: [],
-  };
-}
-
-export function radarNotificationReceiptPath(runStateRoot, runId, urgentItems = []) {
-  const payload = buildRadarAggregateMessage(urgentItems);
+export function radarNotificationReceiptPath(runStateRoot, runId, urgentItems = [], audit = {}, content) {
+  const payload = content ? formatRadarReport(content) : buildRadarAggregateMessage(urgentItems, { runId, audit });
   const identity = notificationIdentity({ notificationType: "radar_business", businessSubject: "urgent_a_aggregate", eventEpoch: runId, payload });
   return notificationReceiptPathFor(path.resolve(runStateRoot), identity.receiptId);
 }
 
-export async function sendRadarAggregateNotification({
+export async function sendRadarAggregateNotification(options = {}) {
+  if (Number((options.env || process.env).PAPERECHO_CONFIG_SCHEMA_VERSION) >= 5 || options.urgentItems?.length && channelDeliveryPolicy('qq', 'radar', { env: options.env || process.env }).required) {
+    const content = buildRadarNotificationContent(options.urgentItems, { runId: options.runId, audit: options.audit });
+    return deliverBusinessChannels({ content, env: options.env || process.env, runStateRoot: options.runStateRoot,
+      recoveryCoordinator: options.recoveryCoordinator, qqTransport: options.qqTransport, channelTransports: options.channelTransports, fsApi: options.fsApi, clock: options.clock,
+      radarSelection: options.notificationSelection || [], radarCompletionHash: canonicalQueryHash(options.notificationSelection || []),
+      emailDelivery: () => sendEmailRadarAggregateNotification({ ...options, content }) });
+  }
+  return sendEmailRadarAggregateNotification(options);
+}
+
+async function sendEmailRadarAggregateNotification({
   runId,
   urgentItems = [],
+  audit = {},
+  notificationSelection = [],
   recipient,
   runStateRoot,
   transport,
@@ -39,11 +43,15 @@ export async function sendRadarAggregateNotification({
   fsApi,
   clock,
   ledgerOperationId = "",
+  content,
 } = {}) {
+  const policy = emailDeliveryPolicy('radar', { env });
+  if (!policy.required) return { status: 'skipped', reason: policy.reason, attempted: false, attachments: [] };
   if (!urgentItems.length) return { status: "skipped", reason: "no_urgent_items", attempted: false, attachments: [] };
   if (!String(recipient || "").trim()) return { status: "skipped", reason: "recipient_not_configured", attempted: false, attachments: [] };
-  const payload = buildRadarAggregateMessage(urgentItems);
-  const receiptPath = radarNotificationReceiptPath(runStateRoot, runId, urgentItems);
+  content ||= buildRadarNotificationContent(urgentItems, { runId, audit });
+  const payload = formatRadarReport(content);
+  const receiptPath = radarNotificationReceiptPath(runStateRoot, runId, urgentItems, audit, content);
   const delivered = await deliverReliableNotification({
     receiptPath,
     notificationType: "radar_business",
@@ -51,6 +59,7 @@ export async function sendRadarAggregateNotification({
     businessSubject: "urgent_a_aggregate",
     eventEpoch: runId,
     payload,
+    recoveryData: { ...await notificationRecoveryData(content), radarSelection: notificationSelection },
     recipient,
     ledgerOperationId,
     transport,

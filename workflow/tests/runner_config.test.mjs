@@ -195,7 +195,7 @@ test("invalid, unsupported, unknown, and missing config files fail closed", asyn
   const cli = parse(["--check", "--config", paths.configPath], paths.root);
   const cases = [
     ["{", "CONFIG_JSON_INVALID"],
-    [JSON.stringify({ schemaVersion: 3, mode: "local" }), "CONFIG_SCHEMA_UNSUPPORTED"],
+    [JSON.stringify({ schemaVersion: 99, mode: "local" }), "CONFIG_SCHEMA_UNSUPPORTED"],
     [JSON.stringify({ schemaVersion: 1, mode: "local", local: { enabled: true, apiKey: "forbidden" } }), "CONFIG_FIELD_UNKNOWN"],
   ];
   for (const [raw, code] of cases) {
@@ -302,7 +302,7 @@ test("ready unified config reaches one selected production mapping", async (t) =
       seenOptions = options;
       return { status: "ready", mode: options.mode, profile: options.profile, requiredMissing: [], canRun: true };
     },
-    buildExecutionPlanImpl: (options, dependencies) => ({ entry: "local-entry", args: [], childEnv: dependencies.env, cwd: paths.root, runRoot: "runs", mode: options.mode }),
+    buildExecutionPlanImpl: (options, dependencies) => ({ ...buildExecutionPlan(options, dependencies), entry: 'local-entry', mode: options.mode }),
     runProductionImpl: async (plan) => { productionCalls += 1; assert.equal(plan.mode, "local"); return { code: 0, stdout: "{}", stderr: "" }; },
     validateProductionResultImpl: async () => ({ ok: true, exitCode: 0 }),
     stdout: sink(), stderr: sink(),

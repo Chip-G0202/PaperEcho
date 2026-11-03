@@ -31,6 +31,10 @@ function smtpSummary(outcome, details = {}) {
     rejectedCount: Number.isInteger(details.rejectedCount) ? details.rejectedCount : 0,
   };
 }
+function providerMetadata(result) {
+  if (result?.provider !== 'wxpusher' || !Array.isArray(result.sendRecordIds) || !result.sendRecordIds.every(id => Number.isSafeInteger(id) && id > 0) || result.sendRecordIds.length > 10) return undefined;
+  return { provider: 'wxpusher', sendRecordIds: [...result.sendRecordIds] };
+}
 
 function acceptedResult(result) {
   if (result?.accepted === true) return true;
@@ -74,8 +78,12 @@ export async function deliverReliableNotification({
   fsApi = fs,
   clock = () => new Date(),
   hooks = {},
+  recoveryData = null,
+  channel = 'email',
+  prepareOnly = false,
 } = {}) {
-  const planned = createNotificationReceipt({ notificationType, runId, businessSubject, eventEpoch, payload, ledgerOperationId, recipient, clock });
+  const planned = createNotificationReceipt({ notificationType, runId, businessSubject, eventEpoch, payload, ledgerOperationId, recipient, clock, channel });
+  if (recoveryData) planned.recoveryData = structuredClone(recoveryData);
   const locked = await withReceiptLock(receiptPath, async () => {
     let previous = await readNotificationReceipt(receiptPath, { fsApi, allowLegacy: true })
       || (legacyReceiptPath && legacyReceiptPath !== receiptPath ? await readNotificationReceipt(legacyReceiptPath, { fsApi, allowLegacy: true }) : null);
@@ -97,6 +105,7 @@ export async function deliverReliableNotification({
 
     let receipt = previous && !force ? previous : planned;
     if (!previous || force) await writeNotificationReceipt(receiptPath, receipt, { fsApi });
+    if (prepareOnly) return { status: receipt.status, reason: 'delivery_prepared', receipt, receiptPath, attempted: false };
     await hooks.afterPending?.({ receipt: structuredClone(receipt), receiptPath });
 
     receipt = validateNotificationReceipt({
@@ -110,7 +119,25 @@ export async function deliverReliableNotification({
     await hooks.afterAttemptStarted?.({ receipt: structuredClone(receipt), receiptPath });
 
     try {
-      const result = await (transport || ((message) => sendStage5Email(message, { env })) )({ ...payload, to: recipient, messageId: receipt.messageId });
+      const send = transport || ((message) => sendStage5Email(message, { env }));
+      let result;
+      if (Array.isArray(payload.messages)) {
+        if (!payload.messages.length || payload.messages.length > 10) throw new Error('NOTIFICATION_PARTS_INVALID');
+        receipt.parts ||= payload.messages.map((_, index) => ({ index, status: 'pending' }));
+        if (receipt.parts.length !== payload.messages.length) throw new Error('NOTIFICATION_PARTS_INVALID');
+        for (const [index, message] of payload.messages.entries()) {
+          const part = receipt.parts[index];
+          if (part.status === 'accepted') continue;
+          if (['unknown', 'started'].includes(part.status)) { result = { category: 'provider_response_ambiguous' }; break; }
+          part.status = 'started'; part.at = nowIso(clock); await writeNotificationReceipt(receiptPath, receipt, { fsApi });
+          result = await send({ ...message, to: recipient, messageId: receipt.messageId });
+          part.status = acceptedResult(result) ? 'accepted' : definitiveRejected(result) ? 'failed' : 'unknown';
+          part.at = nowIso(clock); const metadata = providerMetadata(result); if (metadata) part.provider = metadata;
+          await writeNotificationReceipt(receiptPath, receipt, { fsApi });
+          if (part.status !== 'accepted') break;
+        }
+        if (receipt.parts.every(part => part.status === 'accepted')) result = { accepted: true };
+      } else result = await send({ ...payload, to: recipient, messageId: receipt.messageId });
       if (acceptedResult(result)) {
         await hooks.afterAcceptedBeforeReceipt?.({ result, receipt: structuredClone(receipt), receiptPath });
         const accepted = validateNotificationReceipt({
@@ -127,7 +154,7 @@ export async function deliverReliableNotification({
         ...receipt,
         status,
         updatedAt: nowIso(clock),
-        lastSmtp: smtpSummary(status, { ...result, category: status === "failed" ? "smtp_rejected" : "smtp_result_ambiguous" }),
+        lastSmtp: smtpSummary(status, { ...result, category: channel !== 'email' && /^(?:qq_(authentication|authorization|invalid_destination|rate_limited|invalid_payload|provider_unavailable|unknown|network|response_ambiguous|configuration_invalid)|provider_(configuration_invalid|payload_invalid|rejected|rate_limited|network|response_ambiguous))$/.test(result?.category) ? result.category : status === "failed" ? "smtp_rejected" : "smtp_result_ambiguous" }),
       });
       await writeNotificationReceipt(receiptPath, updated, { fsApi });
       return { status, reason: updated.lastSmtp.category, receipt: updated, receiptPath, attempted: true };

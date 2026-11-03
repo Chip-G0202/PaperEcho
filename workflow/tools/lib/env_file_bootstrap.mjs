@@ -1,38 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolveRuntimePaths, assertRuntimeDataPath } from './runtime_config.mjs';
 
-export function parseEnvFile(text) {
-  const out = {};
-  const lines = String(text || "").split(/\r?\n/);
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const idx = line.indexOf("=");
-    if (idx < 0) continue;
-    const key = line.slice(0, idx).trim();
-    if (!key) continue;
-    let value = line.slice(idx + 1);
-    const trimmed = value.trim();
-    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-      value = trimmed.slice(1, -1);
-    } else {
-      value = value.replace(/\s+#.*$/, "").trimEnd();
-    }
-    out[key] = value;
-  }
-  return out;
+import { parseEnvFile } from './env_file_parser.mjs';
+import { markLocalCredential, credentialOrigin, copyEnvironment } from './credential_registry.mjs';
+export { parseEnvFile } from './env_file_parser.mjs';
+
+export function resolveDotEnvPath({ env = process.env } = {}) {
+  const paths = resolveRuntimePaths({ env });
+  return assertRuntimeDataPath(paths, paths.secretPath);
 }
 
-export function resolveDotEnvPath() {
-  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-  const repoRoot = path.resolve(moduleDir, "../../..");
-  return path.join(repoRoot, ".env");
-}
-
-function loadDotEnv() {
-  const envPath = resolveDotEnvPath();
+export function loadDotEnv({ env = process.env, envPath = resolveDotEnvPath({ env }) } = {}) {
+  if (env.PAPERECHO_SKIP_DOTENV === '1') return env;
+  const paths = resolveRuntimePaths({ env });
+  assertRuntimeDataPath(paths, path.resolve(envPath));
   if (!fs.existsSync(envPath)) return;
+  if (paths.layout !== 'dev') {
+    const stat = fs.lstatSync(envPath);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error('RUNTIME_SECRET_PATH_UNSAFE');
+  }
 
   let parsed = null;
   try {
@@ -42,10 +29,21 @@ function loadDotEnv() {
   }
 
   for (const [key, value] of Object.entries(parsed || {})) {
-    if (!(key in process.env)) {
-      process.env[key] = value;
+    if (['PAPERECHO_LAYOUT', 'PAPERECHO_APPLICATION_ROOT', 'PAPERECHO_RESOURCE_ROOT', 'PAPERECHO_DATA_ROOT', 'PAPERECHO_CACHE_ROOT', 'PAPERECHO_WORKSPACE_ID'].includes(key)) continue;
+    if (!(key in env)) {
+      env[key] = value;
+      markLocalCredential(env, key, path.resolve(envPath));
     }
   }
+  return env;
 }
 
-loadDotEnv();
+// A freshly launched Control Center must load local values itself. External
+// injections, including identical values, remain untouched and win as before.
+export function environmentForControlChild(env) {
+  const child = copyEnvironment(env);
+  for (const name of Object.keys(child)) if (credentialOrigin(env, name).kind === 'local-managed') delete child[name];
+  return child;
+}
+
+if (!process.argv.some(x => ['--upgrade-preflight', '--upgrade-dry-run', '--upgrade-execute', '--upgrade-recover', '--upgrade-rollback', '--schedule-preflight', '--schedule-dry-run', '--backup', '--verify-backup', '--restore-backup', '--restore-existing', '--restore-preflight', '--restore-recover', '--restore-rollback'].includes(x))) loadDotEnv();

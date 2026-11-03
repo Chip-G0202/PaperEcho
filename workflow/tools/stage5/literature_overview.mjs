@@ -6,7 +6,7 @@ import { readReceipt, writeReceipt } from "./email_receipt.mjs";
 
 export const OVERVIEW_INPUT_MAX_CHARS = 60000;
 const OVERVIEW_SCHEMA_VERSION = 2;
-const OVERVIEW_PROMPT_VERSION = "title-overview-v2";
+const OVERVIEW_PROMPT_VERSION = "title-overview-v3";
 const OVERVIEW_MAX_CHARS = 220;
 const TITLE_MAX_CHARS = 500;
 const GRADE_PRIORITY = { A: 0, B: 1, C: 2 };
@@ -75,7 +75,8 @@ function promptFor(kind) {
 }
 
 async function callOverview({ kind, input, llmRuntime, llmClient }) {
-  const result = await callJsonLlm({ taskType: "literature_overview", prompt: promptFor(kind), input, runtime: llmRuntime, cacheEnabled: false, llmClient });
+  const prompt = `${promptFor(kind)}\n\ninput:\n${JSON.stringify(input)}`;
+  const result = await callJsonLlm({ taskType: "literature_overview", prompt, input, runtime: llmRuntime, cacheEnabled: false, llmClient });
   const overview = clean(result?.output?.overview, OVERVIEW_MAX_CHARS);
   return { result, overview: result?.ok && overview ? overview : "" };
 }

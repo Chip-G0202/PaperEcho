@@ -10,12 +10,14 @@ import { LocalTiming, formatTimingSummary } from "./local_timing.mjs";
 import { buildExportManifest, buildRunSummary } from "../lib/run_summary.mjs";
 import { buildLocalRuntimeConfig } from "../lib/runtime_config.mjs";
 import { generateLiteratureTitleTranslations } from "../lib/title_translation_generation.mjs";
+import { isManualReviewReachable } from '../stage4/finalize_exports_support.mjs';
 import { resolveStage5Request, runStage5Notification } from "../stage5/main.mjs";
 import { receiptPathFor, recipientHash } from "../stage5/email_receipt.mjs";
+import { emailDeliveryPolicy } from '../notification/policy.mjs';
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
-import { createRunRecoveryCoordinator, resumeRunFromLedger } from "../recovery/run_recovery.mjs";
+import { createRunRecoveryCoordinator, resumeRunFromLedger, acquireStartupWorkflowLease } from "../recovery/run_recovery.mjs";
 import { buildLocalRecoveryReconcilers } from "../recovery/local_reconciliation.mjs";
-import { hashFile } from "../recovery/operation_ledger.mjs";
+import { hashFile, acquireWorkflowLease, releaseRunLease } from "../recovery/operation_ledger.mjs";
 import {
   finishRunGroup,
   recordImmediateCleanup,
@@ -62,8 +64,23 @@ function feedbackRows(events, repository) {
   });
 }
 
+async function withLocalWorkflowLease(options, dependencies, operation) {
+  if (dependencies.localWorkflowLeaseHeld || options.help) return operation(dependencies);
+  if (!options.outputRoot) throw new Error('LOCAL_OUTPUT_ROOT_REQUIRED');
+  const acquire = dependencies.startupGate ? acquireStartupWorkflowLease : acquireWorkflowLease;
+  const lease = await acquire({ runRoot: path.join(path.resolve(options.outputRoot), 'runs'), runId: options.resume || options.runId || process.env.PAPERECHO_RUN_ID || 'local-' + randomUUID(),
+    profile: process.env.PAPERECHO_RUN_PROFILE || 'standard', resumeRunId: options.resume,
+    parentOwnerId: dependencies.startupGate ? process.env.PAPERECHO_PARENT_WORKFLOW_LEASE : '', dataRoots: [path.resolve(options.outputRoot)] });
+  if (!lease.acquired) throw new Error('LOCAL_WORKFLOW_BUSY');
+  try { return await operation({ ...dependencies, localWorkflowLeaseHeld: true, localWorkflowRunId: lease.lease.runId }); }
+  finally { await releaseRunLease(lease); }
+}
 export async function runLocalPipeline(options = {}, dependencies = {}) {
-  const runId = options.runId || `local-${new Date().toISOString().replace(/[-:.]/g, "")}-${randomUUID().slice(0, 8)}`;
+  return withLocalWorkflowLease(options, dependencies, deps => executeLocalPipeline(options, deps));
+}
+async function executeLocalPipeline(options = {}, dependencies = {}) {
+  if (!emailDeliveryPolicy('weekly', { env: dependencies.env || process.env }).required) options = { ...options, recipient: '' };
+  const runId = options.runId || dependencies.localWorkflowRunId || `local-${new Date().toISOString().replace(/[-:.]/g, "")}-${randomUUID().slice(0, 8)}`;
   const recoveryCoordinator = options.recoveryCoordinator || null;
   const startedAt = new Date().toISOString();
   const timing = dependencies.timing || new LocalTiming(runId);
@@ -181,7 +198,7 @@ export async function runLocalPipeline(options = {}, dependencies = {}) {
       zoteroBoundaries: dependencies.zoteroBoundaries || {},
     }), (result) => ({ candidate_count: result.triagedAll?.length || 0, feedback_consumed_count: normalizedFeedbackRows.length }));
     if (!stage1Result?.ok) throw new Error("LOCAL_STAGE1_INCOMPLETE");
-    const translationTargets = (stage1Result.triagedAll || []).filter((item) => ["A", "B", "C"].includes(String(item.final_grade || item.grade || "").slice(0, 1)));
+    const translationTargets = (stage1Result.triagedAll || []).filter((item) => ["A", "B", "C"].includes(String(item.final_grade || item.grade || "").slice(0, 1)) || isManualReviewReachable(item));
     const translationGenerator = dependencies.generateTitleTranslations || generateLiteratureTitleTranslations;
     const generatedTranslations = await timing.run("title_translation", async () => translationGenerator(translationTargets, {
       cachePath: dependencies.translationCachePath,
@@ -231,7 +248,7 @@ export async function runLocalPipeline(options = {}, dependencies = {}) {
     const preferenceAudit = JSON.parse(await fs.readFile(path.join(stage1Result.pipeDir, "preference_learning_audit.json"), "utf8"));
     const { prepareLocalStage4ExportSource } = await import("../stage4/export_source_step.mjs");
     localSourceRegistration = registerEphemeral({ path: sourcePath, ownerStage: "local_stage4", cleanupWhen: "after_use", preserveOnFailure: true }, ephemeralRegistry);
-    const source = await prepareLocalStage4ExportSource({ papers: repository.papers, sourcePath, runReport: stage1Result.report, preferenceLearningAudit: preferenceAudit });
+    const source = await prepareLocalStage4ExportSource({ papers: repository.papers, sourcePath, runReport: stage1Result.report, preferenceLearningAudit: preferenceAudit, runId });
     localSourceRegistration.markClosed();
     const paths = { sourcePath, reviewRoot: repository.exportsDir, reviewMonthDir: repository.exportsDir, reviewDayDir: exportDayDir, requestedOutputPath: path.join(exportDayDir, "周报.xlsx"), exportInputFiles: [sourcePath] };
     const labels = { dateStr: new Date().toISOString().slice(0, 10), reviewMonthLabel: "Local", reviewDayLabel: runId };
@@ -276,14 +293,15 @@ export async function runLocalPipeline(options = {}, dependencies = {}) {
       ? await recoveryCoordinator.prepareFileOperation({ type: "notification", targetId: recipientHash(options.recipient), targetPath: receiptPathFor(stage5StateRoot), input: { runId, notificationType: "run_summary", artifactHash: recoveryCoordinator.store.ledger.artifact.hash }, retryable: false, intent: { notificationType: "run_summary", eventEpoch: runId } })
       : null;
     if (!options.recipient) {
-      stage5Notification = await stage5Runner({ runSummary, literatureItems, recipient: "", forceResend: options.forceResend, config: { runStateRoot: stage5StateRoot } });
+      stage5Notification = await stage5Runner({ runSummary, literatureItems, recipient: "", forceResend: options.forceResend, config: { env: dependencies.env || process.env, runStateRoot: stage5StateRoot, recoveryCoordinator } });
       timing.skip("stage5_notification", stage5Notification.reason);
     } else {
-      stage5Notification = await timing.run("stage5_notification", () => stage5Runner({ runSummary, literatureItems, recipient: options.recipient, forceResend: options.forceResend, config: { runStateRoot: stage5StateRoot, ledgerOperationId: notificationOperation?.idempotencyKey || "" } }));
-      if (stage5Notification.status !== "sent" && !(stage5Notification.status === "skipped" && stage5Notification.reason === "already_sent")) throw new Error(`STAGE5_NOTIFICATION_${String(stage5Notification.status || "failed").toUpperCase()}:${stage5Notification.reason}`);
+      stage5Notification = await timing.run("stage5_notification", () => stage5Runner({ runSummary, literatureItems, recipient: options.recipient, forceResend: options.forceResend, config: { env: dependencies.env || process.env, runStateRoot: stage5StateRoot, ledgerOperationId: notificationOperation?.idempotencyKey || "", recoveryCoordinator } }));
+      if (!stage5Notification.channels && stage5Notification.status !== "sent" && !(stage5Notification.status === "skipped" && stage5Notification.reason === "already_sent")) throw new Error(`STAGE5_NOTIFICATION_${String(stage5Notification.status || "failed").toUpperCase()}:${stage5Notification.reason}`);
     }
-    if (notificationOperation && (stage5Notification.status === "sent" || (stage5Notification.status === "skipped" && stage5Notification.reason === "already_sent"))) {
-      await recoveryCoordinator.completeNotification(notificationOperation, stage5Notification);
+    const emailNotification = stage5Notification.channels?.email || stage5Notification;
+    if (notificationOperation && (emailNotification.status === "sent" || (emailNotification.status === "skipped" && emailNotification.reason === "already_sent"))) {
+      await recoveryCoordinator.completeNotification(notificationOperation, emailNotification);
       await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: stage5Notification.status });
     } else if (notificationOperation) {
       await recoveryCoordinator.store.transition(notificationOperation.idempotencyKey, "failed", { error: `STAGE5_${String(stage5Notification.status || "unknown").toUpperCase()}` });
@@ -291,6 +309,7 @@ export async function runLocalPipeline(options = {}, dependencies = {}) {
     } else if (recoveryCoordinator) {
       await recoveryCoordinator.store.setStage("stage5_notification", "verified", { status: "skipped", reason: stage5Notification.reason });
     }
+    if (recoveryCoordinator && stage5Notification.channels) await recoveryCoordinator.store.setStage('stage5_notification', stage5Notification.notificationStatus === 'completed' ? 'verified' : 'failed', { status: stage5Notification.notificationStatus });
     const finalTimingReport = timing.report("success");
     businessSucceeded = true;
     if (recoveryCoordinator) await recoveryCoordinator.store.setRunStatus(recoveryCoordinator.store.ledger.operations.every((operation) => operation.status === "verified") ? "completed" : "incomplete");
@@ -349,6 +368,9 @@ export async function runLocalPipeline(options = {}, dependencies = {}) {
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
+  return withLocalWorkflowLease(parseLocalArgs(argv), { ...dependencies, startupGate: true }, deps => executeLocalMain(argv, deps));
+}
+async function executeLocalMain(argv = process.argv.slice(2), dependencies = {}) {
   const options = parseLocalArgs(argv);
   if (options.help) {
     console.log("Usage: node workflow/tools/local/main.mjs [--output-root PATH] [--input FILE_OR_DIR] [--feedback JSONL] [--llm-mode disabled|mock|real] [--email ADDRESS] [--force-resend]\nThe sender transport must be configured by the deployer.");
@@ -368,6 +390,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
       profile,
       configHash,
       inputHash: "",
+      notification: { recipient: options.recipient, env: process.env, transport: dependencies.notificationTransport },
       buildReconcilers: async ({ store, artifact }) => buildLocalRecoveryReconcilers({
         store,
         artifact,
@@ -388,7 +411,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
       }),
     }, dependencies);
   } else {
-    const runId = String(process.env.PAPERECHO_RUN_ID || `local-${new Date().toISOString().replace(/[-:.]/g, "")}-${randomUUID().slice(0, 8)}`);
+    const runId = String(dependencies.localWorkflowRunId || process.env.PAPERECHO_RUN_ID || `local-${new Date().toISOString().replace(/[-:.]/g, "")}-${randomUUID().slice(0, 8)}`);
     const recoveryCoordinator = await createRunRecoveryCoordinator({ runRoot, runId, mode: "local", profile, launcherId: String(process.env.PAPERECHO_LAUNCHER_ID || "local-controlled-entry"), configHash, inputHash, artifactPath: path.join(runRoot, runId, "input_artifact.json") }, dependencies);
     result = await runLocalPipeline({ ...options, runId, recoveryCoordinator }, dependencies);
   }

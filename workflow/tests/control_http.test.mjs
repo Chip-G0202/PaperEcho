@@ -5,9 +5,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { startControlCenter, MAX_BODY_BYTES, safeLink } from '../tools/web/server.mjs';
+import { startControlCenter, readControlCenterVersion, MAX_BODY_BYTES, safeLink } from '../tools/web/server.mjs';
 import { createControlServices } from '../tools/lib/control_application_services.mjs';
+import { createRunRecoveryCoordinator } from '../tools/recovery/run_recovery.mjs';
 import { finalizePendingPaperReview } from '../tools/lib/pending_paper_review.mjs';
+import { ruleSuggestionsLogPath } from '../tools/lib/screening_standards_paths.mjs';
 const base = fileURLToPath(new URL('./.control-test-tmp/', import.meta.url));
 const mockLlm = async () => ({ rules_added: ['优先关注中文机制研究'], rules_deleted: [], rules_changed: [], keywords_added: { required: [], optional: [], negative: [] }, keywords_removed: [], negative_keywords_added: [], unmapped_feedback: [] });
 async function setup(t, count = 0) {
@@ -21,11 +23,12 @@ async function setup(t, count = 0) {
   await write(path.join(root, 'config', 'rss_sources.json'), { sources: [] });
   await write(path.join(reviewRoot, 'screening_standards.md'), '# 标准\n\n## 优先关注\n\n* 基线\n\n## 相对降权\n');
   await write(path.join(reviewRoot, 'runs', 'weekly-1', 'run_group.json'), { schemaVersion: 1, runId: 'weekly-1', pipelineMode: 'desktop', startedAt: '2026-09-12T05:00:00Z', status: 'completed', artifacts: [{ kind: 'pipeline', rootKey: 'research', path: 'pipeline/fixture' }, { kind: 'weekly_export', rootKey: 'review', path: 'week/day' }] });
-  const items = Array.from({ length: count }, (_, i) => ({ title: `${i}: 中文 <img src=x onerror=alert(1)> ${'长标题'.repeat(i === 0 ? 1000 : 1)}`, doi: i % 2 ? '' : `10.1234/item-${i}`, pmid: String(12345 + i), grade: 'B', source_channel: 'RSS', authors: ['作者 <script>'], journal: '期刊', needs_human_review: i === 0 }));
+  const items = Array.from({ length: count }, (_, i) => ({ title: `${i}: 中文 <img src=x onerror=alert(1)> ${'长标题'.repeat(i === 0 ? 1000 : 1)}`, doi: i % 2 ? '' : `10.1234/item-${i}`, pmid: String(12345 + i), grade: 'B', rule_grade:'B', semantic_grade:'B', source_channel: 'RSS', authors: ['作者 <script>'], journal: '期刊', needs_human_review: i === 0 }));
   await write(path.join(pipeline, 'run_report.json'), { steps: { med_weekly_synthesis: { completed: true } } });
   await write(path.join(pipeline, 'desktop_daily_review_source.json'), { triaged: items });
   await write(path.join(pipeline, 'zotero_writeback_summary.json'), { writeback_items: items.map((item, i) => ({ ...item, itemKey: `KEY${i}` })) });
-  const services = createControlServices({ root, reviewRoot, env: { SMTP_PASS: 'fixture-private-key' }, llmClient: mockLlm });
+  let llmCalls = 0;
+  const services = createControlServices({ root, reviewRoot, env: { SMTP_PASS: 'fixture-private-key' }, llmClient: async (...args) => { llmCalls++; return mockLlm(...args); } });
   const running = await startControlCenter({ root, port: 0, services });
   t.after(async () => { running.server.closeAllConnections(); await new Promise((resolve) => running.server.close(resolve)); await fs.rm(root, { recursive: true, force: true }); });
   const url = new URL(running.url);
@@ -37,8 +40,43 @@ async function setup(t, count = 0) {
   const auth = { cookie: session.headers['set-cookie'][0].split(';')[0], origin: running.url, 'x-csrf-token': session.json.token, 'content-type': 'application/json' };
   const get = (route) => request(route, { headers: auth });
   const post = (route, value, headers = {}) => request(route, { method: 'POST', headers: { ...auth, ...headers }, data: JSON.stringify(value) });
-  return { ...running, root, reviewRoot, pipeline, request, auth, get, post, write, services };
+  return { ...running, root, reviewRoot, pipeline, request, auth, get, post, write, services, llmCalls: () => llmCalls };
 }
+
+test('System application version reads packaged code metadata, never workspace or compatibility versions', async (t) => {
+  const app = await setup(t);
+  const metadata = path.join(app.root, 'package.json');
+  await app.write(metadata, { name: 'paperecho-core', version: '2.6.0' });
+  assert.equal(await readControlCenterVersion(metadata), '2.6.0');
+  assert.deepEqual((await app.get('/api/version')).json, { version: '2.6.0' }); // Development and packaged code share the release version.
+  assert.equal((await app.request('/api/version')).status, 403);
+  for (const value of [{ name: 'paperecho-compat', version: '2.5.0' }, { name: 'paperecho-core', version: 'invalid' }, {}]) {
+    await app.write(metadata, value); assert.equal(await readControlCenterVersion(metadata), null);
+  }
+  await app.write(metadata, '{'); assert.equal(await readControlCenterVersion(metadata), null);
+  assert.equal(await readControlCenterVersion(path.join(app.root, 'missing.json')), null);
+});
+
+test('suggestions API and all counters expose only active rules while durable history stays complete', async (t) => {
+  const app = await setup(t);
+  const history = ['accepted', 'rejected', 'revised'].flatMap((status, group) => Array.from({ length: [20, 10, 3][group] }, (_, i) => ({ id: `${status}-${i}`, status, rule_text: '历史合成建议', processed_at: 'preserved', decision_history: [{ decision: status }] })));
+  const active = ['pending', 'pending', 'candidate'].map((status, i) => ({ id: `active-${i}`, status, rule_text: `优先关注合成研究方向${i}`, target: 'screening_standards.md', change_type: 'add_rule', risk_level: i ? 'low' : 'high' }));
+  await app.write(ruleSuggestionsLogPath(app.reviewRoot), { suggestions: [...history, ...active] });
+  assert.equal((await app.services.rules.list()).length, 36);
+  assert.deepEqual((await app.get('/api/suggestions')).json.map(item => item.id), active.map(item => item.id));
+  assert.equal((await app.get('/api/pending-summary')).json.rules, 3);
+  assert.equal((await app.get('/api/status')).json.pendingSuggestions, 3);
+  for (const [i, decision] of ['accepted', 'rejected', 'revised'].entries()) {
+    const input = { id: active[i].id, decision, revisedRule: decision === 'revised' ? '修订后的合成研究方向' : '', humanApproval: true };
+    assert.equal((await app.post('/api/decision', input)).status, 200);
+    assert.equal((await app.post('/api/decision', input)).json.duplicate, true);
+    assert.deepEqual((await app.get('/api/suggestions')).json.map(item => item.id), active.slice(i + 1).map(item => item.id));
+    assert.equal((await app.get('/api/pending-summary')).json.rules, 2 - i);
+    assert.equal((await app.get('/api/status')).json.pendingSuggestions, 2 - i);
+  }
+  assert.equal((await app.services.rules.list()).length, 36);
+  assert.deepEqual((await app.services.rules.readLog()).suggestions.slice(0, history.length), history);
+});
 test('loopback default, Host/Origin/CSRF/session rejection, traversal, CSP and size limit', async (t) => {
   await assert.rejects(startControlCenter({ host: '0.0.0.0' }), /LOOPBACK/);
   const app = await setup(t);
@@ -90,40 +128,54 @@ test('latest Weekly: zero, 1000 items, long title, Chinese, missing DOI, paginat
   assert.equal(status.needsReview, 1);
   assert.equal(status.lastWeekly, '2026-09-12T05:00:00Z');
 });
-test('held D disagreement appears only in manual review and accepts a durable grade', async (t) => {
+test('current held D disagreement reaches completed Manual through its durable review identity', async (t) => {
   const app = await setup(t);
-  const item = { title: '罕见疾病机制研究与临床证据', grade: 'D', rule_grade: 'D', llm_review_grade: 'C', final_grade: 'D' };
+  const item = { title: '罕见疾病机制研究与临床证据', grade: 'D', rule_grade: 'D', llm_review_grade: 'C', final_grade: 'D', review_required: true };
   await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items: [item] });
+  await app.write(path.join(app.pipeline, 'triaged_items.json'), [item]);
   const page = (await app.get('/api/weekly')).json;
   assert.equal(page.total, 1);
-  assert.equal(page.items[0].pendingReview, true);
   assert.equal(page.items[0].zotero, 'not_written');
-  assert.equal(page.items[0].needsReview, true);
   assert.deepEqual((await app.get('/api/pending-summary')).json, { normal: 0, manual: 1, rules: 0 });
-  const receipt = await app.post('/api/feedback', { runId: page.runId, paperId: page.items[0].id, manualGrade: 'B', requestId: 'manual-held-b' });
-  assert.equal(receipt.status, 200);
-  assert.equal((await app.get('/api/weekly')).json.total, 0);
-  assert.equal((await app.get('/api/pending-summary')).json.manual, 0);
-  const script = await app.get('/app.js');
-  assert.match(script.text, /这篇文献尚未写入 Zotero/);
+  assert.equal((await app.get('/api/status')).json.needsReview, 1);
+  const decision={runId:page.runId,paperId:page.items[0].id,manualGrade:'B',requestId:'held-rescue-b'};
+  assert.equal((await app.post('/api/feedback',decision)).status,200);
+  assert.equal((await app.post('/api/feedback',decision)).json.duplicate,true);
+  assert.equal((await app.get('/api/pending-summary')).json.manual,0);
 });
 test('held paper remains reviewable when no Weekly export completed', async (t) => {
   const app = await setup(t);
   await fs.rm(path.join(app.reviewRoot, 'runs', 'weekly-1', 'run_group.json'));
-  await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items: [
-    { title: '中文标题与跨次待审文献', doi: '10.1234/no-weekly', grade: 'C', rule_grade: 'C', llm_review_grade: 'D', final_grade: 'C' },
-  ] });
+  const items = [
+    { title: '中文标题与跨次待审文献', doi: '10.1234/no-weekly', grade: 'C', rule_grade: 'C', llm_review_grade: 'C', final_grade: 'C', needs_human_review: true },
+  ];
+  await finalizePendingPaperReview({ reviewRoot: app.reviewRoot, items });
+  await app.write(path.join(app.reviewRoot, 'runs/held-1/run_group.json'), { schemaVersion: 1, runId: 'held-1', pipelineMode: 'desktop', startedAt: '2026-09-13T05:00:00Z', artifacts: [{ kind: 'pipeline', rootKey: 'research', path: 'pipeline/fixture' }] });
+  await app.write(path.join(app.pipeline, 'run_report.json'), { run_id: 'held-1' });
+  await app.write(path.join(app.pipeline, 'triaged_items.json'), items);
   const page = (await app.get('/api/weekly')).json;
-  assert.equal(page.runId, 'pending-review');
+  assert.equal(page.runId, 'held-1');
   assert.equal(page.total, 1);
   assert.equal((await app.get('/api/pending-summary')).json.manual, 1);
+  const decision = { runId: page.runId, paperId: page.items[0].id, manualGrade: 'D', requestId: 'no-weekly-d' };
+  assert.equal((await app.post('/api/feedback', decision)).status, 200);
+  assert.equal((await app.post('/api/feedback', decision)).json.duplicate, true);
+  assert.equal((await app.get('/api/pending-summary')).json.manual, 0);
 });
-test('research submit, generated suggestion, accept and replay; settings valid/invalid; no secrets', async (t) => {
+test('research POST only saves; successful workflow publishes for existing accept/replay; no secrets', async (t) => {
   const app = await setup(t);
   const result = await app.post('/api/research', { text: '需要更多机制研究', requestId: 'research-test' });
   assert.equal(result.status, 200);
-  assert.equal(result.json.status, 'processed');
-  assert.equal(result.json.suggestions, 1);
+  assert.equal(result.json.status, 'pending'); assert.equal(result.json.saved, true);
+  assert.equal(result.json.suggestions, 0); assert.equal(app.llmCalls(), 0);
+  assert.deepEqual((await app.get('/api/suggestions')).json, []);
+  assert.equal((await app.post('/api/research', { text: '需要更多机制研究', requestId: 'research-test' })).json.duplicate, true);
+  assert.equal((await app.post('/api/research', { text: '不同的反馈', requestId: 'research-test' })).status, 400);
+  const { store } = await createRunRecoveryCoordinator({ runRoot: path.join(app.reviewRoot, 'runs'), runId: 'research-publish', mode: 'desktop', profile: 'standard', launcherId: 'fixture', configHash: 'a'.repeat(64), inputHash: 'b'.repeat(64) });
+  await app.services.research.prepare({ store }); assert.equal(app.llmCalls(), 1);
+  assert.deepEqual((await app.get('/api/suggestions')).json, []);
+  for (const name of ['stage1', 'stage2_writeback', 'stage3_translation', 'stage4_exports']) await store.setStage(name, 'verified');
+  await app.services.research.publish({ store });
   const suggestions = (await app.get('/api/suggestions')).json;
   const decision = { id: suggestions[0].id, decision: 'accepted', humanApproval: true };
   assert.equal((await app.post('/api/decision', decision)).json.status, 'accepted');
@@ -171,9 +223,67 @@ test('credential HTTP replace/clear and high-risk decisions apply only validated
   assert.match(await fs.readFile(path.join(app.root, 'config', 'pubmed_pmc_search.json'), 'utf8'), /中文机制/);
   assert.equal(JSON.parse(await fs.readFile(log, 'utf8')).suggestions[0].status, 'accepted');
   const savedHigh = (await app.get('/api/suggestions')).json.find((entry) => entry.id === 'high');
-  assert.equal(savedHigh.decision_receipt, undefined);
+  assert.equal(savedHigh, undefined);
+  assert.equal((await app.services.rules.list()).find(entry => entry.id === 'high').decision_receipt, undefined);
   assert.equal((await app.get('/api/suggestions')).json.find((entry) => entry.id === 'unclear').status, 'pending');
   const low = await app.post('/api/decision', { id: 'low', decision: 'accepted', humanApproval: true });
   assert.equal(low.json.status, 'accepted'); assert.equal(low.json.formal_rules_modified, true);
   assert.equal(low.json.application_status, 'applied');
+});
+
+test('credential update receipts preserve fixed status after rename retry without exposing secret payloads', async t => {
+  const app = await setup(t), id = 'TITLE_TRANSLATION_API_KEY';
+  const { SecretService } = await import('../tools/lib/control_credentials_service.mjs');
+  let attempts = 0, fail = false;
+  const secrets = new SecretService({ root: app.root, env: {}, atomicOptions: { renameImpl: async (from, to) => {
+    attempts++;
+    if (fail || attempts === 1) throw Object.assign(new Error('synthetic-write-failure'), { code: fail ? 'ENOSPC' : 'EACCES' });
+    await fs.rename(from, to);
+  } } });
+  const replace = secrets.replace.bind(secrets);
+  secrets.replace = async (...args) => ({ ...await replace(...args), diagnostic: `${args[1]} ${args[1].slice(0, 8)} ${args[1].slice(-8)}` });
+  app.services.secrets = secrets;
+  const value = 'fixture-secret-tail-replaced';
+  const reply = await app.post('/api/credentials', { id, action: 'replace', value });
+  assert.ok(attempts > 1, 'real atomic rename retry must execute');
+  assert.equal(reply.status, 200); assert.equal(reply.json.status, 'replaced');
+  assert.equal(reply.json.savedToFile, true); assert.equal(reply.json.currentServiceUpdated, true);
+  assert.equal(reply.json.diagnostic, '[REDACTED] [REDACTED] [REDACTED]');
+  assert.equal(reply.text.includes(value), false); assert.equal(reply.text.includes(value.slice(0, 8)), false);
+  const file = path.join(app.root, '.env'), before = await fs.readFile(file);
+  assert.equal(await secrets.withCredential(id, actual => actual === value), true);
+  fail = true;
+  const rejected = await app.post('/api/credentials', { id, action: 'replace', value: 'fixture-other-sensitive' });
+  assert.equal(rejected.status, 400); assert.equal(rejected.json.error, 'CREDENTIAL_WRITE_FAILED');
+  assert.equal(before.equals(await fs.readFile(file)), true);
+  assert.equal(await secrets.withCredential(id, actual => actual === value), true);
+  for (const response of [reply, rejected, await app.get('/api/credentials')]) {
+    assert.equal(response.text.includes(value), false); assert.equal(response.text.includes('fixture-other-sensitive'), false);
+  }
+  for (const receipt of [{ status: value, savedToFile: true }, { status: 'replaced', savedToFile: false }]) {
+    secrets.replace = async () => ({ id, currentServiceUpdated: true, ...receipt });
+    const unsafe = await app.post('/api/credentials', { id, action: 'replace', value: 'ignored-fixture' });
+    assert.equal(unsafe.json.status, '[REDACTED]', 'unknown or unconfirmed status must not bypass filtering');
+  }
+});
+
+test('credential HTTP rejects invalid session, origin, CSRF, fields and empty writes without changing saved values', async t => {
+  const app = await setup(t); const id = 'TITLE_TRANSLATION_API_KEY';
+  const saved = await app.post('/api/credentials', { id, action: 'replace', value: 'dummy-http-retained' });
+  assert.equal(saved.status, 200);
+  const file = path.join(app.root, '.env'), before = await fs.readFile(file, 'utf8');
+  const payload = { id, action: 'replace', value: 'dummy-http-blocked' };
+  const responses = [
+    await app.request('/api/credentials', { method: 'POST', headers: { 'content-type': 'application/json' }, data: JSON.stringify(payload) }),
+    await app.post('/api/credentials', payload, { origin: 'https://invalid.example' }),
+    await app.post('/api/credentials', payload, { 'x-csrf-token': '' }),
+    await app.post('/api/credentials', payload, { host: 'invalid.example' }),
+  ];
+  for (const response of responses) assert.equal(response.status, 403);
+  for (const rejected of [{ ...payload, id: 'PATH' }, { ...payload, value: '' }, { ...payload, id: 'SMTP_PASS' }, { action: 'replace', updates: [payload] }]) {
+    responses.push(await app.post('/api/credentials', rejected)); assert.equal(responses.at(-1).status, 400);
+  }
+  responses.push(await app.get('/api/credentials'));
+  assert.equal((await fs.readFile(file, 'utf8')) === before, true, 'rejected requests and GET must not change the credential file');
+  for (const response of responses) for (const value of ['dummy-http-retained', 'dummy-http-blocked', 'fixture-private-key']) assert.equal(response.text.includes(value), false);
 });

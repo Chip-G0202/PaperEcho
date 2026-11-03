@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readDomainConfig, readApplicationConfig, applicationConfigPath, isValidRssPublicationTitle } from './application_config.mjs';
+import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 
 function repoRoot() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -11,12 +13,8 @@ function configPath(root, name) {
 }
 
 function readJsonConfig(filePath, fallback) {
-  if (!fs.existsSync(filePath)) return { config: fallback, path: filePath, warnings: ["config_missing_using_default"] };
-  try {
-    return { config: JSON.parse(fs.readFileSync(filePath, "utf8")), path: filePath, warnings: [] };
-  } catch (error) {
-    throw new Error(`CONFIG_PARSE_ERROR ${filePath}: ${error.message}`);
-  }
+  const loaded = readDomainConfig(filePath);
+  return { config: loaded.value || fallback, path: loaded.path, warnings: loaded.value ? [] : ['config_missing_using_default'] };
 }
 
 function enabled(entry) {
@@ -30,7 +28,10 @@ export function loadRssSources({ root } = {}) {
   const sources = rawSources
     .map((entry) => typeof entry === "string" ? { url: entry, enabled: true } : entry)
     .filter((entry) => enabled(entry) && String(entry?.url || "").trim())
-    .map((entry) => ({ name: String(entry.name || entry.url).trim(), url: String(entry.url).trim() }));
+    .map((entry) => {
+      if (!isValidRssPublicationTitle(entry.publicationTitle)) throw new Error('RSS_PUBLICATION_TITLE_INVALID');
+      return { name: String(entry.name || entry.url).trim(), url: String(entry.url).trim(), ...(entry.publicationTitle ? { publicationTitle: entry.publicationTitle.trim() } : {}) };
+    });
   return { path: resolvedPath, sources, warnings, raw_count: rawSources.length, enabled_count: sources.length };
 }
 
@@ -257,7 +258,23 @@ export function applyKeywordModifications(groups = {}, modifications = {}) {
   return normalizePubMedKeywordGroups(next);
 }
 
-export function updatePubMedPmcKeywordGroups(filePath, modifications = {}) {
+export async function updatePubMedPmcKeywordGroups(filePath, modifications = {}) {
+  const root = path.dirname(path.dirname(filePath));
+  if (readApplicationConfig({ root })) {
+    const target = applicationConfigPath({ root });
+    return withAtomicJsonLock(target, async () => {
+      const candidate = readApplicationConfig({ root });
+      const before = candidate.pubmed || {};
+      const beforeGroups = loadPubMedKeywordGroupsFromConfig(before);
+      const nextGroups = applyKeywordModifications(beforeGroups, modifications);
+      const queryAfter = buildPubMedQueryFromKeywordGroups(nextGroups);
+      candidate.pubmed = { ...before, keyword_groups: nextGroups, query: queryAfter };
+      const { validateRunnerConfigObject } = await import('../runner/config_loader.mjs');
+      validateRunnerConfigObject(candidate);
+      await writeAtomicJson(target, candidate);
+      return { config: candidate.pubmed, keyword_groups_before: beforeGroups, keyword_groups_after: nextGroups, query_before: String(before.query || buildPubMedQueryFromKeywordGroups(beforeGroups)), query_after: queryAfter };
+    });
+  }
   const raw = readJsonConfig(filePath, {}).config;
   const beforeGroups = loadPubMedKeywordGroupsFromConfig(raw);
   const queryBefore = String(raw.query || buildPubMedQueryFromKeywordGroups(beforeGroups));

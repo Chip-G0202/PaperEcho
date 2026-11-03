@@ -1,13 +1,20 @@
+import { automationSetting, automationEnabled, schedulerConfig } from './automation_schedule_policy.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { isIP } from 'node:net';
 import { writeAtomicJson, withAtomicJsonLock } from './atomic_json.mjs';
 import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { buildPubMedQueryFromKeywordGroups } from './literature_config.mjs';
+import { readApplicationConfig, applicationConfigPath, DOMAIN_SECTIONS, isValidRssPublicationTitle } from './application_config.mjs';
+import { sanitizeSourceUrl } from '../stage1/source_state.mjs';
+import { migrateApplicationConfig, upgradeNotificationConfig, upgradeNotificationChannelsConfig, upgradeOutboundChannelsConfig } from './application_config_migration.mjs';
+import { isValidSmtpHost } from '../stage5/email_sender.mjs';
+import { resolveRuntimePaths } from './runtime_config.mjs';
 
 const INITIAL_OWNER_VALUES = Object.freeze({
   'title_translation.config.json': { enabled: true },
   'preference_learning.config.json': {},
-  'review-workflow-rules.json': { llm_review: { enabled: false, grade_review_enabled: false, preference_learning_enabled: false } },
+  'review-workflow-rules.json': { llm_review: { enabled: true, grade_review_enabled: true, preference_learning_enabled: false } },
 });
 
 const OWNER_PATH_ENV = Object.freeze({
@@ -19,15 +26,24 @@ const definitions = [];
 function setting(id, category, file, key, type, description, validation = {}) {
   definitions.push({ id, category, file, key, type, description, validation, secret: false, advanced: category === 'Advanced', reload: 'next_run' });
 }
-setting('preference.enabled', 'Models', 'review-workflow-rules.json', 'llm_review.preference_learning_enabled', 'boolean', '启用偏好学习');
+setting('preference.enabled', 'Models', 'review-workflow-rules.json', 'llm_review.preference_learning_enabled', 'boolean', '启用自适应学习');
 setting('review.master', 'Models', 'review-workflow-rules.json', 'llm_review.enabled', 'boolean', '启用智能评审总开关');
-setting('translation.enabled', 'Models', 'title_translation.config.json', 'enabled', 'boolean', '启用标题翻译');
+setting('translation.enabled', 'Models', 'title_translation.config.json', 'enabled', 'boolean', '启用智能翻译');
 for (const [capability, file] of [['translation', 'title_translation.config.json'], ['preference', 'preference_learning.config.json']]) {
   setting(`${capability}.model`, 'Models', file, 'model', 'string', `${capability} 模型名称`, { maxLength: 200 });
   setting(`${capability}.endpoint`, 'Models', file, 'endpoint', 'url', `${capability} API 地址`);
   setting(`${capability}.temperature`, 'Models', file, 'temperature', 'number', '采样温度', { min: 0, max: 2 });
+  for (const [key, type, title, rules] of [['top_p', 'number', 'Top P', { min: 0, max: 1 }], ['stream', 'boolean', '流式响应', {}], ['thinking', 'boolean', '思考模式', {}], ['max_retries', 'integer', '最大重试次数', { min: 0, max: 20 }]]) setting(`${capability}.${key}`, 'Models', file, key, type, title, rules);
   setting(`${capability}.timeout`, 'Advanced', file, 'timeout_ms', 'integer', '请求超时（毫秒）', { min: 1000, max: 600000 });
 }
+setting('ai.api_version', 'Models', 'title_translation.config.json', 'shared_service.api_version', 'enum', 'Anthropic API 版本', { values: ['2023-06-01', '2026-10-21'] });
+setting('ai.provider', 'Models', 'title_translation.config.json', 'shared_service.provider', 'enum', '服务提供商', { values: ['compatible', 'openai', 'anthropic'] });
+setting('ai.credential_service', 'Models', 'title_translation.config.json', 'shared_service.credential_service', 'string', '凭据服务绑定', { maxLength: 2200 });
+setting('ai.enabled', 'Models', 'title_translation.config.json', 'shared_service.enabled', 'boolean', '确认使用统一 AI 服务');
+for (const [key, type, title, rules] of [
+  ['endpoint', 'url', 'API 服务地址', {}], ['model', 'string', '模型名称', { maxLength: 200 }],
+  ['temperature', 'number', '采样温度', { min: 0, max: 2 }], ['timeout_ms', 'integer', '请求超时（毫秒）', { min: 1000, max: 120000 }], ['top_p', 'number', 'Top P', { min: 0, max: 1 }], ['stream', 'boolean', '流式响应', {}], ['thinking', 'boolean', '思考模式', {}], ['max_retries', 'integer', '最大重试次数', { min: 0, max: 20 }],
+]) setting(`ai.${key}`, 'Models', 'title_translation.config.json', `shared_service.${key}`, type, title, rules);
 setting('sources.domain', 'Sources', 'source_selection.json', 'research_domain', 'enum', '研究领域', { values: ['biomedical', 'non_biomedical_stem', 'education_social_science', 'mixed_biomedical_technical', 'unknown'] });
 setting('sources.override', 'Sources', 'source_selection.json', 'override_enabled_sources', 'list', '显式检索源', { values: ['rss', 'pubmed_pmc', 'openalex', 'semantic_scholar'] });
 for (const group of ['required', 'optional', 'negative']) setting(`pubmed.${group}`, 'Search', 'pubmed_pmc_search.json', `keyword_groups.${group}`, 'keywords', `${group} 检索词（修改后由现有 owner 生成检索式）`);
@@ -47,15 +63,27 @@ for (const [id, key, type, description, validation] of [
 ]) setting(id, 'Ranking / Review', 'review-workflow-rules.json', key, type, description, validation);
 for (const [id, category, key, type, description, validation] of [
   ['general.profile', 'General', 'profile', 'enum', '运行配置', { values: ['standard', 'complete', 'radar'] }],
-  ['weekly.email', 'Weekly', 'common.email.enabled', 'boolean', 'Weekly 完成后发送邮件'],
-  ['radar.enabled', 'Radar', 'common.radar.enabled', 'boolean', '启用 Daily Radar'],
+  ['radar.enabled', 'Radar', 'common.radar.enabled', 'boolean', '启用每日雷达'],
+  ['scheduler.time', 'Weekly', 'scheduler.time', 'string', '自动执行时间', { pattern: '^([01]\\d|2[0-3]):[0-5]\\d$', maxLength: 5 }],
+  ['weekly.interval', 'Weekly', 'weekly.intervalDays', 'integer', '研究简报间隔', { min: 1, max: 366 }],
   ['integrity.enabled', 'Integrity', 'common.integrity.enabled', 'boolean', '监测撤稿与更正状态'],
-  ['email.enabled', 'Notifications', 'common.email.enabled', 'boolean', '发送报告邮件'],
+  ['email.enabled', 'Notifications', 'common.email.enabled', 'boolean', '启用邮箱通知'],
+  ['qq.enabled', 'Notifications', 'common.notifications.channels.qq.enabled', 'boolean', '启用 QQ 通知'],
+  ['qq.appId', 'Notifications', 'common.notifications.channels.qq.appId', 'string', '机器人 AppID', { maxLength: 200 }],
+  ['qq.targetType', 'Notifications', 'common.notifications.channels.qq.targetType', 'enum', '发送目标类型', { values: ['user', 'group'] }],
+  ['qq.targetId', 'Notifications', 'common.notifications.channels.qq.targetId', 'string', '目标 OpenID', { maxLength: 200 }],
+  ['wechat.enabled', 'Notifications', 'common.notifications.channels.wechat.enabled', 'boolean', '启用微信通知'],
+  ['feishu.enabled', 'Notifications', 'common.notifications.channels.feishu.enabled', 'boolean', '启用飞书通知'],
+  ['wecom.enabled', 'Notifications', 'common.notifications.channels.wecom.enabled', 'boolean', '启用企业微信群机器人通知'],
+  ['wechat.uid', 'Notifications', 'common.notifications.channels.wechat.uid', 'string', 'WxPusher 接收用户 UID（留空不变）', { maxLength: 132, pattern: '^UID_[A-Za-z0-9]+$' }],
   ['email.recipient', 'Notifications', 'common.email.recipient', 'email', '收件人'],
   ['smtp.host', 'Notifications', 'common.email.smtp.host', 'string', 'SMTP 主机', { maxLength: 253 }],
   ['smtp.port', 'Notifications', 'common.email.smtp.port', 'integer', 'SMTP 端口', { min: 1, max: 65535 }],
   ['smtp.secure', 'Notifications', 'common.email.smtp.secure', 'boolean', 'SMTP TLS'],
   ['smtp.user', 'Notifications', 'common.email.smtp.user', 'string', 'SMTP 用户名', { maxLength: 254 }],
+  ['smtp.from', 'Notifications', 'common.email.smtp.from', 'email', '发件人（默认使用登录邮箱）'],
+  ['notification.radar', 'Notifications', 'common.notifications.radar.enabled', 'boolean', 'Daily Radar 推荐通知'],
+  ['notification.weekly', 'Notifications', 'common.notifications.weekly.enabled', 'boolean', '周报完成通知'],
   ['notification.failure', 'Notifications', 'common.notifications.failure.enabled', 'boolean', '运行失败时通知'],
   ['notification.health', 'Notifications', 'common.notifications.health.enabled', 'boolean', '运行健康状态提醒'],
   ['runtime.mode', 'Runtime', 'mode', 'enum', '运行路径', { values: ['local', 'desktop', 'web'] }],
@@ -81,6 +109,7 @@ function put(object, key, value) {
 export function validateSetting(definition, value) {
   const { type, validation: rules } = definition;
   const fail = () => { throw new Error('SETTING_VALUE_INVALID'); };
+  if (definition.id === 'smtp.host' && !isValidSmtpHost(value)) fail();
   if (type === 'boolean' && typeof value !== 'boolean') fail();
   if (['number', 'integer'].includes(type) && (typeof value !== 'number' || !Number.isFinite(value) || (type === 'integer' && !Number.isInteger(value)) || value < rules.min || value > rules.max)) fail();
   if (['string', 'url', 'email', 'enum'].includes(type)) {
@@ -91,7 +120,16 @@ export function validateSetting(definition, value) {
     if (type === 'url') {
       let url;
       try { url = new URL(value); } catch { fail(); }
-      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail();
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || (!rules.allowQuery && url.search) || url.hash) fail();
+      if (rules.rss) {
+        const host = url.hostname.replace(/\.$/, '');
+        // Static configuration check only; DNS/redirect policy belongs to retrieval.
+        if (isIP(host.replace(/^\[|\]$/g, '')) || !host.includes('.') || /(?:^|\.)(?:localhost|local|localdomain|internal|home|lan)$/i.test(host) || /[\\\u007f-\u009f]|%(?:0[0-9a-f]|1[0-9a-f]|7f)/iu.test(value)) fail();
+        if ([...new URL(sanitizeSourceUrl(value)).searchParams].length !== [...url.searchParams].length) fail();
+        for (const [name, parameter] of url.searchParams) {
+          if (/^(?:auth|sig(?:nature)?|access[-_]?key|pass(?:wd)?|pwd|jwt)$/i.test(name) || /[\u0000-\u001f\u007f]|%(?:0[0-9a-f]|1[0-9a-f]|7f)|https?:\/\/[^/\s]*@/i.test(name + parameter)) fail();
+        }
+      }
     }
   }
   if (type === 'list' && (!Array.isArray(value) || value.some((entry) => !rules.values.includes(entry)) || new Set(value).size !== value.length)) fail();
@@ -103,16 +141,16 @@ export function validateSetting(definition, value) {
   if (type === 'rss') {
     if (!Array.isArray(value) || value.length > 500) fail();
     for (const source of value) {
-      if (!source || Object.keys(source).some((key) => !['name', 'url', 'enabled'].includes(key))) fail();
+      if (!source || Object.keys(source).some((key) => !['name', 'url', 'enabled', 'publicationTitle'].includes(key)) || !isValidRssPublicationTitle(source.publicationTitle)) fail();
       validateSetting({ type: 'string', validation: { maxLength: 200 } }, source.name);
-      validateSetting({ type: 'url', validation: {} }, source.url);
+      validateSetting({ type: 'url', validation: { allowQuery: true, rss: true } }, source.url);
       if (typeof source.enabled !== 'boolean') fail();
     }
     if (new Set(value.map((entry) => entry.url)).size !== value.length) fail();
   }
 }
 export class ConfigService {
-  constructor({ root, env = process.env, atomicOptions, verify = async () => {}, configPath, runtimeMode = '' }) { Object.assign(this, { root, env, atomicOptions, verify, configPath, runtimeMode }); }
+  constructor({ root, env = process.env, atomicOptions, verify = async () => {}, configPath, runtimeMode = '', afterSave }) { Object.assign(this, { root, env, atomicOptions, verify, configPath, runtimeMode, afterSave }); }
   ownerPath(file) {
     if (file === 'paperecho.config.json' && this.configPath) return this.configPath;
     const envName = OWNER_PATH_ENV[file];
@@ -121,49 +159,151 @@ export class ConfigService {
   }
   async readOwner(file) {
     // Fixed registry owns paths; callers cannot choose arbitrary files.
+    const canonical = readApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath });
+    if (canonical) return file === 'paperecho.config.json' ? canonical : structuredClone(canonical[DOMAIN_SECTIONS[file]] || {});
     return JSON.parse(await fs.readFile(this.ownerPath(file), 'utf8'));
   }
   async readOwnerOrTemplate(file) {
     try { return { value: await this.readOwner(file), present: true }; }
     catch (error) {
       if (error.code !== 'ENOENT') throw error;
-      if (file === 'paperecho.config.json') return { value: JSON.parse(await fs.readFile(path.join(this.root, 'config', 'paperecho.config.example.json'), 'utf8')), present: false };
+      if (file === 'paperecho.config.json') {
+        const paths = resolveRuntimePaths({ applicationRoot: this.root, env: this.env });
+        const templates = paths.layout === 'dev' ? this.root : paths.resourceRoot;
+        return { value: JSON.parse(await fs.readFile(path.join(templates, 'config', 'paperecho.config.example.json'), 'utf8')), present: false };
+      }
       if (Object.hasOwn(INITIAL_OWNER_VALUES, file)) return { value: structuredClone(INITIAL_OWNER_VALUES[file]), present: false };
       throw error;
     }
   }
   async list() {
     const result = [];
+    const owners = new Map();
     for (const definition of CONFIG_REGISTRY) {
       let value = null;
       let available = true;
       let ownerPresent = true;
       try {
-        const owner = await this.readOwnerOrTemplate(definition.file);
-        value = get(owner.value, definition.key) ?? (definition.id === 'translation.enabled' ? true : null);
+        if (!owners.has(definition.file)) owners.set(definition.file, await this.readOwnerOrTemplate(definition.file));
+        const owner = owners.get(definition.file);
+        value = get(owner.value, definition.key) ?? (['translation.enabled', 'review.enabled', 'review.master', 'notification.radar', 'notification.weekly'].includes(definition.id) ? true : null);
+        // Show the existing SMTP transport defaults so saving the form preserves TLS.
+        if (definition.id === 'scheduler.time') value ??= '15:00';
+        if (definition.id === 'weekly.interval') value ??= Number(this.env.review_results_RUN_INTERVAL_DAYS || 7);
+        if (definition.id === 'smtp.port' && value == null) value = 465;
+        if (definition.id === 'smtp.secure' && value == null) value = Number(owner.value.common?.email?.smtp?.port ?? 465) === 465;
+        if (definition.id === 'email.enabled' && value == null) value = true;
+        if (['qq.enabled','wechat.enabled','feishu.enabled','wecom.enabled'].includes(definition.id) && value == null) value = false;
         ownerPresent = owner.present;
       }
       catch (error) { if (error.code !== 'ENOENT') throw error; available = false; }
       const { file, key, ...publicDefinition } = definition;
-      result.push({ ...publicDefinition, value, available, ownerPresent, effectiveValue: definition.id === 'runtime.mode' ? this.runtimeMode || value : undefined });
+      result.push({ ...publicDefinition, value: definition.id === 'wechat.uid' ? null : value, ...(definition.id === 'weekly.interval' ? { enabled: owners.get(definition.file)?.value?.weekly?.enabled !== false && owners.get(definition.file)?.value?.profile !== 'radar' } : {}), ...(definition.id === 'wechat.uid' ? { configured: Boolean(value) } : {}), available, ownerPresent, effectiveValue: definition.id === 'runtime.mode' ? this.runtimeMode || value : undefined });
     }
-    result.push({ id: 'weekly.interval', category: 'Weekly', type: 'integer', value: Number(this.env.review_results_RUN_INTERVAL_DAYS || 7), default: 7, available: true, readOnly: true, description: '默认 7 天；环境覆盖与调度器仍由既有 owner 管理', validation: { min: 1 }, secret: false, advanced: true, reload: 'scheduler' });
+
+    if (result.find(row => row.id === 'ai.enabled')?.value !== true) {
+      const selected = result.find(row => row.id === 'preference.endpoint')?.value ? 'preference' : 'translation';
+      for (const key of ['endpoint', 'model', 'temperature', 'top_p']) result.find(row => row.id === `ai.${key}`).value = result.find(row => row.id === `${selected}.${key}`)?.value;
+      result.find(row => row.id === 'ai.provider').value = String(result.find(row => row.id === 'ai.endpoint').value || '').includes('api.anthropic.com') ? 'anthropic' : 'compatible';
+      result.find(row => row.id === 'ai.thinking').value = true;
+    }
+    {
+      for (const name of ['translation', 'preference']) for (const key of ['endpoint', 'model', 'temperature', 'timeout', 'top_p', 'stream', 'thinking', 'max_retries']) {
+        const row = result.find(row => row.id === `${name}.${key}`);
+        row.legacyValue = row.value;
+        row.value = result.find(row => row.id === `ai.${key === 'timeout' ? 'timeout_ms' : key}`)?.value;
+      }
+    }
     return result;
   }
   async update(id, value) {
     const result = await this.updateMany([{ id, value }]);
-    return result.results[0];
+    return { ...result.results[0], ...(result.scheduling ? { scheduling: result.scheduling } : {}) };
+  }
+  async ensureAutomationSchedule() {
+    const initial = await this.readOwnerOrTemplate('paperecho.config.json');
+    if (!initial.present || initial.value.scheduler) return initial.value;
+    if (!automationEnabled(initial.value)) return initial.value;
+    await migrateApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath, atomicOptions: this.atomicOptions });
+    const target = applicationConfigPath({ root: this.root, env: this.env, configPath: this.configPath });
+    return withAtomicJsonLock(target, async () => {
+      const owner = readApplicationConfig({ root: this.root, env: this.env, configPath: target });
+      if (!owner.scheduler) {
+        owner.scheduler = schedulerConfig(automationEnabled(owner));
+        validateRunnerConfigObject(owner);
+        await writeAtomicJson(target, owner, { ...this.atomicOptions, validateTemporary: async temporary => {
+          const value = JSON.parse(await fs.readFile(temporary, 'utf8')); validateRunnerConfigObject(value);
+          if (JSON.stringify(value) !== JSON.stringify(owner)) throw new Error('SETTING_VERIFY_FAILED');
+          await this.atomicOptions?.validateTemporary?.(temporary);
+        } });
+      }
+      return owner;
+    });
+  }
+  async serviceBinding() {
+    const entries = await this.list(); const value = id => entries.find(row => row.id === id)?.value;
+    try { const u = new URL(value('ai.endpoint')); return `${value('ai.provider') || 'compatible'}|${u.origin + u.pathname.replace(/\/+$/, '').replace(/\/(chat\/completions|messages)$/, '')}`; } catch { return ''; }
   }
   async updateMany(updates) {
+    const result = await this.persistMany(updates);
+    if (this.afterSave) {
+      try { result.scheduling = await this.afterSave(updates); }
+      catch { result.scheduling = { state: 'failed', code: 'SCHEDULER_SYNC_FAILED' }; }
+    }
+    return result;
+  }
+  async persistMany(updates) {
     if (!Array.isArray(updates) || updates.length < 1 || updates.length > 50) throw new Error('SETTING_BATCH_INVALID');
     if (new Set(updates.map((entry) => entry?.id)).size !== updates.length) throw new Error('SETTING_BATCH_INVALID');
+    if (updates.some((entry) => !entry || Object.keys(entry).some((key) => !['id', 'value'].includes(key)))) throw new Error('SETTING_BATCH_INVALID');
     const resolved = updates.map(({ id, value }) => {
+      // Legacy UI alias was the very same channel flag; never a second owner.
+      if (id === 'weekly.email') id = 'email.enabled';
       const definition = CONFIG_REGISTRY.find((entry) => entry.id === id);
       if (!definition) throw new Error('SETTING_UNKNOWN');
       validateSetting(definition, value);
       return { id, value, definition };
     });
+    if (new Set(resolved.map((entry) => entry.id)).size !== resolved.length) throw new Error('SETTING_BATCH_INVALID');
+    if (resolved.some(row => row.id === 'ai.enabled' && row.value === true) && !['endpoint', 'model', 'provider'].every(key => resolved.some(row => row.id === `ai.${key}`))) throw new Error('SETTING_BATCH_INVALID');
     const ownerFiles = [...new Set(resolved.map((entry) => entry.definition.file))].sort();
+    const automationEdit = resolved.some(({ id }) => automationSetting(id));
+    const notificationEdit = resolved.some(({ id }) => /^(email\.|smtp\.|notification\.|qq\.|wechat\.|feishu\.|wecom\.)/.test(id));
+    const outboundEdit = resolved.some(({ id }) => /^(wechat\.|feishu\.|wecom\.)/.test(id));
+    const qqEdit = resolved.some(({ id }) => id.startsWith('qq.'));
+    if ((notificationEdit || automationEdit) && (readApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath })?.schemaVersion || 0) < 6) {
+      await migrateApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath, atomicOptions: this.atomicOptions });
+    }
+    if (readApplicationConfig({ root: this.root, env: this.env, configPath: this.configPath })) {
+      const target = applicationConfigPath({ root: this.root, env: this.env, configPath: this.configPath });
+      return withAtomicJsonLock(target, async () => {
+        const current = readApplicationConfig({ root: this.root, env: this.env, configPath: target });
+        const candidate = outboundEdit ? upgradeOutboundChannelsConfig(current) : qqEdit ? upgradeNotificationChannelsConfig(current) : notificationEdit ? upgradeNotificationConfig(current) : current;
+        const priorBinding = resolved.some(row => ['ai.endpoint', 'ai.provider'].includes(row.id)) ? await this.serviceBinding() : '';
+        for (const { id, value, definition } of resolved) {
+          const section = DOMAIN_SECTIONS[definition.file];
+          const owner = section ? (candidate[section] ||= {}) : candidate;
+          if (id === 'pubmed.query' && owner.keyword_groups) throw new Error('SEARCH_KEYWORD_OWNER_REQUIRED');
+          if (['ai.endpoint', 'ai.provider'].includes(id) && priorBinding && !owner.shared_service?.credential_service) {
+            (owner.shared_service ||= {}).credential_service = priorBinding;
+          }
+          put(owner, definition.key, value);
+          if (id === 'weekly.interval') { owner.weekly.enabled = true; if (owner.profile === 'radar') owner.profile = 'standard'; }
+          if (definition.key.startsWith('keyword_groups.')) owner.query = buildPubMedQueryFromKeywordGroups(owner.keyword_groups);
+          await this.verify(owner, definition);
+        }
+        if (automationEdit) candidate.scheduler = schedulerConfig(automationEnabled(candidate), candidate.scheduler?.time);
+        validateRunnerConfigObject(candidate);
+        await writeAtomicJson(target, candidate, { ...this.atomicOptions, validateTemporary: async (temporary) => {
+          const readback = JSON.parse(await fs.readFile(temporary, 'utf8'));
+          validateRunnerConfigObject(readback);
+          if (JSON.stringify(readback) !== JSON.stringify(candidate)) throw new Error('SETTING_VERIFY_FAILED');
+          for (const { definition } of resolved) await this.verify(DOMAIN_SECTIONS[definition.file] ? readback[DOMAIN_SECTIONS[definition.file]] : readback, definition);
+          await this.atomicOptions?.validateTemporary?.(temporary);
+        } });
+        return { saved: true, results: resolved.map(({ id, definition }) => ({ id, saved: true, reload: definition.reload })) };
+      });
+    }
     const withLocks = (index, operation) => index >= ownerFiles.length
       ? operation()
       : withAtomicJsonLock(this.ownerPath(ownerFiles[index]), () => withLocks(index + 1, operation));
@@ -174,9 +314,13 @@ export class ConfigService {
         if (!owner.present) missingBefore.add(file);
         before.set(file, owner.value); after.set(file, structuredClone(owner.value));
       }
+      const priorBinding = resolved.some(row => ['ai.endpoint', 'ai.provider'].includes(row.id)) ? await this.serviceBinding() : '';
       for (const { id, value, definition } of resolved) {
         const owner = after.get(definition.file);
-        put(owner, definition.key, value);
+        if (['ai.endpoint', 'ai.provider'].includes(id) && priorBinding && !owner.shared_service?.credential_service) {
+            (owner.shared_service ||= {}).credential_service = priorBinding;
+          }
+          put(owner, definition.key, value);
         if (id === 'pubmed.query' && owner.keyword_groups) throw new Error('SEARCH_KEYWORD_OWNER_REQUIRED');
         if (definition.key.startsWith('keyword_groups.')) owner.query = buildPubMedQueryFromKeywordGroups(owner.keyword_groups);
       }

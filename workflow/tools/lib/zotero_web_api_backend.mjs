@@ -49,6 +49,7 @@ export async function mapWithConcurrency(items, concurrency, mapper, { controlle
 /**
  * 标准化 API 响应中的集合数据
  */
+const deletedCollection = c => [c.data?.deleted, c.deleted].some(value => value === true || value === 1 || typeof value === 'string' && ['true', '1'].includes(value.trim().toLowerCase()));
 function normalizeCollection(c) {
   return {
     key: c.key,
@@ -57,6 +58,7 @@ function normalizeCollection(c) {
     version: c.version || 0,
     meta: c.meta || {},
     data: c.data || c,
+    ...(deletedCollection(c) ? { deleted: true } : {}),
   };
 }
 
@@ -364,11 +366,11 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
     const result = await this._request("GET", `/collections/top?limit=${pageSize}`);
     const items = (result.data || []).map(normalizeCollection);
     if (items.length < pageSize || items.length >= limit) {
-      return items.slice(0, limit);
+      return items.slice(0, limit).filter(c => !deletedCollection(c));
     }
     const total = result.totalResults || items.length;
     const target = Math.min(total, limit);
-    if (items.length >= target) return items;
+    if (items.length >= target) return items.filter(c => !deletedCollection(c));
     const seen = new Set(items.map(c => c.key));
     const all = [...items];
     let currentOffset = items.length;
@@ -383,7 +385,7 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
       currentOffset += page.length;
       if (page.length < nextPageSize) break;
     }
-    return all;
+    return all.filter(c => !deletedCollection(c));
   }
 
   async getAllCollections() {
@@ -392,7 +394,7 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
     const result = await this._request("GET", `/collections?limit=${pageSize}`);
     const items = (result.data || []).map(normalizeCollection);
     const total = result.totalResults || items.length;
-    if (items.length >= total) return items;
+    if (items.length >= total) return items.filter(c => !deletedCollection(c));
     const all = [...items];
     let offset = items.length;
     while (all.length < total) {
@@ -403,12 +405,12 @@ export class ZoteroWebApiBackend extends ZoteroBackendBase {
       offset += page.length;
       if (page.length < pageSize) break;
     }
-    return all;
+    return all.filter(c => !deletedCollection(c));
   }
 
   async getSubcollections(collectionKey, recursive = false) {
     const result = await this._request("GET", `/collections/${collectionKey}/collections`);
-    const children = (result.data || []).map(normalizeCollection);
+    const children = (result.data || []).map(normalizeCollection).filter(c => !deletedCollection(c));
 
     if (recursive) {
       for (const child of children) {

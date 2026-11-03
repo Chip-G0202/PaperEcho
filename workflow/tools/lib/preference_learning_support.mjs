@@ -1,4 +1,7 @@
+import { requestModelText } from './model_transport.mjs';
 import fs from "node:fs";
+import { resolveCapabilityInput, readDomainConfig } from './application_config.mjs';
+import { modelCredentials } from './model_credentials.mjs';
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -124,22 +127,31 @@ function normalizeCompletionsEndpoint(value) {
 }
 
 export function getPreferenceLearningConfig({ env = process.env } = {}) {
-  const configPath = env.PREFERENCE_LEARNING_CONFIG_PATH
+  const legacyPath = env.PREFERENCE_LEARNING_CONFIG_PATH
     ? path.resolve(env.PREFERENCE_LEARNING_CONFIG_PATH)
     : DEFAULT_CONFIG_PATH;
-  const fileConfig = readJsonFile(configPath) || {};
+  const input = resolveCapabilityInput('preference', { env, legacyPath });
+  env = input.env;
+  const configPath = input.configPath;
+  const fileConfig = input.value || {};
   const promptFile = env.PREFERENCE_LEARNING_PROMPT_FILE
     || fileConfig.prompt_file
     || DEFAULT_CONFIG.prompt_file;
   const promptPath = resolvePromptPath(configPath, promptFile);
-  const fallbackOrder = Array.isArray(fileConfig.api_key_env_fallback_order)
-    ? fileConfig.api_key_env_fallback_order
-    : DEFAULT_CONFIG.api_key_env_fallback_order;
-  const keyEnvName = fallbackOrder.find((name) => normalizeSecretValue(env[name])) || "";
+  const credentials = modelCredentials(env);
+  const keyEnvName = credentials.source;
+  let preferenceEnabled = false;
+  try {
+    const rules = readDomainConfig(path.join(path.dirname(configPath), 'review-workflow-rules.json'), { env }).value?.llm_review;
+    preferenceEnabled = rules?.enabled !== false && rules?.preference_learning_enabled !== false;
+  } catch { /* Unknown preference switch state must not initiate API calls. */ }
 
   return {
     configPath,
-    endpoint: normalizeCompletionsEndpoint(env.PREFERENCE_LEARNING_ENDPOINT)
+    provider: fileConfig.provider || 'compatible',
+    api_version: fileConfig.api_version || '2023-06-01',
+    preferenceEnabled,
+    endpoint: fileConfig.provider === 'anthropic' ? fileConfig.endpoint : normalizeCompletionsEndpoint(env.PREFERENCE_LEARNING_ENDPOINT)
       || normalizeCompletionsEndpoint(fileConfig.endpoint)
       || normalizeCompletionsEndpoint(env.TITLE_TRANSLATION_ENDPOINT),
     model: firstConfiguredModel(env.PREFERENCE_LEARNING_MODEL, env.TITLE_TRANSLATION_MODEL, fileConfig.model, DEFAULT_CONFIG.model),
@@ -154,10 +166,10 @@ export function getPreferenceLearningConfig({ env = process.env } = {}) {
     response_format: String(fileConfig.response_format || DEFAULT_CONFIG.response_format),
     promptFile: promptPath,
     promptTemplate: fileExists(promptPath) ? fs.readFileSync(promptPath, "utf8") : "",
-    api_key_env_fallback_order: fallbackOrder,
+    api_key_env_fallback_order: keyEnvName ? [keyEnvName] : [],
     apiKeyConfigured: Boolean(keyEnvName),
     apiKeyEnvName: keyEnvName,
-    apiKey: keyEnvName ? normalizeSecretValue(env[keyEnvName]) : "",
+    apiKey: credentials.preference,
     llm_mode: String(env.LLM_MODE || "real").trim().toLowerCase(),
   };
 }
@@ -258,52 +270,11 @@ export function hasConcretePreferenceLearningChanges(value = {}) {
 }
 
 async function fetchPreferenceLearning(runtime, prompt) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("preference_learning_timeout")), runtime.timeout_ms);
-  try {
-    const thinking = runtime.thinking && typeof runtime.thinking === "object"
-      ? runtime.thinking
-      : runtime.thinking
-        ? { type: "enabled" }
-        : { type: "disabled" };
-    const requestBody = {
-      temperature: runtime.temperature,
-      top_p: runtime.top_p,
-      stream: false,
-      thinking,
-      max_output_tokens: runtime.max_output_tokens,
-      response_format: runtime.response_format === "json_schema" ? { type: "json_object" } : undefined,
-      messages: [{ role: "user", content: prompt }],
-    };
-    if (String(runtime.user_id || "").trim()) {
-      requestBody.user_id = String(runtime.user_id).trim();
-    }
-    if (String(runtime.model || "").trim()) {
-      requestBody.model = runtime.model;
-    }
-    const res = await fetch(runtime.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${runtime.apiKey}`,
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const t = await res.text().catch(() => "");
-      const err = new Error(`HTTP_${res.status}${t ? `:${t.slice(0, 180)}` : ""}`);
-      err.status = res.status;
-      throw err;
-    }
-    const data = await res.json();
-    return data?.choices?.[0]?.message?.content ?? data?.output_text ?? data?.text ?? "";
-  } finally {
-    clearTimeout(timeout);
-  }
+  return requestModelText(runtime, prompt, { maxTokens: runtime.max_output_tokens || 3000, stream: runtime.stream !== false });
 }
 
 export async function understandPreferenceEvaluation(payload, { runtime = getPreferenceLearningConfig(), llmClient = null } = {}) {
+  if (runtime.preferenceEnabled === false) return { ok: false, blocker: 'preference_disabled', output: null, ...safeRawResponseMetadata(''), request_would_have_been_sent: false };
   const llmMode = String(runtime.llm_mode || "real").trim().toLowerCase();
   if (llmMode === "disabled") {
     return { ok: false, blocker: "llm_disabled", output: null, ...safeRawResponseMetadata(""), request_would_have_been_sent: false };

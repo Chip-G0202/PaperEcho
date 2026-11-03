@@ -11,6 +11,7 @@ import {
   radarStatePaths,
 } from "../tools/radar/state.mjs";
 import { reconcileOperationLedger } from "../tools/recovery/reconciliation.mjs";
+import { OperationLedgerStore } from "../tools/recovery/operation_ledger.mjs";
 import {
   createRunRecoveryCoordinator,
   resumeRunFromLedger,
@@ -203,6 +204,56 @@ test("crash after verified summary but before consume resumes queue and preserve
   const stage4 = buildStage4StandaloneExportSource({ desktopSource: { triaged: ctx.items }, writebackReady: ctx.items, writebackSummary: persisted });
   assert.equal(stage4.filter.status, "ok");
   assert.deepEqual(stage4.filter.reportedBusinessWriteIdentities, stage4.filter.verifiedBusinessWriteIdentities);
+});
+
+test("lost acknowledgement after queue consumption is adopted from disk without replaying writes", async (t) => {
+  const ctx = await setup(t);
+  await prepare(ctx);
+  const remote = new Set(); let writes = 0, consumes = 0, allowWrites = true;
+  const mutation = {
+    async observe(operation) { return { state: remote.has(operation.idempotencyKey) ? "match" : "absent", evidence: { synthetic: true } }; },
+    async execute(operation) { assert.equal(allowWrites, true, "recovery must not repeat a business write"); writes++; remote.add(operation.idempotencyKey); return { evidence: { synthetic: true } }; },
+    async verify(operation) { return this.observe(operation); },
+  };
+  const build = async store => {
+    const built = await buildZoteroRecoveryReconcilers({ store, artifact: ctx.items, backend: {} });
+    return { ...built, zotero_item_create: mutation, zotero_collection_add: mutation, shared_index: mutation,
+      notification: { observe: () => assert.fail("notification forbidden") },
+      radar_queue_consume: { ...built.radar_queue_consume, execute: async operation => {
+        assert.equal(allowWrites, true, "already-consumed queue must be observed, not executed"); consumes++;
+        return built.radar_queue_consume.execute(operation);
+      } } };
+  };
+  await assert.rejects(reconcileOperationLedger({ store: ctx.coordinator.store, reconcilers: await build(ctx.coordinator.store),
+    hooks: { afterExecute: operation => { if (operation.type === "radar_queue_consume") throw new Error("fixture_queue_acknowledgement_lost"); } },
+  }), /fixture_queue_acknowledgement_lost/);
+  // Persist the caller's workflow failure independently of operation reconciliation.
+  await ctx.coordinator.store.setRunStatus("failed", "failed");
+  const failed = await OperationLedgerStore.load(ctx);
+  const operation = failed.ledger.operations.find(item => item.type === "radar_queue_consume");
+  assert.equal(operation.status, "failed"); assert.notEqual(failed.ledger.status, "completed");
+  assert.ok(operation.dependsOn.every(key => failed.ledger.operations.find(item => item.idempotencyKey === key).status === "verified"));
+  const queue = (await loadRadarUrgentQueue(ctx.queuePath)).items["doi:10.2000/weekly-1"];
+  assert.equal(queue.state, "consumed"); assert.equal(queue.claimedByWeeklyRunId, ctx.runId);
+  assert.equal(queue.verifiedWriteEvidence.ledgerOperationId, operation.idempotencyKey);
+  const files = [ctx.queuePath, ctx.indexPath, failed.ledger.artifact.path];
+  const before = await Promise.all(files.map(file => fs.readFile(file)));
+  const writeCount = writes; assert.ok(writeCount > 0); assert.equal(consumes, 1); allowWrites = false;
+  const reconcilers = await build(failed);
+  // A consumed item is not success evidence for a different ledger operation.
+  assert.equal((await reconcilers.radar_queue_consume.observe({ ...operation, idempotencyKey: "f".repeat(64) })).state, "conflict");
+  const recovered = await reconcileOperationLedger({ store: failed, reconcilers });
+  assert.equal(recovered.status, "failed");
+  assert.equal(recovered.outcomes.find(item => item.idempotencyKey === operation.idempotencyKey).action, "adopted_observed");
+  const operations = structuredClone(failed.ledger.operations);
+  const reloaded = await OperationLedgerStore.load(ctx);
+  const repeated = await reconcileOperationLedger({ store: reloaded, reconcilers: await build(reloaded) });
+  assert.equal(repeated.status, "failed"); assert.equal(reloaded.ledger.workflowStatus, "failed");
+  assert.ok(repeated.outcomes.every(item => item.action === "skipped_verified"));
+  assert.deepEqual(reloaded.ledger.operations, operations);
+  assert.notEqual(reloaded.ledger.status, "completed", "operation reconciliation must not invent completed business stages");
+  assert.equal(writes, writeCount); assert.equal(consumes, 1);
+  assert.deepEqual(await Promise.all(files.map(file => fs.readFile(file))), before);
 });
 
 test("a Stage4 evidence failure does not roll back an already consumed verified queue item", async (t) => {

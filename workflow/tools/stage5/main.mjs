@@ -1,20 +1,26 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { formatStage5Report } from "./report_summary.mjs";
+import { renderWeeklyReport } from "./report_summary.mjs";
+import { buildWeeklyNotificationContent } from "./notification_content.mjs";
 import { emailTransportConfig, sendStage5Email } from "./email_sender.mjs";
-import { readNotificationReceipt, receiptPathFor, recipientHash, writeNotificationReceipt } from "./email_receipt.mjs";
+import { readNotificationReceipt, receiptPathFor, recipientHash, writeNotificationReceipt, notificationRecoveryData } from "./email_receipt.mjs";
 import { generateLiteratureOverview } from "./literature_overview.mjs";
 import { deliverReliableNotification } from "../notification/delivery.mjs";
+import { emailDeliveryPolicy } from '../notification/policy.mjs';
+import { channelDeliveryPolicy } from '../notification/policy.mjs';
+import { deliverBusinessChannels } from '../notification/channel_delivery.mjs';
+import { CHANNEL_IDS } from '../notification/channels.mjs';
 
 const MAX_ATTACHMENTS = 1;
 const MAX_TOTAL_BYTES = 20 * 1024 * 1024;
 const ALLOWED = new Map([["monthly_docx", ".docx"]]);
 
-export function resolveStage5Request(argv = process.argv.slice(2), env = process.env) {
+export function resolveStage5Request(argv = process.argv.slice(2), env = process.env, event = 'weekly') {
   const equals = argv.find((arg) => String(arg).startsWith("--email="));
   const index = argv.indexOf("--email");
   const cliRecipient = equals ? String(equals).slice("--email=".length) : index >= 0 ? argv[index + 1] : "";
-  const recipient = String(cliRecipient || env.PAPERFLOW_REPORT_TO || env.NOTIFICATION_EMAIL || "").trim();
+  const policy = emailDeliveryPolicy(event, { env });
+  const recipient = policy.required ? String(cliRecipient || env.PAPERFLOW_REPORT_TO || env.NOTIFICATION_EMAIL || "").trim() : '';
   return { recipient, forceResend: argv.includes("--force-resend"), source: cliRecipient ? "cli" : env.PAPERFLOW_REPORT_TO ? "PAPERFLOW_REPORT_TO" : env.NOTIFICATION_EMAIL ? "NOTIFICATION_EMAIL" : "none" };
 }
 
@@ -45,6 +51,22 @@ export async function prepareStage5Attachments(runSummary, { fsApi = fs } = {}) 
 }
 
 export async function runStage5Notification({ runSummary, literatureItems = [], recipient, forceResend = false, transport, config = {} } = {}) {
+  if (Number((config.env || process.env).PAPERECHO_CONFIG_SCHEMA_VERSION) >= 5 || channelDeliveryPolicy('qq', 'weekly', { env: config.env || process.env }).required) {
+    const fsApi = config.fsApi || fs;
+    const stateRoot = path.resolve(config.runStateRoot || runSummary.outputRoot);
+    const active = CHANNEL_IDS.some(channel => channelDeliveryPolicy(channel, 'weekly', { env: config.env || process.env }).required);
+    const overview = active ? await generateLiteratureOverview({ runSummary, literatureItems, llmClient: config.llmClient || null, runtime: config.llmRuntime || null, fsApi, stateRoot, legacyStateRoot: runSummary.outputRoot }) : { overview: '' };
+    const content = buildWeeklyNotificationContent(runSummary, { overview: overview.overview, literatureItems });
+    return deliverBusinessChannels({ content, env: config.env || process.env, runStateRoot: stateRoot, recoveryCoordinator: config.recoveryCoordinator,
+      qqTransport: config.qqTransport, channelTransports: config.channelTransports, fsApi, clock: config.clock,
+      emailDelivery: () => runEmailStage5Notification({ runSummary, literatureItems, recipient, forceResend, transport, config: { ...config, content } }) });
+  }
+  return runEmailStage5Notification({ runSummary, literatureItems, recipient, forceResend, transport, config });
+}
+
+async function runEmailStage5Notification({ runSummary, literatureItems = [], recipient, forceResend = false, transport, config = {} } = {}) {
+  const policy = emailDeliveryPolicy('weekly', { env: config.env || process.env });
+  if (!policy.required) return { status: 'skipped', reason: policy.reason, attachments: [] };
   if (!String(recipient || "").trim()) return { status: "skipped", reason: "recipient_not_configured", attachments: [] };
   if (!isValidRecipient(recipient)) return { status: "failed", reason: "recipient_invalid", attachments: [] };
   const normalizedRecipient = String(recipient).trim().toLowerCase();
@@ -69,8 +91,9 @@ export async function runStage5Notification({ runSummary, literatureItems = [], 
       const mailConfig = emailTransportConfig(config.env || process.env);
       if (!mailConfig.configured) throw Object.assign(new Error(mailConfig.error), { category: mailConfig.missing.length ? "transport_not_configured" : "smtp_config_invalid" });
     }
-    const overview = await generateLiteratureOverview({ runSummary, literatureItems, llmClient: config.llmClient || null, runtime: config.llmRuntime || null, fsApi, stateRoot, legacyStateRoot: runSummary.outputRoot });
-    const report = formatStage5Report(runSummary, { overview: overview.overview });
+    const overview = config.content ? null : await generateLiteratureOverview({ runSummary, literatureItems, llmClient: config.llmClient || null, runtime: config.llmRuntime || null, fsApi, stateRoot, legacyStateRoot: runSummary.outputRoot });
+    const content = config.content || buildWeeklyNotificationContent(runSummary, { overview: overview.overview, literatureItems });
+    const report = renderWeeklyReport(content);
     const delivery = await deliverReliableNotification({
       receiptPath,
       legacyReceiptPath,
@@ -79,6 +102,7 @@ export async function runStage5Notification({ runSummary, literatureItems = [], 
       businessSubject: runSummary.runId,
       eventEpoch: runSummary.runId,
       payload: { ...report, attachments },
+      recoveryData: await notificationRecoveryData(content, attachments, { fsApi }),
       recipient: normalizedRecipient,
       ledgerOperationId: config.ledgerOperationId || "",
       retryFailed: true,

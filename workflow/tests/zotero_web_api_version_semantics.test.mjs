@@ -13,6 +13,60 @@ function jsonResponse(status, data = {}, headers = {}) {
   };
 }
 
+test('collection reads exclude deleted markers in either API location without losing active false markers', async () => {
+  const backend = new ZoteroWebApiBackend({ userId: 'fixture-library', apiKey: 'mock' });
+  const entries = [
+    ...[true, 1, '1', 'true', ' TRUE '].flatMap((deleted, i) => [
+      { key: `TOP${i}`, deleted, data: { name: '26.10', parentCollection: 'ROOT', deleted: false } },
+      { key: `DATA${i}`, data: { name: '26.10', parentCollection: 'ROOT', deleted } },
+    ]),
+    ...[undefined, false, 0, '0', 'false'].map((deleted, i) => ({ key: `LIVE${i}`, deleted, data: { name: '26.10', parentCollection: 'ROOT', deleted } })),
+  ];
+  backend._request = async method => { assert.equal(method, 'GET'); return { data: entries, totalResults: entries.length }; };
+  const expected = entries.filter(c => c.key.startsWith('LIVE')).map(c => c.key);
+  for (const collections of [await backend.getCollections(), await backend.getAllCollections(), await backend.getSubcollections('ROOT')]) assert.deepEqual(collections.map(c => c.key), expected);
+});
+
+test('deleted month is never reused; normal creation keeps parent and repeat execution reuses only active collections', async () => {
+  const backend = new ZoteroWebApiBackend({ userId: 'fixture-library', apiKey: 'mock' });
+  const entries = [{ key: 'ROOT', data: { name: '文献池', parentCollection: false } },
+    { key: '52UAIEVB', deleted: 1, data: { name: '26.10', parentCollection: 'ROOT' } }];
+  const posts = [];
+  backend._request = async (method, endpoint, body) => {
+    if (method === 'POST') {
+      assert.equal(endpoint, '/collections'); posts.push(body);
+      const key = `NEW${posts.length}`; entries.push({ key, data: body[0] });
+      return { data: { successful: { 0: { key } } } };
+    }
+    assert.equal(method, 'GET');
+    if (endpoint.startsWith('/collections/top?')) return { data: entries.filter(c => !c.data.parentCollection) };
+    const parent = endpoint.match(/^\/collections\/([^/]+)\/collections$/)?.[1];
+    assert.ok(parent); assert.notEqual(parent, '52UAIEVB');
+    return { data: entries.filter(c => c.data.parentCollection === parent) };
+  };
+  const input = { rootKey: 'ROOT', monthName: '26.10', dayName: '26.10.27', sourceNames: ['RSS订阅'], gradeNames: ['A课题相关'] };
+  const first = await backend.ensureWritebackCollections(input);
+  assert.equal(first.month.key, 'NEW1'); assert.equal(first.month.parentCollection, 'ROOT');
+  assert.deepEqual(posts[0], [{ name: '26.10', parentCollection: 'ROOT' }]);
+  const count = posts.length;
+  const second = await backend.ensureWritebackCollections(input);
+  assert.equal(second.month.key, first.month.key); assert.equal(second.created.length, 0); assert.equal(posts.length, count);
+  assert.equal((await backend.ensureCollectionPath(['文献池', '26.10'])).rootKey, first.month.key);
+  assert.equal(posts.length, count);
+});
+
+test('filtering deleted collections does not change raw pagination offsets or hide active later pages', async () => {
+  const backend = new ZoteroWebApiBackend({ userId: 'fixture-library', apiKey: 'mock' });
+  const offsets = [];
+  backend._request = async (_method, endpoint) => {
+    const offset = Number(new URL(endpoint, 'https://mock.invalid').searchParams.get('offset') || 0); offsets.push(offset);
+    return { totalResults: 101, data: offset === 0 ? Array.from({ length: 100 }, (_, i) => ({ key: `DEL${i}`, deleted: 1, data: { name: '26.10' } })) : [{ key: 'LIVE', data: { name: '26.10' } }] };
+  };
+  assert.deepEqual((await backend.getCollections({ limit: 101 })).map(c => c.key), ['LIVE']);
+  assert.deepEqual(offsets, [0, 100]); offsets.length = 0;
+  assert.deepEqual((await backend.getAllCollections()).map(c => c.key), ['LIVE']); assert.deepEqual(offsets, [0, 100]);
+});
+
 test("412 and 428 fail immediately without ordinary retries", async () => {
   for (const status of [412, 428]) {
     const backend = new ZoteroWebApiBackend({ userId: "u", apiKey: "k", retries: 3, intervalMs: 1 });

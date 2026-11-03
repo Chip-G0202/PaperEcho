@@ -47,8 +47,12 @@ test("LLM unavailable candidates enter review backlog", async () => {
   const artifactDir = path.join(root, "review_results", "文献评价", "runs", "radar-backlog", "radar");
   await fs.mkdir(artifactDir, { recursive: true });
   const item = { title: "Rule A only", doi: "10.1000/backlog", grade: "A", rule_grade: "A", final_grade: "A" };
-  const result = await finalizeRadarStage1({ projectRoot: root, artifactDir, runId: "radar-backlog", triagedItems: [item], llmGradeReport: { skipped: true, skipped_reason: "llm_disabled" } });
+  const result = await finalizeRadarStage1({ projectRoot: root, artifactDir, runId: "radar-backlog", triagedItems: [item, { title: "Not recommended", doi: "10.1000/not-recommended", grade: "D", final_grade: "D" }], llmGradeReport: { skipped: true, skipped_reason: "llm_disabled" } });
   assert.equal(result.audit.backlogCount, 1);
+  assert.equal(result.audit.candidateCount, 2);
+  assert.deepEqual(result.audit.candidateGrades, { A: 1, B: 0, C: 0, D: 1 });
+  assert.equal(result.urgentItems.length, 0);
+  assert.deepEqual(JSON.parse(await fs.readFile(result.auditPath, "utf8")).candidateGrades, result.audit.candidateGrades);
   assert.equal(Object.keys((await loadRadarBacklog(radarStatePaths(root).backlog)).items).length, 1);
 });
 

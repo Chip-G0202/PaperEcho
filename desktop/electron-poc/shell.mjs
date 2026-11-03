@@ -1,0 +1,116 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import fs from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
+
+export const repo = fileURLToPath(new URL('../../', import.meta.url));
+export const sandboxBase = path.join(repo, 'tests', 'runs', 'electron-poc');
+export const preferences = Object.freeze({ nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true });
+export function trustedFirstRunFrame(event, contents, origin) {
+  return Boolean(origin && event.sender === contents && event.senderFrame === contents.mainFrame
+    && allowedDocument(event.senderFrame.url, origin) && new URL(event.senderFrame.url).hash === '#setup');
+}
+export function trustedDesktopSettingsFrame(event, contents, origin) {
+  if (!origin || event.sender !== contents || event.senderFrame !== contents.mainFrame || !allowedDocument(event.senderFrame.url, origin)) return false;
+  return /^#(?:setup|settings(?:\/.*)?)$/.test(new URL(event.senderFrame.url).hash);
+}
+// No cached preference: the OS is the source of truth. No registration on startup.
+export function loginStartup(app, { enabled, platform = process.platform, executable = process.execPath } = {}) {
+  if (!app.isPackaged || !['darwin', 'win32'].includes(platform)) return { available: false, error: 'LOGIN_STARTUP_UNAVAILABLE' };
+  const options = platform === 'win32' ? { path: executable, args: [] } : {};
+  try {
+    if (enabled !== undefined) {
+      if (typeof enabled !== 'boolean') return { available: true, error: 'LOGIN_STARTUP_INVALID' };
+      app.setLoginItemSettings({ ...options, openAtLogin: enabled, ...(platform === 'win32' ? { enabled } : {}) });
+    }
+    const actual = app.getLoginItemSettings(options);
+    const on = actual.openAtLogin === true && (platform === 'win32' ? actual.executableWillLaunchAtLogin === true : actual.status === 'enabled');
+    const state = { available: true, enabled: on, status: actual.status || (on ? 'enabled' : 'disabled') };
+    if (enabled !== undefined && (on !== enabled || !enabled && actual.openAtLogin)) state.error = actual.status === 'requires-approval' ? 'LOGIN_STARTUP_APPROVAL_REQUIRED' : 'LOGIN_STARTUP_NOT_CONFIRMED';
+    return state;
+  } catch { return { available: true, error: 'LOGIN_STARTUP_FAILED' }; }
+}
+export async function selectFirstRunDirectory({ paths, env, owner, choose, confirm, restart }) {
+  if (owner.explicitStartupLocation(env)) throw new Error('STARTUP_SELECTION_UNAVAILABLE');
+  await owner.assertFirstRunBlank(paths);
+  const result = await choose();
+  if (result.canceled || result.filePaths.length !== 1) return { status: 'cancelled' };
+  const target = result.filePaths[0];
+  if (!await confirm(target)) return { status: 'cancelled' };
+  await owner.saveFirstRunLocation({ applicationRoot: paths.applicationRoot, env, currentPaths: paths, target });
+  // No success/Ready receipt until a different process has initialized the saved root.
+  try { await restart(); return { status: 'restarting' }; }
+  catch { return { status: 'restart-required', error: 'STARTUP_RESTART_REQUIRED' }; }
+}
+export const failurePage = 'data:text/html;charset=utf-8,' + encodeURIComponent('<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'"><title>PaperEcho</title><p>PaperEcho 无法连接本地工作空间。请关闭窗口后重试。</p>');
+export function startupDiagnostic(error, stage) {
+  const code = String(error.code || error.message || '');
+  const kind = /EACCES|EPERM|PERMISSION/.test(code) ? 'PERMISSION'
+    : /MODULE_NOT_FOUND|ENOENT|RESOURCE/.test(code) ? 'RESOURCE'
+    : /TIMEOUT|TIMEDOUT/.test(code) ? 'TIMEOUT'
+    : stage === 'page' ? 'CONNECTION' : 'SERVICE';
+  const detail = /^[A-Z][A-Z_0-9]{1,80}$/.test(code) ? code : 'UNCLASSIFIED';
+  const descriptions = { PERMISSION: '权限检查失败', RESOURCE: '程序资源缺失', TIMEOUT: '本地服务响应超时', CONNECTION: '页面连接失败', SERVICE: '本地服务启动失败' };
+  return { kind, detail, page: 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'"><title>PaperEcho</title><p>PaperEcho 无法连接本地工作空间。</p><p>${descriptions[kind]}（${kind}/${detail}）。请保留此错误代码，关闭窗口后检查配置或反馈问题；工作空间未被清理。</p>`) };
+}
+export function allowedDocument(value, origin) {
+  try { const u = new URL(value); return u.origin === origin && u.pathname === '/' && !u.search && !u.username && !u.password; } catch { return false; }
+}
+// External navigation is limited to this exact public repository, never arbitrary URLs.
+export function allowedExternalLink(value, documentURL, origin) {
+  return allowedDocument(documentURL, origin) && value === 'https://github.com/Chip-G0202/PaperEcho';
+}
+export function allowedSupportDownload({ url, mime, filename, bytes, documentURL }, origin) {
+  return Boolean(origin && allowedDocument(documentURL, origin) && url.startsWith(`blob:${origin}/`)
+    && mime === 'application/zip' && filename === 'paperecho-support.zip'
+    && Number.isSafeInteger(bytes) && bytes > 0 && bytes <= 65536);
+}
+export async function sandboxWorkspace(root = path.join(sandboxBase, 'workspace')) {
+  root = path.resolve(root);
+  const relative = path.relative(sandboxBase, root);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('SANDBOX_REQUIRED');
+  await fs.mkdir(root, { recursive: true });
+  // Resolve before any data writes: even a workspace symlink must stay in this PoC sandbox.
+  if (await fs.realpath(sandboxBase) !== sandboxBase || path.relative(sandboxBase, await fs.realpath(root)).startsWith('..')) throw new Error('SANDBOX_REQUIRED');
+  await fs.mkdir(path.join(root, 'config'), { recursive: true });
+  const config = path.join(root, 'config', 'paperecho.config.json');
+  try { await fs.writeFile(config, JSON.stringify({ schemaVersion: 2, mode: 'local', common: { projectRoot: root } }), { flag: 'wx' }); }
+  catch (e) { if (e.code !== 'EEXIST') throw e; }
+  return root;
+}
+export async function acquireServer(root, { port = 8765, env } = {}) {
+  // Never bootstrap the development .env or inherit provider credentials in this sandbox-only PoC.
+  if (!env) process.env.PAPERECHO_SKIP_DOTENV = '1';
+  const moduleRoot = env ? env.PAPERECHO_RESOURCE_ROOT : repo;
+  const { resolveControlCenterStartup, controlCenterInstance, startControlCenter } = await import(pathToFileURL(path.join(moduleRoot, 'workflow/tools/web/server.mjs')).href);
+  const { controlCenterPorts, discoverControlCenter } = await import(pathToFileURL(path.join(moduleRoot, 'workflow/tools/web/launcher.mjs')).href);
+  if (env) {
+    const { copyEnvironment } = await import(pathToFileURL(path.join(moduleRoot, 'workflow/tools/lib/credential_registry.mjs')).href);
+    env = copyEnvironment(env, { ELECTRON_RUN_AS_NODE: '1' });
+  }
+  const startup = await resolveControlCenterStartup(env ? { root: env.PAPERECHO_APPLICATION_ROOT, env } : { root, env: { PAPERECHO_SKIP_DOTENV: '1' }, argv: ['--mode', 'local', '--output-root', path.join(root, 'local')] });
+  for (const value of !env ? [startup.context.projectRoot, startup.context.reviewRoot, startup.context.researchRoot, startup.context.configPath, startup.context.localRepository?.root] : []) {
+    if (value && (path.relative(root, value).startsWith('..') || path.isAbsolute(path.relative(root, value)))) throw new Error('SANDBOX_REQUIRED');
+  }
+  const instance = controlCenterInstance(root, startup.context);
+  const ports = controlCenterPorts(instance, port);
+  for (let attempt = 0; attempt < ports.length; attempt++) {
+    const selected = await discoverControlCenter(ports, instance);
+    if (!selected) throw new Error('PORT_OCCUPIED');
+    if (selected.status === 'same') {
+      // Reopening Electron must also repair a missing task when an independently
+      // launched HTML backend already owns this workspace's HTTP server.
+      const { createControlServices } = await import(pathToFileURL(path.join(moduleRoot, 'workflow/tools/lib/control_application_services.mjs')).href);
+      await createControlServices({ root, env: startup.env, context: startup.context }).automation.reconcile();
+      return { url: selected.url, owned: false, context: startup.context, close: async () => {} };
+    }
+    try {
+      const running = await startControlCenter({ ...startup, port: selected.port });
+      return { ...running, owned: true, context: startup.context, close: async () => {
+        running.server.closeAllConnections();
+        await new Promise(resolve => running.server.close(resolve));
+      } };
+    } catch (error) { if (error.code !== 'EADDRINUSE') throw error; }
+  }
+  throw new Error('PORT_OCCUPIED');
+}

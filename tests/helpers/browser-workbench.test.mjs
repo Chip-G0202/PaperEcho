@@ -1,0 +1,70 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { browserEnvironment, startBrowserWorkbench } from '../../desktop/browser-workbench/start.mjs';
+import { ConfigService } from '../../workflow/tools/lib/control_config_service.mjs';
+import { resolveApplicationRuntimeContext, resolveRuntimePaths } from '../../workflow/tools/lib/runtime_config.mjs';
+import { createControlServices } from '../../workflow/tools/lib/control_application_services.mjs';
+
+test('real browser and desktop services reopen the same isolated workspace with protected writes', async t => {
+  const base = path.resolve('tests/runs/browser-workbench'); await fs.mkdir(base, { recursive: true });
+  const root = await fs.mkdtemp(path.join(base, 'workspace-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const app = path.join(root, 'program'), data = path.join(root, 'data');
+  await fs.mkdir(path.join(app, 'config'), { recursive: true });
+  await fs.copyFile('config/paperecho.config.example.json', path.join(app, 'config/paperecho.config.example.json'));
+  const env = { PAPERECHO_APPLICATION_ROOT: app, PAPERECHO_LAYOUT: 'installed', PAPERECHO_DATA_ROOT: data, PAPERECHO_SKIP_DOTENV: '1', PATH: '' };
+  let running = await startBrowserWorkbench({ applicationRoot: app, env, port: 0 });
+  t.after(() => { running.server.closeAllConnections(); running.server.close(); });
+  const request = async (route, body, origin = running.url) => {
+    const session = await fetch(running.url + '/api/session'); const { token } = await session.json();
+    return fetch(running.url + route, { method: body ? 'POST' : 'GET', headers: { cookie: session.headers.get('set-cookie').split(';')[0], Origin: origin, 'X-CSRF-Token': token, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  };
+  assert.equal((await fetch(running.url)).status, 200);
+  assert.match(await (await fetch(running.url + '/ai-capabilities.js')).text(), /capabilities/);
+  assert.equal((await request('/api/settings', { id: 'runtime.mode', value: 'local' }, 'https://untrusted.invalid')).status, 403);
+  assert.equal((await fetch(running.url + '/api/settings')).status, 403);
+  assert.equal((await request('/api/settings', { id: 'runtime.mode', value: 'local' })).status, 200);
+  const fakeKey = 'fixture-private-not-a-real-key';
+  await fs.writeFile(path.join(data, '.env'), `PREFERENCE_LEARNING_API_KEY="${fakeKey}"\n`, {mode:0o600});
+  running.server.closeAllConnections(); await new Promise(resolve => running.server.close(resolve));
+  const context = await resolveApplicationRuntimeContext({ cwd: app, env });
+  const desktop = createControlServices({ root: app, context, env });
+  assert.equal(desktop.config.configPath, running.paths.configPath);
+  assert.equal((await desktop.config.list()).find(row => row.id === 'runtime.mode').value, 'local');
+  await desktop.config.updateMany([{ id: 'radar.enabled', value: true }, { id: 'general.profile', value: 'radar' }]);
+  // Desktop services close with their owner process; a new browser startup must reread disk.
+  running = await startBrowserWorkbench({ applicationRoot: app, env, port: 0 });
+  assert.equal((await (await request('/api/settings')).json()).find(row => row.id === 'general.profile').value, 'radar');
+  const credentialsResponse = await request('/api/credentials');
+  const credentials = await credentialsResponse.text(); assert.equal(credentials.includes(fakeKey), false);
+  assert.equal((await (await request('/api/doctor/configuration')).text()).includes(fakeKey), false);
+  const session = await fetch(running.url+'/api/session');
+  const rejected = await fetch(running.url+'/api/settings', {method:'POST',headers:{cookie:session.headers.get('set-cookie').split(';')[0],Origin:running.url,'Content-Type':'application/json'},body:JSON.stringify({id:'general.profile',value:'standard'})});
+  assert.equal(rejected.status,403);
+  const before = await fs.readFile(context.configPath);
+  const broken = new ConfigService({ root: data, env, configPath: context.configPath, atomicOptions: { validateTemporary() { throw new Error('DUMMY_FAILURE'); } } });
+  await assert.rejects(broken.update('general.profile', 'standard'), /DUMMY_FAILURE/);
+  assert.deepEqual(await fs.readFile(context.configPath), before);
+  assert.equal(credentials.includes('apiKey"'), false);
+  running.server.closeAllConnections(); await new Promise(resolve => running.server.close(resolve));
+  running = await startBrowserWorkbench({ applicationRoot: app, env, port: 0 });
+  assert.equal((await (await request('/api/settings')).json()).find(row => row.id === 'general.profile').value, 'radar');
+  assert.equal(running.paths.userDataRoot, data);
+  // Independent owners use the same atomic lock; disjoint edits must both survive.
+  const second = new ConfigService({root:data,env,configPath:context.configPath});
+  await Promise.all([desktop.config.update('general.profile','complete'),second.update('radar.enabled',false)]);
+  const latest = await second.list();
+  assert.equal(latest.find(row=>row.id==='general.profile').value,'complete');
+  assert.equal(latest.find(row=>row.id==='radar.enabled').value,false);
+  assert.equal((await fs.readFile(path.join(data,'.env'),'utf8')).includes(fakeKey),true);
+  const defaultEnv = await browserEnvironment({ applicationRoot: app, env: {} }); assert.equal(defaultEnv.PAPERECHO_WORKSPACE_ID, 'default');
+});
+test('Windows browser launcher explicitly uses PowerShell Core without weakening execution policy', async () => {
+  const cmd = await fs.readFile('desktop/browser-workbench/Start-Workbench.cmd', 'utf8');
+  const script = await fs.readFile('desktop/browser-workbench/Start-Workbench.ps1', 'utf8');
+  assert.match(cmd, /pwsh.exe -NoLogo -NoProfile -File/); assert.match(script, /PSVersionTable.PSVersion.Major -lt 7/); assert.match(script, /PSEdition -ne 'Core'/);
+  assert.doesNotMatch(cmd + script, /ExecutionPolicy|powershell.exe|RunAs/i);
+  const paths=resolveRuntimePaths({applicationRoot:'C:\\PaperEcho',platform:'win32',homeDir:'C:\\Users\\Fixture',env:{PAPERECHO_LAYOUT:'installed',PAPERECHO_WORKSPACE_ID:'default',LOCALAPPDATA:'C:\\Users\\Fixture\\AppData\\Local'}});
+  assert.equal(paths.userDataRoot,'C:\\Users\\Fixture\\AppData\\Local\\PaperEcho\\workspaces\\default');
+});

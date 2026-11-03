@@ -1,4 +1,5 @@
 import test from 'node:test';
+import '../../tests/research_evaluation.test.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -6,7 +7,11 @@ import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 import { FeedbackService, readCanonicalFeedback, canonicalFeedbackPath, canonicalFeedbackActionRows, manualGradeFeedback } from '../tools/lib/control_feedback_service.mjs';
 import { importLegacyWorkbook } from '../tools/lib/control_legacy_feedback_adapter.mjs';
-import { ConfigService } from '../tools/lib/control_config_service.mjs';
+import { ConfigService, validateSetting } from '../tools/lib/control_config_service.mjs';
+import { validateRunnerConfigObject } from '../tools/runner/config_loader.mjs';
+import { loadRssSources } from '../tools/lib/literature_config.mjs';
+import { parseRssItems } from '../tools/stage1/retrieval_step.mjs';
+import { getReviewDisplayMetadata } from '../tools/lib/review_display_metadata.mjs';
 import { getTranslationConfig } from '../tools/lib/title_translation_support.mjs';
 import { getPreferenceLearningConfig } from '../tools/lib/preference_learning_support.mjs';
 import { RuleSuggestionService } from '../tools/lib/control_rule_suggestion_service.mjs';
@@ -27,6 +32,28 @@ async function fixture(t) {
   return root;
 }
 const paper = { doi: '10.1234/example', title: '中文 & 特殊字符 <script> — 文献' };
+
+test('rule active projection preserves all 36 history records, metadata and decision replay', async (t) => {
+  const root = await fixture(t);
+  const history = ['accepted', 'rejected', 'revised'].flatMap((status, group) => Array.from({ length: [20, 10, 3][group] }, (_, i) => ({ id: `${status}-${i}`, status, rule_text: '历史筛选规则', processed_at: '2026-09-01', decision_history: [{ decision: status }] })));
+  const active = ['pending', 'pending', 'candidate'].map((status, i) => ({ id: `active-${i}`, status, rule_text: `优先关注合成研究方向${i}`, target: 'screening_standards.md', change_type: 'add_rule' }));
+  const file = ruleSuggestionsLogPath(root);
+  await fs.writeFile(file, JSON.stringify({ suggestions: [...history, ...active] }));
+  const before = await fs.readFile(file, 'utf8');
+  const service = new RuleSuggestionService({ reviewRoot: root });
+  assert.equal((await service.list()).length, 36);
+  assert.deepEqual((await service.listPending()).map(item => item.id), active.map(item => item.id));
+  assert.equal(await fs.readFile(file, 'utf8'), before);
+  const input = { id: 'active-0', decision: 'accepted', humanApproval: true };
+  await service.decide(input);
+  assert.equal((await service.decide(input)).duplicate, true);
+  assert.equal((await service.listPending()).length, 2);
+  assert.equal((await service.list()).length, 36);
+  assert.deepEqual((await service.readLog()).suggestions.slice(0, history.length), history);
+  await fs.writeFile(file, JSON.stringify({ suggestions: [{ id: 'old', status: 'superseded', processed_at: 'preserved' }, { id: 'expired', status: 'expired', decision_history: ['preserved'] }] }));
+  assert.equal((await service.listPending()).length, 0);
+  assert.equal((await service.list()).length, 2);
+});
 
 test('unsupported accept fails without recording success; reject remains available', async (t) => {
   const root = await fixture(t);
@@ -163,6 +190,72 @@ test('config valid round trip and invalid/verification failure preserve old valu
   await assert.rejects(service.update('rss.sources', [{ name: 'bad', url: 'javascript:alert(1)', enabled: true }]), /INVALID/);
   await assert.rejects(service.updateMany([{ id: 'translation.model', value: 'one' }, { id: 'translation.model', value: 'two' }]), /BATCH_INVALID/);
 });
+test('RSS venue round trips through legacy and canonical owners without changing other Settings', async (t) => {
+  for (const schemaVersion of [1, 2, 3, 4, 5, 6]) {
+    const root = await fixture(t);
+    const file = path.join(root, 'config', 'paperecho.config.json');
+    const legacyFile = path.join(root, 'config', 'rss_sources.json');
+    const old = [{ name: 'Combined research feed', url: 'https://example.org/rss?query=research&facet-journal-id=123', enabled: true }];
+    const config = { schemaVersion, mode: 'local', common: {}, local: { enabled: true }, ...(schemaVersion >= 3 ? { rss: { sources: old }, translation: { model: 'unchanged' } } : {}) };
+    await fs.writeFile(file, JSON.stringify(config));
+    await fs.writeFile(legacyFile, JSON.stringify({ sources: old }));
+    const service = new ConfigService({ root, env: {} });
+    const listed = () => service.list().then(rows => rows.find(row => row.id === 'rss.sources').value);
+    assert.deepEqual(await listed(), old);
+    assert.equal(loadRssSources({ root }).sources[0].publicationTitle, undefined);
+    const next = [
+      { ...old[0], publicationTitle: 'Journal of Neuroinflammation' },
+      { name: 'Combined source', url: 'https://example.org/combined', enabled: true, publicationTitle: '' },
+      { name: 'Legacy source', url: 'http://example.org/legacy', enabled: false },
+    ];
+    await service.update('rss.sources', next);
+    assert.deepEqual(await listed(), next);
+    await service.update('rss.sources', (await listed()).map(source => ({ ...source, enabled: !source.enabled })));
+    await service.update('rss.sources', next);
+    assert.deepEqual(await listed(), next);
+    const saved = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (schemaVersion >= 3) { const { rss, ...rest } = saved; const { rss: originalRss, ...originalRest } = config; assert.deepEqual(rest, originalRest); }
+    else assert.deepEqual(saved, config);
+    assert.deepEqual(JSON.parse(await fs.readFile(legacyFile, 'utf8')), { sources: schemaVersion >= 3 ? old : next });
+    const source = loadRssSources({ root }).sources[0];
+    const [item] = parseRssItems('<rss><channel><title>Latest Results</title><item><title>Synthetic paper</title></item></channel></rss>', source.url, source);
+    assert.equal(item.publicationTitle, next[0].publicationTitle);
+    assert.equal(getReviewDisplayMetadata(item).journal, next[0].publicationTitle);
+    assert.equal(item.feed_title, 'Latest Results'); assert.equal(item.feed_name, old[0].name); assert.equal(item.feed_url, old[0].url);
+  }
+});
+test('RSS Settings accept public query parameters and reject unsafe URLs before saving', async (t) => {
+  const root = await fixture(t); const file = path.join(root, 'config', 'rss_sources.json');
+  const source = { name: 'Public feed', url: 'https://example.org/rss?facet-journal-id=123&query=%28brain+OR+cell%29&search-within=Journal', enabled: true };
+  await fs.writeFile(file, JSON.stringify({ sources: [source] }));
+  const service = new ConfigService({ root, env: {} });
+  await service.update('rss.sources', [source]);
+  const before = await fs.readFile(file, 'utf8');
+  const unsafe = ['not a URL', 'javascript:alert(1)', 'file:///tmp/feed', 'ftp://example.org/feed', 'https://user:password@example.org/rss', 'https://example.org/rss#fragment', 'https://localhost/rss', 'https://service.local/rss', 'https://service.internal/rss', 'https://127.1/rss', 'https://[::1]/rss', 'https://10.0.0.1/rss', 'https://example.org/rss?query=%0Ahidden', 'https://example.org/%0dhidden', 'https://example.org/rss?query=%250ahidden', 'https://example.org/rss\n', 'https://example.org\\feed'];
+  for (const name of ['token', 'access_token', 'api_key', 'apiKey', 'password', 'secret', 'key', 'authorization', 'credential', 'signature', 'auth', 'access_key', 'pwd', '%74oken']) unsafe.push(`https://example.org/rss?${name}=synthetic-value`);
+  for (const url of unsafe) {
+    await assert.rejects(service.update('rss.sources', [{ ...source, url }]), /SETTING_VALUE_INVALID/);
+    assert.equal(await fs.readFile(file, 'utf8'), before);
+  }
+  await assert.rejects(service.update('translation.endpoint', 'https://example.org/api?query=public'), /SETTING_VALUE_INVALID/);
+});
+test('RSS publication title schema accepts absent/empty values and rejects noise or unsafe metadata', async (t) => {
+  const root = await fixture(t); const file = path.join(root, 'config', 'rss_sources.json');
+  const definition = { type: 'rss', validation: {} };
+  const source = { name: 'Combined feed', url: 'https://example.org/rss', enabled: true };
+  for (const publicationTitle of [undefined, '', 'Journal of Neuroinflammation', 'Science Advances']) {
+    const sources = [{ ...source, ...(publicationTitle === undefined ? {} : { publicationTitle }) }];
+    assert.doesNotThrow(() => validateSetting(definition, sources));
+    assert.doesNotThrow(() => validateRunnerConfigObject({ schemaVersion: 6, rss: { sources } }));
+  }
+  for (const publicationTitle of [null, 12, {}, 'x'.repeat(201), 'RSS', 'Latest Results', 'Table of Contents', '<b>Journal</b>', '&lt;script&gt;', 'https://example.org/journal', 'Journal\nName', 'Journal\u200bName']) {
+    const sources = [{ ...source, publicationTitle }];
+    assert.throws(() => validateSetting(definition, sources), /SETTING_VALUE_INVALID/);
+    assert.throws(() => validateRunnerConfigObject({ schemaVersion: 6, rss: { sources } }), /APPLICATION_CONFIG_VALUE_INVALID/);
+    await fs.writeFile(file, JSON.stringify({ sources }));
+    assert.throws(() => loadRssSources({ root }), /RSS_PUBLICATION_TITLE_INVALID/);
+  }
+});
 test('missing model owners remain configurable and initialize atomically on first save', async (t) => {
   const root = await fixture(t); const service = new ConfigService({ root });
   const listed = await service.list();
@@ -243,6 +336,7 @@ test('suggestion accept/reject/revise use formal owner; high-risk add applies an
   await assert.rejects(service.decide({ id: 'e', decision: 'accepted', humanApproval: true }), /UNVERIFIED/);
   const blocked = new RuleSuggestionService({ reviewRoot: root, noFormalRuleApply: true });
   await assert.rejects(blocked.decide({ id: 'e', decision: 'accepted', humanApproval: true }), /NO_FORMAL/);
+  assert.deepEqual((await blocked.listPending()).map(item => item.id), ['e']);
   const result = await processUserSuggestionDecisions({ suggestions_table: [['建议ID', '状态'], ['e', 'accept']] }, { reviewRoot: root });
   assert.equal(result.receipts[0].status, 'blocked');
   await writeUnifiedPendingRuleSuggestions(ruleSuggestionsLogPath(root), { suggestions });
@@ -317,7 +411,7 @@ test('text and DOCX evaluation share proposal core, text never changes DOCX', as
   const docxPath = path.join(root, 'screening_standards.docx');
   const before = await fs.readFile(docxPath);
   const llmClient = async () => ({ rules_added: ['优先关注机制研究'], rules_deleted: [], rules_changed: [], keywords_added: { required: ['EGFR'], optional: [], negative: [] }, keywords_removed: [], negative_keywords_added: [], unmapped_feedback: [] });
-  const options = { reviewRoot: root, pubmedConfigPath, llmClient };
+  const options = { reviewRoot: root, pubmedConfigPath, llmClient, llmRuntime: { model: 'fixture', endpoint: 'https://fixture.invalid/v1/chat/completions', max_retries: 0 } };
   const direct = await processResearchEvaluation(text, options);
   assert.equal(direct.evaluation_processed, true);
   assert.equal(direct.applied, false);

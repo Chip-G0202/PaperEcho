@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
+import { classifyLiterature } from '../stage1/semantic_grade_synthesis.mjs';
+import { buildFinalReviewMembership } from './finalize_exports_support.mjs';
 import path from "node:path";
 import { buildStandardSummary } from "../stage1/preference_refinement.mjs";
 import { cleanJournalName } from "../lib/journal_name_cleaner.mjs";
+import { getReviewDisplayMetadata } from '../lib/review_display_metadata.mjs';
 import { inspectXlsxWorkbook } from "../lib/review_workbook_reader.mjs";
 
 export const EXPORT_METHODS = {
@@ -108,6 +111,9 @@ function extractGradeLetter(item, keys) {
  * Delegates to shared journal_name_cleaner module.
  */
 function cleanJournalSource(item) {
+  const metadata = getReviewDisplayMetadata(item);
+  if (metadata.journal) return metadata.journal;
+  if (metadata.source === 'RSS') return metadata.source;
   // Try each candidate independently: if a field is present but cleans to
   // noise (e.g. "Latest Results", "Example Topic Current Issue"), fall through to
   // the next candidate instead of stopping at the first truthy value.
@@ -126,40 +132,24 @@ function cleanJournalSource(item) {
   return "";
 }
 
-function isHumanReviewItem(item) {
-  return Boolean(
-    item?.needs_human_review
-      || item?.needsHumanReview
-      || item?.review_required
-      || item?.reviewRequired
-      || item?.semantic_review?.needs_human_review
-      || item?.semantic_review?.review_required
-      || item?.semantic_mismatch
-      || item?.semantic_rescue
-  );
-}
-
 // Shared read-only Weekly evidence for XLSX and the Control Center. Keep the
 // legacy aliases and human-review classification here, never in the Web layer.
 export function getWeeklyReviewEvidence(item) {
+  const classification = classifyLiterature(item);
   return {
     ruleGrade: extractGradeLetter(item, ["rule_grade", "ruleGrade", "original_grade", "initial_grade", "grade"]),
     semanticGrade: extractGradeLetter(item, ["llm_review_grade", "llmReviewGrade", "semantic_grade", "semanticGrade", "semantic_review.grade", "semanticPreference.grade"]),
     finalGrade: extractGradeLetter(item, ["final_grade", "finalGrade", "adjusted_grade", "grade"]),
-    needsReview: isHumanReviewItem(item),
+    needsReview: classification.needsHumanReview,
+    reviewBucket: classification.reviewBucket,
+    classificationReason: classification.classificationReason,
+    legacyReviewEvidence: Boolean(item?.semantic_mismatch || item?.semantic_rescue),
     reviewReason: String(item?.semantic_reason || item?.semanticReason || item?.semantic_review?.reason || item?.semantic_adjustment_reason || "").trim(),
   };
 }
 
 function toDailyRows(triaged) {
-  const banned = new Set(["D", "D无关"]);
-  return triaged
-    .filter((it) => {
-      const finalGrade = extractGradeLetter(it, ["final_grade", "finalGrade", "adjusted_grade", "grade"]) ||
-        extractGradeLetter(it, ["rule_grade", "ruleGrade", "original_grade", "initial_grade"]);
-      const label = String(it?.["推荐等级"] || "");
-      return !banned.has(finalGrade) && !banned.has(label) && !banned.has(String(it?.grade || "")) && !isHumanReviewItem(it);
-    })
+  return buildFinalReviewMembership(triaged).feedback
     .map((it) => {
       const translated = it?.translatedTitle || it?.["标题翻译"] || it?.["中文标题"] || it?.shortTitle || it?.title || "";
       const { ruleGrade, semanticGrade, finalGrade } = getWeeklyReviewEvidence(it);
@@ -184,12 +174,12 @@ const GRADE_ORDER = { A: 0, B: 1, C: 2, D: 3 };
 
 /**
  * Build rows for the "需人工复核" sheet from triaged items.
- * Only includes items explicitly flagged with needs_human_review (e.g. C→D auto-blocked).
- * Auto-adopted adjustments (B→A, C→B, B→C) are visible in 每日反馈 but do NOT enter this sheet.
+ * Consumes the same final classification membership as the Control Center.
+ * Display labels and intermediate grades never decide membership.
  */
 function toHumanReviewRows(triaged) {
   const rows = [];
-  for (const it of triaged) {
+  for (const it of buildFinalReviewMembership(triaged).manual) {
     const { ruleGrade, semanticGrade, finalGrade, needsReview, reviewReason } = getWeeklyReviewEvidence(it);
     if (!needsReview) continue;
 

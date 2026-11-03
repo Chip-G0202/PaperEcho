@@ -55,6 +55,7 @@ export function resolveVerifiedWritebackItems(writebackSummary) {
 
 export function isWritebackEligibleItem(item) {
   return Boolean(item && item.grade && item.grade !== "D" && item.final_grade !== "D"
+    && item.semantic_stage_status !== 'failed' && item.semantic_source !== 'llm_title_review_failed'
     && item.pre_llm_skip_writeback !== true
     && (item.review_consensus_required !== true || item.manual_review_state === "manual_abc"
       || (item.rule_grade === item.llm_review_grade && ["A", "B", "C"].includes(item.rule_grade)))

@@ -1,5 +1,15 @@
 # Identity and Storage Reference
 
+## Deployment roots
+
+Packaged entries default to the stable `default` workspace only when neither an explicit data root nor workspace id is supplied. The First-run GUI reads config/preflight state and saves through existing owners; it adds no completion file or migration. GUI and Headless use the same selected roots. Config templates are read-only resources; canonical config and Secrets stay in the data root.
+
+Windows `preparePackagedStartup` first honors explicit bootstrap inputs, then a protected user-level location record, then the default. The record is read before config/log/cache owners; corrupt or unsafe evidence fails closed. First-run selection requires a blank default workspace and a separate empty target; only known GUI startup logs and empty config directories are permitted residue. It never moves or deletes old data. See `workflow/tests/startup_location.test.mjs`.
+
+Packaged code is resolved from the pinned Resource Root inside Application Root; config, Secret and all business state remain under the selected User Data Root. Module provenance tests use realpath containment, including trailing-separator and external-root/link negative cases. See the Windows unpacked runtime section in [configuration](../../../docs/configuration.md); ASAR covers Shell only and does not replace physical code write protection.
+
+`runtime_config.mjs::resolveRuntimePaths/prepareRuntimePaths` is the sole layout owner. Portable/Installed resolve canonical config, `.env`, all mutable state and child temporary paths under explicit user/cache roots; Dev keeps the v2.5 layout. No implicit migration or legacy fallback is allowed in new layouts. See [configuration](../../../docs/configuration.md) for bootstrap parameters, root precedence, legacy conflicts and rollback boundaries. Packaging and platform acceptance are separate from the path contract.
+
 ## Canonical identity
 
 - Owner: `workflow/tools/lib/literature_identity.mjs`.
@@ -16,6 +26,12 @@
 - `coverage.zotero.complete=true` permits a local miss to avoid an extra backend lookup. Missing or incomplete coverage requires exact backend fallback where the caller provides it.
 - The old `review_results/zotero_index/current_library_index.json` is read only as a migration source when the shared file is absent; it is not a second authority.
 - Writes take a shared lock, merge protected namespaces, write a same-directory temporary file, and atomically rename it.
+
+### Radar notification fingerprint compatibility
+
+`radar/state.mjs` keeps the Legacy `radarClassificationFingerprint` unchanged for queue fallback and old notification comparisons. New notification decisions use `radarNotificationFingerprint`: `v2:` plus a digest of normalized DOI (otherwise normalized title), Rule/LLM/Final grade letters and confidence. Confidence serializes the existing `llm_review.confidence` enum as its existing score (low 0.3 / medium 0.65 / high 0.9), otherwise uses a finite numeric `semantic_confidence` in [0,1], otherwise null. Reasons, timestamps, item/batch IDs and other metadata are excluded; grading itself is unchanged.
+
+Delivered/unknown digests carry their own version prefix independently. Exact Legacy matches are suppressed using their original outcome and acquire only the proven slot's V2 baseline through a conditional shared-index patch under its existing lock/atomic writer. Concurrent outcomes, other namespaces, old decision digests/timestamps and saved receipt selections are preserved; persistence failure stops selection. Unmatched Legacy records continue using the original algorithm and expose `compatibility[].status=legacy_unmatched`, so the algorithm upgrade itself creates no extra resend. This does not resolve their pre-existing reason-drift ambiguity. Failed Legacy attempts remain retryable, not proof of delivery; unsupported versions or missing accepted/unknown evidence fail closed. No bulk migration or fabricated historical classification snapshot is permitted. Regression: `workflow/tests/radar_fingerprint.test.mjs`.
 
 ## Local persistent state
 
@@ -37,6 +53,7 @@ Local snapshots remove Zotero-only `itemKey`, collections, attachments, and rati
 
 - Pure generation boundary: `generateLiteratureTitleTranslations` in `workflow/tools/lib/title_translation_generation.mjs`.
 - Shared field: `translatedTitle`.
+- Reachable Manual items are enriched in Stage1 by `manual_review_translation_step.mjs`, including held D items. Translation failure/disablement does not change eligibility. UI reads current artifacts and the shared cache without model calls; feed provenance is not publication venue.
 - Shared cache: `review_results/translation_cache.json` from `title_translation_support.mjs`.
 - Desktop, Web, and Local use the same generation/cache boundary. Local stores `translatedTitle` and stops; Stage3 writes Zotero `shortTitle` for Desktop/Web.
 - Cache writes use a lock, same-directory temporary file, and atomic rename.
@@ -47,3 +64,5 @@ Before changing a shared schema or path, identify readers, writers, legacy migra
 # Control Center feedback boundary
 
 `control_feedback_service.mjs` owns `paper_feedback.json` under the review root. It reuses `literature_identity.mjs`, excludes title-only identity, keeps revision history, and uses lock/atomic replacement. Legacy XLSX import is explicit, one-way and idempotent; uncertain identity blocks import. DOCX remains an input/export adapter. See [Control Center compatibility](../../../docs/control-center.md) for scope and Local JSONL precedence.
+
+统一 AI 服务的非敏感参数保存在现有 translation owner 的 `shared_service`，既有字段不删除。首次读取优先历史学习服务及其 Key；仅在服务匹配时复用唯一旧 Key，读取不写回，后续共享保存不被迁移覆盖。新 Key 仍由 SecretService 保存并绑定服务身份，改换服务不会自动发送旧 Key。`ai_capabilities.cjs` 同时约束 UI 与请求：思考模式、采样字段按模型及 API 版本判定；Anthropic 默认保持 `2023-06-01`，不自动升级。主动连接测试单次、8 秒、无重试；只有有效输出及正常完成原因才算模型可调用。新配置等级复审默认开启，显式关闭状态保留；已有基础配置不因环境检查失败重复进入首次向导。

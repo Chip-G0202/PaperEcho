@@ -1,0 +1,23 @@
+{
+  "source": "workflow/tools/web/static/paperecho-mark.svg",
+  "sha256": "ec8e902c5649b5a4e8a0a227f1b649f047d4ceee99ad2359b9e41062e3edff33",
+  "icoSizes": [
+    16,
+    24,
+    32,
+    48,
+    64,
+    128,
+    256
+  ],
+  "icnsSizes": [
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024
+  ],
+  "background": "transparent"
+}

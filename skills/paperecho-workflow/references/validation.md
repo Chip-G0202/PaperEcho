@@ -18,6 +18,8 @@ Do not hard-code test counts. Do not run full CI, full lint, all tests, a live Z
 
 ## Safety assertions
 
+Windows ACL/runtime changes require `workflow/tests/credential_acl_runtime.test.mjs`, credential and startup-location regressions, plus the existing packaging/ZIP/release tests. The packager validates the official self-contained PowerShell archive and includes its licenses; packaged GUI/Headless bind it before protected startup reads. Verify the final ZIP on an isolated Windows user without external `pwsh` discovery; a development-host runtime probe is not Guest evidence. Keep unavailable runtime, failed inspection and confirmed unsafe DACL failures distinct and fail closed.
+
 - SMTP and overview tests inject mocks; no network request is allowed.
 - Local tests poison Zotero readiness, backend factory, launcher, Stage2, and Stage3 boundaries.
 - Filesystem lifecycle tests use temporary directories and never point cleanup at real runtime/user roots.

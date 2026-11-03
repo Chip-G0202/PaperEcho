@@ -8,7 +8,9 @@ import test from "node:test";
 import { parseRunnerArgs } from "../tools/runner/args.mjs";
 import { EXIT_CODES } from "../tools/runner/constants.mjs";
 import { buildLauncherInvocation, runFixedModeLauncher } from "../tools/runner/launcher.mjs";
-import { main as runnerMain, redactText, runProduction } from "../tools/runner/main.mjs";
+import { main as executeRunner, redactText, runProduction } from "../tools/runner/main.mjs";
+// These tests inject the execution boundaries; filesystem logging has its own isolated suite.
+const runnerMain = (argv, dependencies = {}) => executeRunner(argv, { runtimeLog: { write: async () => ({ ok: true }) }, ...dependencies });
 import { buildExecutionPlan, runPreflight } from "../tools/runner/preflight.mjs";
 import { validateProductionResult } from "../tools/runner/result_validation.mjs";
 import * as desktopLauncher from "../../skills/paperecho-zotero-desktop/scripts/run.mjs";
@@ -151,12 +153,13 @@ test("blocked preflight never calls production entry and maps category exit code
   assert.equal(productionCalls, 0);
 });
 
-test("ready --run calls the fixed production entry once and validates once", async () => {
+test("ready --run calls the fixed production entry once and validates once", async t => {
+  const paths = await fixture(); t.after(() => fs.rm(paths.root, { recursive: true, force: true }));
   let productionCalls = 0;
   let validationCalls = 0;
   const code = await runnerMain(["--mode", "local", "--run", "--input", "x", "--output-root", "y"], {
     runPreflightImpl: async () => readyPreflight(),
-    buildExecutionPlanImpl: () => ({ entry: "fake", args: [], childEnv: {}, cwd: ".", runRoot: "runs" }),
+    buildExecutionPlanImpl: () => ({ entry: "fake", args: [], childEnv: {}, cwd: ".", runRoot: path.join(paths.root, 'runs'), runId: 'fixture-run' }),
     runProductionImpl: async () => { productionCalls += 1; return { code: 0, signal: null, stdout: "{}", stderr: "" }; },
     validateProductionResultImpl: async () => { validationCalls += 1; return { ok: true, exitCode: 0 }; },
     stdout: sink(), stderr: sink(),
@@ -164,6 +167,26 @@ test("ready --run calls the fixed production entry once and validates once", asy
   assert.equal(code, 0);
   assert.equal(productionCalls, 1);
   assert.equal(validationCalls, 1);
+});
+
+for (const schemaVersion of ['2', '3', '4']) for (const failed of [false, true]) test(`schema ${schemaVersion} Runner invokes existing ${failed ? 'failure' : 'health'} notifier only with Email enabled`, async t => {
+  const paths = await fixture(); t.after(() => fs.rm(paths.root, { recursive: true, force: true }));
+  for (const enabled of [true, false]) {
+    let calls = 0;
+    const env = { PAPERECHO_CONFIG_SCHEMA_VERSION: schemaVersion, PAPERECHO_EMAIL_ENABLED: String(enabled), PAPERECHO_FAILURE_NOTIFIER_ENABLED: 'true', PAPERECHO_HEALTH_NOTIFIER_ENABLED: 'true', PAPERFLOW_REPORT_TO: 'fixture@example.test' };
+    const code = await runnerMain(['--mode', 'local', '--run', '--input', 'x', '--output-root', 'y'], {
+      resolveRunnerConfigurationImpl: async (options) => ({ options, env }),
+      runPreflightImpl: async () => readyPreflight(),
+      buildExecutionPlanImpl: () => ({ runRoot: path.join(paths.root, 'runs'), runId: 'fixture-run' }),
+      runProductionImpl: async () => ({ code: failed ? 1 : 0, stdout: JSON.stringify({ status: failed ? 'failed' : 'completed' }), stderr: '' }),
+      notifyRunFailureImpl: async () => { assert.equal(failed, true); calls++; return { status: 'accepted' }; },
+      processHealthNotificationsImpl: async () => { assert.equal(failed, false); calls++; return { status: 'accepted' }; },
+      validateProductionResultImpl: async () => ({ exitCode: failed ? 1 : 0 }),
+      stdout: sink(), stderr: sink(),
+    });
+    assert.equal(code, failed ? 1 : 0);
+    assert.equal(calls, enabled ? 1 : 0);
+  }
 });
 
 test("preflight resolves the shared Stage0 entry for Desktop/Web and Local entry for Local", async (t) => {

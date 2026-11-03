@@ -117,7 +117,7 @@ export async function runLlmPreferenceLearning({
   generatedAt = new Date().toISOString(),
   feedbackSource = "",
 } = {}) {
-  const enabled = config.enabled !== false && config.preference_learning_enabled !== false;
+  const enabled = config.enabled !== false && config.preference_learning_enabled !== false && runtime.preferenceEnabled !== false;
   const preferenceInputs = buildPreferenceLearningInputs({
     feedbackLearning: { signals: feedbackRows, path: feedbackSource },
     config,

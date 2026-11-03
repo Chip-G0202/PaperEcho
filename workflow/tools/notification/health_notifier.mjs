@@ -7,6 +7,7 @@ import { emailTransportConfig } from "../stage5/email_sender.mjs";
 import { createNotificationReceipt, notificationReceiptPathFor } from "../stage5/email_receipt.mjs";
 import { deliverReliableNotification } from "./delivery.mjs";
 import { completeLedgerNotification } from "./ledger_bridge.mjs";
+import { emailDeliveryPolicy } from './policy.mjs';
 
 export const HEALTH_NOTIFICATION_STATE_SCHEMA_VERSION = 1;
 export const MAX_HEALTH_NOTIFICATIONS_PER_RUN = 5;
@@ -81,7 +82,7 @@ export async function processHealthNotifications({
   fsApi = fs,
   clock = () => new Date(),
 } = {}) {
-  if (String(env.PAPERECHO_CONFIG_SCHEMA_VERSION || "") !== "2" || !enabled(env.PAPERECHO_HEALTH_NOTIFIER_ENABLED)) return { status: "disabled", reason: "health_notifier_disabled", events: [] };
+  if (Number(env.PAPERECHO_CONFIG_SCHEMA_VERSION || 0) < 2 || !enabled(env.PAPERECHO_HEALTH_NOTIFIER_ENABLED) || !emailDeliveryPolicy('health', { env }).required) return { status: "disabled", reason: "health_notifier_disabled", events: [] };
   const healthRoot = path.resolve(env.PAPERECHO_NOTIFICATION_HEALTH_ROOT || path.join(path.dirname(path.resolve(runRoot)), "notification_health"));
   const receiptRoot = path.resolve(env.PAPERECHO_NOTIFICATION_RECEIPT_ROOT || path.join(path.dirname(path.resolve(runRoot)), "notification_receipts"));
   const threshold = Math.max(2, Number(env.PAPERECHO_HEALTH_DEGRADATION_THRESHOLD || 2) || 2);

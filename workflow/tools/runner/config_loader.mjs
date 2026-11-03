@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 
 import { MODES, PROFILES, RUNNER_SCHEMA_VERSION, SUPPORTED_RUNNER_CONFIG_SCHEMAS } from "./constants.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
+import { DOMAIN_SECTIONS, validateApplicationSections, normalizeNotificationPreferences } from '../lib/application_config.mjs';
+import { copyEnvironment, mapCredentialReference } from '../lib/credential_registry.mjs';
+import { resolveRuntimePaths, prepareRuntimePaths, assertRuntimeDataPath } from '../lib/runtime_config.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const DEFAULT_CONFIG_PATH = path.join(REPO_ROOT, "config", "paperecho.config.json");
@@ -20,6 +23,11 @@ const SECTION_KEYS = Object.freeze({
   local: new Set(["enabled", "input", "outputRoot", "feedback"]),
   sourceState: new Set(["root"]),
   notifications: new Set(["failure", "health", "receiptStore"]),
+  channels: new Set(['qq', 'wechat', 'feishu', 'wecom']),
+  qq: new Set(['enabled', 'appId', 'targetType', 'targetId']),
+  wechat: new Set(['enabled', 'uid']),
+  feishu: new Set(['enabled']),
+  wecom: new Set(['enabled']),
   failure: new Set(["enabled"]),
   health: new Set(["enabled", "consecutiveThreshold"]),
   receiptStore: new Set(["root", "retryFailed", "unknownPolicy"]),
@@ -52,7 +60,7 @@ function has(object, key) {
 function validateKeys(value, section, schemaVersion = 1) {
   if (value == null) return {};
   if (!isObject(value)) fail("CONFIG_SECTION_INVALID", `${section} must be an object`, { section });
-  const allowed = section === "common" && schemaVersion === 2 ? new Set([...SECTION_KEYS.common, ...V2_COMMON_KEYS]) : SECTION_KEYS[section];
+  const allowed = section === "common" && schemaVersion >= 2 ? new Set([...SECTION_KEYS.common, ...V2_COMMON_KEYS]) : section === "notifications" && schemaVersion >= 4 ? new Set([...SECTION_KEYS.notifications, "radar", "weekly", ...(schemaVersion >= 5 ? ['channels'] : [])]) : SECTION_KEYS[section];
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) fail("CONFIG_FIELD_UNKNOWN", `${section}.${key} is not supported`, { section, field: key });
   }
@@ -117,10 +125,30 @@ function validateCommon(common, schemaVersion = 1) {
   let failure = {};
   let health = {};
   let receiptStore = {};
-  if (schemaVersion === 2) {
+  if (schemaVersion >= 2) {
     sourceState = validateKeys(value.sourceState, "sourceState");
     optionalString(sourceState.root, "common.sourceState.root");
-    notifications = validateKeys(value.notifications, "notifications");
+    notifications = validateKeys(value.notifications, "notifications", schemaVersion);
+    if (schemaVersion >= 5) {
+      const channels = validateKeys(notifications.channels, 'channels');
+      for (const channel of ['wechat', 'feishu', 'wecom']) {
+        if (channels[channel] === undefined) continue;
+        if (schemaVersion < 6) fail('CONFIG_FIELD_UNKNOWN', 'additional channels require schema 6', { field: channel });
+        const value = validateKeys(channels[channel], channel);
+        optionalBoolean(value.enabled, `${channel}.enabled`);
+        if (channel === 'wechat' && value.uid !== undefined && (typeof value.uid !== 'string' || !/^UID_[A-Za-z0-9]{1,128}$/.test(value.uid))) fail('CONFIG_VALUE_INVALID', 'invalid recipient identifier', { field: 'wechat.uid' });
+      }
+      const qq = validateKeys(channels.qq, 'qq');
+      optionalBoolean(qq.enabled, 'common.notifications.channels.qq.enabled');
+      for (const field of ['appId', 'targetId', 'targetType']) optionalString(qq[field], `common.notifications.channels.qq.${field}`);
+      if (qq.targetType != null && !['user', 'group'].includes(qq.targetType)) fail('CONFIG_VALUE_INVALID', 'QQ targetType must be user or group', { field: 'targetType' });
+    }
+    if (schemaVersion >= 4) for (const event of ["radar", "weekly"]) {
+      const preference = notifications[event];
+      if (preference != null && (!isObject(preference) || Object.keys(preference).some((key) => key !== "enabled" && !(schemaVersion >= 6 && key === 'channels')))) fail("CONFIG_FIELD_UNKNOWN", "unsupported notification preference", { field: event });
+      optionalBoolean(preference?.enabled, `common.notifications.${event}.enabled`);
+      if (preference?.channels !== undefined && (!Array.isArray(preference.channels) || preference.channels.some(id => !['email', 'qq', 'wechat', 'feishu', 'wecom'].includes(id)) || new Set(preference.channels).size !== preference.channels.length)) fail('CONFIG_VALUE_INVALID', 'invalid event notification channels', { field: event });
+    }
     failure = validateKeys(notifications.failure, "failure");
     optionalBoolean(failure.enabled, "common.notifications.failure.enabled");
     health = validateKeys(notifications.health, "health");
@@ -192,6 +220,7 @@ function mapSecretReference({ target, sourceEnv, canonicalName, envName, secretS
   const value = String(sourceEnv[sourceName] || "");
   if (value) target[canonicalName] = value;
   else delete target[canonicalName];
+  mapCredentialReference(target, sourceEnv, canonicalName, sourceName);
   secretStatus[canonicalName] = { env: sourceName, configured: Boolean(value) };
 }
 
@@ -204,22 +233,27 @@ async function loadConfigFile({ requestedPath, source, fsApi, cwd }) {
   }
   let config;
   try { config = JSON.parse(raw); }
-  catch (error) { fail("CONFIG_JSON_INVALID", `PaperEcho config JSON is invalid: ${error.message}`, { path: safeConfigPath(requestedPath, cwd) }); }
+  catch { fail("CONFIG_JSON_INVALID", "PaperEcho config JSON is invalid", { path: safeConfigPath(requestedPath, cwd) }); }
   validateRunnerConfigObject(config);
   return { config, configPath: requestedPath, source };
 }
 
 export function validateRunnerConfigObject(config) {
   if (!isObject(config)) fail("CONFIG_ROOT_INVALID", "PaperEcho config root must be an object");
-  if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1 or 2", { schemaVersion: config.schemaVersion ?? null });
+  if (!SUPPORTED_RUNNER_CONFIG_SCHEMAS.has(config.schemaVersion)) fail("CONFIG_SCHEMA_UNSUPPORTED", "PaperEcho config schemaVersion must be 1, 2, 3, 4, 5 or 6", { schemaVersion: config.schemaVersion ?? null });
   for (const key of Object.keys(config)) {
-    if (!new Set(["schemaVersion", "mode", "profile", "common", "desktop", "web", "local"]).has(key)) fail("CONFIG_FIELD_UNKNOWN", `top-level field ${key} is not supported`, { field: key });
+    if (!new Set(["schemaVersion", "mode", "profile", "common", "desktop", "web", "local", ...(config.schemaVersion >= 6 ? ['scheduler'] : []), ...(config.schemaVersion >= 3 ? [...Object.values(DOMAIN_SECTIONS), 'weekly', 'migration'] : [])]).has(key)) fail("CONFIG_FIELD_UNKNOWN", `top-level field ${key} is not supported`, { field: key });
   }
   optionalString(config.mode, "mode");
   if (config.mode != null && !MODES.has(config.mode)) fail("CONFIG_MODE_INVALID", `mode must be desktop, web, local, or null`, { mode: config.mode });
   optionalString(config.profile, "profile");
   if (config.profile != null && !PROFILES.has(config.profile)) fail("CONFIG_PROFILE_INVALID", "profile must be standard, complete, or radar", { profile: config.profile });
   validateEnabledSections(config);
+  if (config.schemaVersion >= 3) {
+    validateApplicationSections(config);
+    validateCommon(config.common, config.schemaVersion);
+    for (const mode of MODES) validatePathSection(mode, config[mode]);
+  }
   return config;
 }
 
@@ -233,11 +267,12 @@ function selectConfigMode(config) {
 }
 
 export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) {
-  const cwd = dependencies.cwd || process.cwd();
   const env = dependencies.env || process.env;
+  const paths = resolveRuntimePaths({ applicationRoot: dependencies.cwd || REPO_ROOT, env });
+  const cwd = paths.layout === 'dev' ? dependencies.cwd || process.cwd() : paths.userDataRoot;
   const fsApi = dependencies.fsApi || fs;
   const existsSync = dependencies.existsSync || fsSync.existsSync;
-  const defaultConfigPath = dependencies.defaultConfigPath || DEFAULT_CONFIG_PATH;
+  const defaultConfigPath = dependencies.defaultConfigPath || (paths.layout === 'dev' ? DEFAULT_CONFIG_PATH : paths.configPath);
   const explicitConfigPath = String(cliOptions.configPath || "").trim();
   const envConfigPath = String(env.PAPERECHO_CONFIG || "").trim();
   let requestedPath = "";
@@ -253,8 +288,10 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
     configSource = "default_file";
   }
 
+  if (requestedPath) assertRuntimeDataPath(paths, requestedPath);
+  prepareRuntimePaths(paths, { readOnly: dependencies.readOnly === true });
   const loaded = await loadConfigFile({ requestedPath, source: configSource, fsApi, cwd });
-  const config = loaded.config;
+  const config = normalizeNotificationPreferences(loaded.config);
   const configSelection = selectConfigMode(config);
   const warnings = [];
   if (cliOptions.fixedMode && configSelection.mode && configSelection.mode !== cliOptions.mode) {
@@ -270,15 +307,39 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   const common = validateCommon(config?.common, configSchemaVersion || 1);
   const pathSection = validatePathSection(mode, config?.[mode]);
   const configDir = loaded.configPath ? path.dirname(loaded.configPath) : cwd;
-  const effectiveEnv = { ...env };
+  const effectiveEnv = copyEnvironment(env);
+  if (paths.layout !== 'dev') {
+    effectiveEnv.PAPERECHO_APPLICATION_ROOT = paths.applicationRoot;
+    effectiveEnv.PAPERECHO_RESOURCE_ROOT = paths.resourceRoot;
+    effectiveEnv.PAPERECHO_DATA_ROOT = paths.userDataRoot;
+    effectiveEnv.ZOTERO_PROJECT_ROOT = path.resolve(paths.userDataRoot, env.ZOTERO_PROJECT_ROOT || '.');
+    if (env.review_results_OUTPUT_ROOT) effectiveEnv.review_results_OUTPUT_ROOT = path.resolve(paths.userDataRoot, env.review_results_OUTPUT_ROOT);
+    if (env.review_results_ROOT) effectiveEnv.review_results_ROOT = path.resolve(effectiveEnv.review_results_OUTPUT_ROOT || paths.userDataRoot, env.review_results_ROOT);
+    effectiveEnv.PAPERECHO_APPLICATION_CONFIG = loaded.configPath || paths.configPath;
+    effectiveEnv.TEMP = paths.tempRoot; effectiveEnv.TMP = paths.tempRoot; effectiveEnv.TMPDIR = paths.tempRoot;
+  }
+  if (configSchemaVersion >= 3) {
+    effectiveEnv.PAPERECHO_APPLICATION_CONFIG = loaded.configPath;
+    effectiveEnv.PAPERECHO_SCHEDULE_TIME = config.scheduler?.time || '15:00';
+    effectiveEnv.review_results_RUN_INTERVAL_DAYS = String(config.weekly?.intervalDays || 7);
+  }
+  setEnvValue(effectiveEnv, "PAPERECHO_WEEKLY_ENABLED", config?.profile !== 'radar' && config?.weekly?.enabled !== false);
+  if (cliOptions.preferenceConfig) effectiveEnv.PAPERECHO_INVOCATION_PREFERENCE_CONFIG = cliOptions.preferenceConfig;
+  if (cliOptions.translationConfig) effectiveEnv.PAPERECHO_INVOCATION_TRANSLATION_CONFIG = cliOptions.translationConfig;
   const secretStatus = {};
   effectiveEnv.PAPERECHO_CONFIG_SCHEMA_VERSION = String(configSchemaVersion);
+  setEnvValue(effectiveEnv, "PAPERECHO_EMAIL_ENABLED", common.email.enabled !== false);
+  setEnvValue(effectiveEnv, "PAPERECHO_NOTIFY_RADAR", common.notifications.radar?.enabled !== false);
+  setEnvValue(effectiveEnv, "PAPERECHO_NOTIFY_WEEKLY", common.notifications.weekly?.enabled !== false);
+  for (const event of ['radar', 'weekly']) delete effectiveEnv[`PAPERECHO_NOTIFY_${event.toUpperCase()}_CHANNELS`];
+  effectiveEnv.PAPERECHO_QQ_CHANNEL = JSON.stringify(config?.schemaVersion >= 5 ? common.notifications.channels?.qq || { enabled: false } : { enabled: false });
+  for (const channel of ['wechat', 'feishu', 'wecom']) effectiveEnv[`PAPERECHO_${channel.toUpperCase()}_CHANNEL`] = JSON.stringify(configSchemaVersion >= 6 ? common.notifications.channels?.[channel] || { enabled: false } : { enabled: false });
   for (const name of ["PAPERECHO_FAILURE_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_NOTIFIER_ENABLED", "PAPERECHO_HEALTH_DEGRADATION_THRESHOLD", "PAPERECHO_NOTIFICATION_RECEIPT_ROOT", "PAPERECHO_NOTIFICATION_HEALTH_ROOT", "PAPERECHO_NOTIFICATION_RETRY_FAILED", "PAPERECHO_NOTIFICATION_UNKNOWN_POLICY", "PAPERECHO_SOURCE_STATE_ROOT", "PAPERECHO_INTEGRITY_ENABLED", "PAPERECHO_INTEGRITY_BOOTSTRAP_BATCH_SIZE", "PAPERECHO_INTEGRITY_CROSSREF_CONCURRENCY", "PAPERECHO_INTEGRITY_PUBMED_BATCH_SIZE", "PAPERECHO_INTEGRITY_CACHE_TTL_DAYS"]) delete effectiveEnv[name];
 
   if (has(common.value, "projectRoot") && common.value.projectRoot) effectiveEnv.ZOTERO_PROJECT_ROOT = resolveRelative(common.value.projectRoot, configDir);
   if (has(common.cleanup, "enabled")) setEnvValue(effectiveEnv, "PAPERFLOW_CLEANUP_ENABLED", common.cleanup.enabled);
   if (has(common.cleanup, "retentionDays")) setEnvValue(effectiveEnv, "PAPERFLOW_RETENTION_DAYS", common.cleanup.retentionDays);
-  if (configSchemaVersion === 2) {
+  if (configSchemaVersion >= 2) {
     setEnvValue(effectiveEnv, "PAPERECHO_FAILURE_NOTIFIER_ENABLED", common.failure.enabled === true);
     setEnvValue(effectiveEnv, "PAPERECHO_HEALTH_NOTIFIER_ENABLED", common.health.enabled === true);
     setEnvValue(effectiveEnv, "PAPERECHO_HEALTH_DEGRADATION_THRESHOLD", common.health.consecutiveThreshold ?? 2);
@@ -328,7 +389,7 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
 
   const provided = cliOptions.provided || {};
   const profile = provided.profile ? cliOptions.profile : (config?.profile || cliOptions.profile || "standard");
-  if (profile === "radar" && configSchemaVersion !== 2) fail("CONFIG_RADAR_REQUIRES_SCHEMA_V2", "Radar profile requires schemaVersion 2", { profile });
+  if (profile === "radar" && configSchemaVersion < 2) fail("CONFIG_RADAR_REQUIRES_SCHEMA_V2", "Radar profile requires schemaVersion 2 or later", { profile });
   if (profile === "radar" && common.value.radar?.enabled !== true) fail("CONFIG_RADAR_NOT_ENABLED", "Radar profile requires common.radar.enabled=true", { profile });
   const configRequireLlm = common.llm.requireRealModel === true;
   const requireLlm = Boolean(cliOptions.requireLlm || configRequireLlm);
@@ -351,8 +412,13 @@ export async function resolveRunnerConfiguration(cliOptions, dependencies = {}) 
   }
 
   const input = provided.input ? cliOptions.input : resolveRelative(pathSection.input, configDir);
-  const outputRoot = provided.outputRoot ? cliOptions.outputRoot : resolveRelative(pathSection.outputRoot, configDir);
+  const outputRoot = provided.outputRoot ? cliOptions.outputRoot : resolveRelative(pathSection.outputRoot, configDir) || (paths.layout !== 'dev' && mode === 'local' ? path.join(paths.userDataRoot, 'review_results', 'local') : '');
   const feedback = provided.feedback ? cliOptions.feedback : resolveRelative(pathSection.feedback, configDir);
+  if (paths.layout !== 'dev') {
+    for (const value of [effectiveEnv.ZOTERO_PROJECT_ROOT, effectiveEnv.review_results_OUTPUT_ROOT, effectiveEnv.review_results_ROOT, effectiveEnv.PAPERECHO_APPLICATION_CONFIG, effectiveEnv.PAPERECHO_SOURCE_STATE_ROOT, effectiveEnv.PAPERECHO_NOTIFICATION_RECEIPT_ROOT, effectiveEnv.PAPERECHO_NOTIFICATION_HEALTH_ROOT, outputRoot]) {
+      if (value) assertRuntimeDataPath(paths, path.resolve(value));
+    }
+  }
   const configPathDisplay = safeConfigPath(loaded.configPath, cwd);
   const options = {
     ...cliOptions,

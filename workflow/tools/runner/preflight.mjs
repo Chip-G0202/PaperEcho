@@ -8,9 +8,13 @@ import { randomUUID } from "node:crypto";
 import { emailTransportConfig } from "../stage5/email_sender.mjs";
 import { resolveStage5Request } from "../stage5/main.mjs";
 import { resolveLlmRuntime } from "../lib/llm_json_support.mjs";
-import { buildRuntimeConfig } from "../lib/runtime_config.mjs";
+import { buildRuntimeConfig, resolveRuntimePaths } from "../lib/runtime_config.mjs";
+import { readBoundedJson } from '../lib/atomic_json.mjs';
+import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
+import { inspectStartupRecovery } from '../recovery/run_recovery.mjs';
 import { RUNNER_SCHEMA_VERSION } from "./constants.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
+import { copyEnvironment } from '../lib/credential_registry.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const ENTRY_BY_MODE = Object.freeze({
@@ -112,7 +116,8 @@ export function buildExecutionPlan(options, { env = process.env, repoRoot = REPO
   if (!options.resume && options.email) args.push("--email", options.email);
   if (!options.resume && options.forceResend) args.push("--force-resend");
   if (options.resume) args.push("--resume", options.resume);
-  const childEnv = { ...env };
+  const childEnv = copyEnvironment(env);
+  if (options.resume && options.email) childEnv.PAPERFLOW_REPORT_TO = options.email;
   if (options.mode === "desktop") {
     childEnv.ZOTERO_BACKEND = "cli";
     for (const name of ["ZOTERO_API_KEY", "ZOTERO_USER_ID", "ZOTERO_GROUP_ID", "ZOTERO_LIBRARY_TYPE", "ZOTERO_API_BASE"]) delete childEnv[name];
@@ -139,7 +144,7 @@ export function buildExecutionPlan(options, { env = process.env, repoRoot = REPO
   childEnv.PAPERECHO_RUN_ID = runId;
   const runtime = options.mode === "local" ? null : buildRuntimeConfig({ cwd: repoRoot, env, argv: [process.execPath, entry, ...args] });
   const runRoot = options.mode === "local" ? path.join(options.outputRoot, "runs") : path.join(runtime.reviewRoot, "runs");
-  return { entry, args, childEnv, cwd: repoRoot, runRoot, runId, emailRequested: Boolean(resolveStage5Request(options.email ? ["--email", options.email] : [], env).recipient) };
+  return { entry, args, childEnv, cwd: repoRoot, runRoot, runId, emailRequested: Boolean(resolveStage5Request(options.email ? ["--email", options.email] : [], env, options.profile === "radar" ? "radar" : "weekly").recipient) };
 }
 
 export async function runPreflight(options, dependencies = {}) {
@@ -155,6 +160,16 @@ export async function runPreflight(options, dependencies = {}) {
   const optionalMissing = [];
   const readiness = [];
   const warnings = [...(options.configWarnings || [])];
+  try {
+    const paths = resolveRuntimePaths({ applicationRoot: repoRoot, env });
+    if (inspectRestoreTransaction(paths.userDataRoot).blocking) requiredMissing.push(missing('restore transaction', '恢复事务尚未完成或无法确认', '运行只读恢复状态检查，再显式恢复事务；不会自动重放 workflow', 'recovery'));
+    const receipt = path.join(paths.userDataRoot, '.paperecho-restore.json');
+    const present = await fsp.lstat(receipt).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
+    if (present) {
+      await readBoundedJson(paths.userDataRoot, receipt, { maxBytes: 8192 });
+      requiredMissing.push(missing('restored history review', '恢复的历史状态不能自动重新激活', '保留历史数据；完成独立的恢复状态审阅后再启用 workflow', 'recovery'));
+    }
+  } catch { requiredMissing.push(missing('restore status inspection', '无法确认恢复状态安全', '检查恢复凭据和数据根权限；不会自动清理或重放', 'recovery')); }
   const entry = path.resolve(entries[options.mode]);
   const radarProfile = options.profile === "radar";
 
@@ -239,7 +254,7 @@ export async function runPreflight(options, dependencies = {}) {
     }
   }
 
-  const stage5Request = resolveStage5Request(options.email ? ["--email", options.email] : [], env);
+  const stage5Request = resolveStage5Request(options.email ? ["--email", options.email] : [], env, options.profile === "radar" ? "radar" : "weekly");
   const emailRequested = Boolean(stage5Request.recipient) && !options.resume;
   if (emailRequested) {
     const smtp = emailTransportConfig(env);
@@ -247,7 +262,10 @@ export async function runPreflight(options, dependencies = {}) {
       readiness.push({ name: "smtp", status: "ready" });
     } else {
       const names = smtp.missing.length ? smtp.missing : ["SMTP configuration"];
-      for (const name of names) requiredMissing.push({ ...missing(name, "发送明确请求的 Stage5 邮件", "在 common.email.smtp 或本地环境中配置", "configuration"), section: "common" });
+      for (const name of names) {
+        if (Number(env.PAPERECHO_CONFIG_SCHEMA_VERSION) >= 5) featureMissing.push(optional(name, '邮箱通知；业务与其他渠道继续运行', '在 common.email.smtp 或 SecretService 中配置'));
+        else requiredMissing.push({ ...missing(name, "发送明确请求的 Stage5 邮件", "在 common.email.smtp 或本地环境中配置", "configuration"), section: "common" });
+      }
     }
   } else optionalMissing.push(optional("Stage5 recipient", "启用邮件通知", "使用 --email、PAPERFLOW_REPORT_TO 或 NOTIFICATION_EMAIL"));
 
@@ -259,6 +277,11 @@ export async function runPreflight(options, dependencies = {}) {
   }
 
   if (options.profile === "complete" && !options.requireLlm && !options.resume) warnings.push("complete 仅强制用户明确请求的功能；未隐式要求真实 LLM");
+  const runtime = buildRuntimeConfig({ cwd: repoRoot, env });
+  const startupRecovery = await inspectStartupRecovery({ runRoot: buildExecutionPlan(options, { env, repoRoot, entries }).runRoot,
+    researchRoot: options.mode === 'local' ? undefined : runtime.researchRoot, resumeRunId: options.resume, automatic: Boolean(options.scheduledDaily),
+    dataRoots: [runtime.projectRoot, runtime.reviewRoot, options.outputRoot].filter(Boolean) });
+  if (startupRecovery.blocking && !startupRecovery.canResume) requiredMissing.push(missing('startup recovery', '先前运行的安全终态尚未确认', '查看 System Health 和本次运行登记；不会自动清锁或重放外部操作', 'recovery'));
   const canRun = requiredMissing.length === 0;
   const retry = retryCommand(options);
   const requiredWithRetry = requiredMissing.map((item) => ({ ...item, retryCommand: retry }));
@@ -279,6 +302,7 @@ export async function runPreflight(options, dependencies = {}) {
       return value;
     }),
     canRun,
+    startupRecovery,
     warnings,
     retryCommand: retry,
     configuration: options.configSummary || { schemaVersion: null, path: null, source: "none", modeSource: options.fixedMode ? "fixed_launcher" : "cli", selectedMode: options.mode, profile: options.profile, sectionsChecked: ["common", options.mode], secretStatus: {} },

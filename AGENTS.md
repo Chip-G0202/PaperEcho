@@ -70,11 +70,11 @@ Cadence defaults:
 
 ## Git Version Control Rules
 
-- **Commit 习惯**：完成有意义的变更后，主动建议用户 commit。
-- **Commit 前检查**：先运行 `git status --short` 确认变更范围。
+- **Commit 习惯**：每完成一个独立任务或功能，且必要验证通过后，自动创建一个聚焦本次改动的 commit。
+- **Commit 前检查**：先运行 `git status --short` 确认变更范围，只提交本次任务的改动。
 - **Commit message 规范**：简洁说明改了什么，例如："新增跨平台支持"、"修复标题规范化"。
-- **不要自动 commit**：除非用户明确要求，否则不要自动执行 `git commit`。
-- **大变更分批 commit**：如果改动涉及多个独立功能，建议分多次 commit。
+- **失败时不 commit**：任务失败、阻塞或关键验证未通过、无法运行时，不执行 `git commit`。
+- **大变更分批 commit**：涉及多个独立功能时，每完成一个并通过必要验证，就分别 commit。
 - **Commit 后确认**：执行 commit 后，运行 `git log --oneline -1` 确认成功。
 
 ## Reproducibility Baseline
@@ -89,17 +89,21 @@ Cadence defaults:
 
 - PowerShell gate requires `pwsh >= 7.0.0` (exact pinning like `7.6.1` is not allowed unless explicitly required by a future task).
 - Never use Windows PowerShell 5.1.
+- All controlled Windows Host/Guest/remote scripts and subprocesses must explicitly use `pwsh.exe -NoLogo -NoProfile` (add `-NonInteractive` only for non-interactive work), not `.ps1` file associations. Verify PSVersion Major >= 7 and PSEdition Core in each actual execution environment.
+- Do not use `-UseWindowsPowerShell`, `WinPSCompatSession`, or implicit 5.1 fallback. Stop and report missing PS7 or native incompatibility; do not change global ExecutionPolicy, system PATH, default Shell registration, Windows security policy or built-in PowerShell to work around it.
 - Never directly edit `<YOUR_ZOTERO_DATA_DIR>\zotero.sqlite`.
 - PubMed/PMC only for database retrieval.
 - Do not use Google Scholar/CNKI/IEEE/ACM in this workflow.
 - Do not fabricate references, page numbers, doses, stats, or experimental outcomes.
 - PDF acquisition is out of automation scope. Users handle PDFs manually in Zotero.
-- Title translation secrets must come only from `TITLE_TRANSLATION_API_KEY` in the environment, a local `.env`, or injected automation secret storage.
+- Translation and preference can share `PAPERECHO_MODEL_API_KEY` through the existing environment / local `.env` / injected secret storage. Shared use requires compatible service endpoints; never send a shared key to a different provider.
+- Preserve legacy keys byte-for-byte. Normal AI calls prefer a saved shared key, then the historical learning key; use the sole legacy translation key only for its original compatible service. Legacy resolution is read-only and idempotent.
+- Common AI parameters live in the translation owner `shared_service`; keep legacy fields intact, prefer learning service parameters before the first shared save, and never overwrite a later shared save during startup. SecretService owns keys and service binding. Model/API-version capabilities are shared by renderer and request adapter; do not infer optional reasoning support from an arbitrary compatible model name. Invocation overrides remain explicit.
 - Non-secret title translation parameters live in `config/title_translation.config.json`.
 - The default translation model lives in `config/title_translation.config.json`, and `TITLE_TRANSLATION_MODEL` can override it.
 - The title translation prompt lives in `config/prompt-title-translation.md` and uses `${sourceText}` substitution.
 - Default translation rate limits are RPM `100` and TPM `10,000,000`.
-- Title translation non-stream request bodies currently use `max_tokens`; if a real provider/model/key is not configured in the active environment, verification must stay mock/local, and end-to-end success must not be claimed.
+- The shared model adapter owns protocol-specific token limits and normal completion checks; if a real provider/model/key is not configured in the active environment, verification must stay mock/local, and end-to-end success must not be claimed.
 - Never write title translation secrets into config files, prompts, memory, reports, stdout, or stderr.
 
 ## Directory Model
@@ -558,7 +562,7 @@ node workflow/tools/stage0/check_zotero_backend_ready.mjs
 ## 模块归属与 CLI Wrapper 约定
 
 - **Local Control Center**：`workflow/tools/web/server.mjs` 只承接 loopback HTTP/static；业务走 `workflow/tools/lib/control_application_services.mjs` 组合的 services。禁止 Web handler 直接写 Zotero、规则正文或任意 config JSON。
-- **统一反馈与配置入口**：`control_feedback_service.mjs` 持有 canonical paper feedback history/current；`control_config_service.mjs` 持有固定字段 registry，保留原配置文件 owner。Legacy XLSX 单向 import、DOCX evaluation/decision adapter 继续支持，不做双向同步。
+- **统一反馈与配置入口**：`control_feedback_service.mjs` 持有 canonical paper feedback history/current；`control_config_service.mjs` 持有固定字段 registry。schema v3 通过 `application_config.mjs` 读取 canonical application config，迁移后不再写回 legacy 领域文件。Legacy XLSX 单向 import、DOCX evaluation/decision adapter 继续支持，不做双向同步。
 - **人工建议与安全**：pending schema/dedup 仍归 `unified_pending_rule_suggestions.mjs`；DOCX/Web formal apply 均经 `control_rule_suggestion_service.mjs`。未验证的 target/change type 必须保持 pending，不能报告成功应用。Credentials 不回显；没有安全写入 owner 时只返回 configured 状态。
 - **验证与状态保护**：定向执行 `node --test workflow/tests/control_services.test.mjs workflow/tests/control_http.test.mjs`。新增 state `paper_feedback.json` 与 `research_evaluations/` 属于长期用户反馈，不能作为普通 run artifact 清理；验证只使用工作区 fixtures。
 
@@ -614,6 +618,7 @@ Detailed inputs, outputs, gates, and tests belong in `skills/paperecho-workflow/
 - Incomplete/missing Zotero coverage uses backend exact-lookup fallback; complete coverage may avoid a redundant lookup.
 - Local is not a Zotero backend: it must not construct one, start Desktop, call Stage2/Stage3, or persist item/collection/attachment/rating fields.
 - All paths use `generateLiteratureTitleTranslations`, `translatedTitle`, and `review_results/translation_cache.json`. Stage3 alone owns Zotero metadata writeback.
+- Reachable Manual items (including held D) receive shared title enrichment in Stage1; translation failure/disablement never changes review eligibility. Feedback and Manual share `review_display_metadata.mjs`; feed provenance is not publication venue, and Control Center reads never call translation providers.
 - Stage5 is SMTP-only, must not import Zotero modules, and must not scan history to guess attachments.
 - Each business run has run-scoped Stage5 state and a schema v1 `run_group.json`; housekeeping scan state stays under the runtime housekeeping directory, and long-lived state is never deleted by age.
 - Housekeeping deletes only registered, allowed run artifacts. Ephemeral cleanup deletes only explicitly registered closed/consumed files, never lookalikes discovered by glob.
@@ -642,17 +647,33 @@ Desktop/Web run groups live at `review_results/文献评价/runs/<runId>/run_gro
 
 ### Configuration Contract
 
-- Unified Runner configuration accepts schema v1/v2 JSON. Schema v1 preserves legacy behavior; schema v2 adds the v2.1 reliability settings while new notifications remain disabled by default and Radar/integrity remain inactive. The committed template is `config/paperecho.config.example.json`; the machine-local `config/paperecho.config.json` is precisely gitignored. `--config` overrides `PAPERECHO_CONFIG`, then the optional default local file is loaded when present.
-- Configuration is partitioned into `common`, `desktop`, `web`, and `local`. The resolver lives only in `workflow/tools/runner/config_loader.mjs`; do not add path-specific loaders or duplicate the existing Stage1/search/rule/translation domain JSON owners.
-- Resolution order is CLI -> unified config -> environment/`.env` -> existing domain files/defaults. Mode order is CLI `--mode` -> config `mode` -> exactly one `enabled=true`; never infer mode from backend or secret residue. Fixed path launchers fail closed on a configured different mode.
+- Doctor is a read-only summary owned by `control_doctor_service.mjs`, shared by authenticated System Health and Runner `--doctor`. Reuse existing owners; never prepare directories/write probes, repair ACLs, release leases, replay operations or resubmit feedback. Missing evidence/inspection limits are UNKNOWN, not PASS; keep notification failure separate from business success and expose no owner content or private exception text. Commands, limits and exit codes: `docs/configuration.md`; regression: `workflow/tests/control_doctor.test.mjs`.
+
+- The real browser workbench entry `desktop/browser-workbench/start.mjs` reuses startup-location resolution, Installed/default roots, Control Center services and existing authenticated loopback HTTP APIs. It must remain separate from the isolated memory-only `preview:ui`; never introduce a browser-owned business database.
+
+- GUI first-run status derives from saved ConfigService state and existing local preflight; no completion flag or secondary store. All edits use Settings/SecretService owners. Packaged GUI/Headless share the stable default workspace when no explicit data root/id is supplied; unfinished configuration never blocks Headless with a window. Preserve prior config on failure and never probe real providers in setup. See `docs/configuration.md` and `workflow/tests/control_setup.test.mjs`.
+
+- Windows packaged bootstrap pins Application/Resource roots and reuses the sole runtime path owner; physical workflow/dependencies live once in `resources/core`. The independent Headless entry requires the verified RunAsNode fuse and delegates to Shared Runner. Packaged tests must reject external realpaths, including Dev/Production fixtures, without relying on raw string prefixes. Build commands, fuse tradeoffs and platform gates are in `docs/configuration.md`.
+
+- Deployment layout roots are owned only by `runtime_config.mjs::resolveRuntimePaths/prepareRuntimePaths`. `PAPERECHO_LAYOUT=dev|portable|installed` is separate from backend mode; canonical config and Secret bootstrap share the selected data root in new layouts. Never infer roots from cwd, auto-copy legacy data or fall back into a read-only program tree. Preserve Dev compatibility and all Secret ACL/atomic/lock checks. Root priority, legacy conflict handling and Portable/Installed tests are documented in `docs/configuration.md`; packaged runtime and macOS acceptance remain separate gates.
+- Windows packaged GUI/Headless share `preparePackagedStartup` before owner initialization; `startup_location.mjs` reads the protected user-level location record only without explicit bootstrap overrides. Never hot-switch bound owners or treat unfinished Wizard as proof of empty data; see `docs/configuration.md` and `workflow/tests/startup_location.test.mjs`.
+- That bootstrap binds the bundled PowerShell Core before protected record reads. Keep official archive checksum/license checks in the existing packager and preserve distinct fail-closed runtime-unavailable, check-failed and unsafe-ACL errors; never repair these by relaxing permissions or using PS5.1.
+
+- Unified Runner configuration accepts schema v1/v2/v3 JSON. The machine-local `config/paperecho.config.json` is the v3 canonical non-secret owner and remains gitignored; the committed template remains v2. `--config` overrides `PAPERECHO_CONFIG`, then the optional default local file is loaded when present. Migration and field ownership are documented in [Config map](config/README.md).
+- `common`, `desktop`, `web`, and `local` retain their existing fields. `workflow/tools/lib/application_config.mjs` resolves capability sections for domain consumers and Settings; `workflow/tools/runner/config_loader.mjs` owns invocation/path resolution. `application_config_migration.mjs` is the centralized v1/v2 migration owner; do not add consumer migrations or dual-write legacy JSON. Secrets, user state and Research Rules Markdown remain separate.
+- v3 ordinary non-secret precedence is explicit invocation override -> canonical -> legacy compatibility/defaults; migrated model environment values cannot override Settings. `--preference-config` and `--translation-config` are invocation-only overrides. Unmigrated v1/v2 retains its prior precedence. Mode order remains CLI `--mode` -> config `mode` -> exactly one `enabled=true`; never infer mode from backend or secret residue. Fixed path launchers fail closed on a configured different mode.
 - Preflight checks and reports only `common` plus the selected path. Local never requires or probes Zotero; Web never starts Desktop; Desktop never requires Web credentials. On “继续”, the same launcher reloads the config and reruns preflight.
 - Unified JSON stores secret environment-variable names only. Secret values remain in environment/`.env`/secret storage and output records presence only. The complete user contract is [PaperEcho Configuration](docs/configuration.md).
+- Research-direction feedback submission only persists events in `research_evaluations`; `research_evaluation_service.mjs` owns freezing, hidden run-scoped preparation and idempotent publication through the existing unified suggestion log. Stage0 admission/claim precedes preparation; verified Radar business or Weekly Stage4 precedes publication, independently of notifications. Unaccepted suggestions never change formal rules. Resume reuses prepared results; unknown in-flight LLM outcomes stay held without automatic resubmission. See `docs/control-center.md` and the Stage contracts reference.
 - Recipient order: CLI `--email`, `PAPERFLOW_REPORT_TO`, legacy `NOTIFICATION_EMAIL`. Without a recipient, Stage5 skips before SMTP validation or transport creation.
 - Required SMTP: `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`. Optional: `SMTP_PORT` default 465; `SMTP_SECURE` inferred true only for 465 unless explicit; `SMTP_FROM` defaults to `SMTP_USER`.
 - PaperEcho provides no mail relay. Secrets remain environment-only and never enter logs, errors, summaries, receipts, timing, docs, or Git.
 - Stage5 counts/grades use current-run created literature. Overview uses all deduplicated current-run A/B/C titles, no abstracts/full text/D titles; normal input is one LLM call, oversized input is deterministic batches plus merge, and failure falls back deterministically.
 - Stage5 email omits the weekly XLSX because review happens in Control Center. The explicit current-run monthly DOCX remains optional; at most one attachment and 20 MiB total. The formatter does not render an attachment body section.
 - Receipt/overview live in the run's `stage5/` directory. Successful run ID plus recipient hash is idempotent; `--force-resend` reuses an unchanged overview input hash.
+- Notification content belongs to `stage5/notification_content.mjs`; Radar/Weekly renderers share `stage5/email_layout.mjs`. Formal `--resume` uses `recovery/notification_recovery.mjs` to retry only delivery after verified business completion, reusing the original receipt/identity and saved content. Accepted mail is not resent; unknown or mismatched evidence fails closed. Never rerun successful business stages to recover email. Details: `skills/paperecho-workflow/references/stage5-email.md`.
+- Radar candidate grades come only from the matching run's complete Stage1 audit with nonnegative integer counts totaling `candidateCount`; omit unavailable distributions. Keep this message's selected recommendation count separate, and preserve saved summary views for notification-only replay.
+- Radar notification digests use `v2:` plus normalized DOI/title, Rule/LLM/Final grades and explicit confidence; queue classification fingerprints remain separate. Only an exact Legacy delivery/unknown digest match may acquire a V2 baseline under the shared-index lock. Unmatched Legacy history retains Legacy decisions and reports `legacy_unmatched`; never infer historical ratings or mass-rebaseline notifications. See the identity/storage reference.
 - `PAPERFLOW_CLEANUP_ENABLED` defaults true. `PAPERFLOW_RETENTION_DAYS` defaults 30; `0` disables age deletion. Full scans run at most once per 24 hours unless forced and never change the business result.
 
 ### Modification Rules

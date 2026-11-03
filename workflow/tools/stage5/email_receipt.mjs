@@ -4,12 +4,18 @@ import { createHash, randomUUID } from "node:crypto";
 import { renameWithTransientRetry } from "../lib/atomic_json.mjs";
 import { registerEphemeral } from "../lib/ephemeral_registry.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
+import { CHANNEL_IDS } from '../notification/channels.mjs';
 
 export const NOTIFICATION_RECEIPT_SCHEMA_VERSION = 2;
 export const NOTIFICATION_RECEIPT_STATUSES = new Set(["pending", "accepted", "unknown", "failed"]);
 
-export function recipientHash(recipient) { return createHash("sha256").update(String(recipient).trim().toLowerCase()).digest("hex"); }
+export function recipientHash(recipient, channel = 'email') { return createHash("sha256").update(channel === 'email' ? String(recipient).trim().toLowerCase() : `${channel}:${String(recipient).trim()}`).digest("hex"); }
 export function receiptPathFor(outputRoot) { return path.join(path.resolve(outputRoot), "stage5", "email_receipt.json"); }
+export function testNotificationReceiptPathFor(storeRoot, requestId, channel = 'email') {
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(requestId || '')) throw new Error('NOTIFICATION_TEST_REQUEST_INVALID');
+  if (!CHANNEL_IDS.includes(channel)) throw new Error('NOTIFICATION_CHANNEL_INVALID');
+  return path.join(path.resolve(storeRoot), 'tests', ...(channel === 'email' ? [] : [channel]), `${requestId}.json`);
+}
 export function notificationReceiptPathFor(storeRoot, receiptId) {
   if (!/^nr-[a-f0-9]{32}$/.test(String(receiptId || ""))) throw new Error("NOTIFICATION_RECEIPT_ID_INVALID");
   return path.join(path.resolve(storeRoot), `${receiptId}.json`);
@@ -17,9 +23,9 @@ export function notificationReceiptPathFor(storeRoot, receiptId) {
 
 function timestamp(clock = () => new Date()) { return clock().toISOString(); }
 
-export function notificationIdentity({ notificationType, businessSubject, eventEpoch, payload }) {
+export function notificationIdentity({ notificationType, businessSubject, eventEpoch, payload, channel = 'email' }) {
   const payloadHash = canonicalQueryHash(payload || {});
-  const dedupeKey = canonicalQueryHash({ notificationType, businessSubject, eventEpoch, payloadHash });
+  const dedupeKey = canonicalQueryHash({ notificationType, businessSubject, eventEpoch, payloadHash, ...(channel === 'email' ? {} : { channel }) });
   return {
     payloadHash,
     dedupeKey,
@@ -28,17 +34,25 @@ export function notificationIdentity({ notificationType, businessSubject, eventE
   };
 }
 
-export function createNotificationReceipt({ notificationType, runId, businessSubject, eventEpoch, payload, ledgerOperationId = "", recipient, clock } = {}) {
-  const identity = notificationIdentity({ notificationType, businessSubject, eventEpoch, payload });
+// Optional replay input in the existing receipt, never SMTP config or recipient.
+export async function notificationRecoveryData(content, attachments = [], { fsApi = fs } = {}) {
+  const attachmentHashes = [];
+  for (const item of attachments) attachmentHashes.push(createHash("sha256").update(await fsApi.readFile(item.path)).digest("hex"));
+  return { content, attachments, attachmentHashes };
+}
+
+export function createNotificationReceipt({ notificationType, runId, businessSubject, eventEpoch, payload, ledgerOperationId = "", recipient, clock, channel = 'email' } = {}) {
+  const identity = notificationIdentity({ notificationType, businessSubject, eventEpoch, payload, channel });
   const now = timestamp(clock);
   return validateNotificationReceipt({
     schemaVersion: NOTIFICATION_RECEIPT_SCHEMA_VERSION,
     ...identity,
+    ...(channel === 'email' ? {} : { channel }),
     notificationType: String(notificationType || ""),
     runId: String(runId || ""),
     businessSubject: String(businessSubject || "").slice(0, 200),
     eventEpoch: String(eventEpoch || "").slice(0, 120),
-    recipientHash: recipientHash(recipient),
+    recipientHash: recipientHash(recipient, channel),
     status: "pending",
     attempts: 0,
     createdAt: now,
@@ -49,6 +63,8 @@ export function createNotificationReceipt({ notificationType, runId, businessSub
 }
 
 export function validateNotificationReceipt(receipt) {
+  if (receipt?.channel != null && !CHANNEL_IDS.includes(receipt.channel)) throw new Error('NOTIFICATION_CHANNEL_INVALID');
+  if (receipt?.parts !== undefined && (!Array.isArray(receipt.parts) || receipt.parts.length < 1 || receipt.parts.length > 10 || receipt.parts.some((part, index) => part.index !== index || !['pending','started','accepted','failed','unknown'].includes(part.status)))) throw new Error('NOTIFICATION_PARTS_INVALID');
   if (receipt?.schemaVersion !== NOTIFICATION_RECEIPT_SCHEMA_VERSION) throw new Error(`NOTIFICATION_RECEIPT_SCHEMA_UNSUPPORTED_${receipt?.schemaVersion ?? "missing"}`);
   if (!/^nr-[a-f0-9]{32}$/.test(String(receipt.receiptId || ""))) throw new Error("NOTIFICATION_RECEIPT_ID_INVALID");
   for (const field of ["dedupeKey", "payloadHash", "recipientHash"]) {

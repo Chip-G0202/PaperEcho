@@ -1,15 +1,17 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { readApplicationConfig, applicationConfigPath } from './application_config.mjs';
+import { validateRunnerConfigObject } from '../runner/config_loader.mjs';
 import { writeAtomicJson, writeAtomicText, withAtomicJsonLock } from './atomic_json.mjs';
 import { ruleSuggestionsLogPath, screeningStandardsPath } from './screening_standards_paths.mjs';
 import { normalizeRuleForDedup, syncSuggestionsToScreeningStandardsMd } from './screening_standards_rule_suggestions.mjs';
-import { suggestionContentIssue } from './unified_pending_rule_suggestions.mjs';
+import { suggestionContentIssue, isActiveRuleSuggestion, normalizeSearchChange } from './unified_pending_rule_suggestions.mjs';
 import { applyKeywordModifications, buildPubMedQueryFromKeywordGroups, loadPubMedKeywordGroupsFromConfig } from './literature_config.mjs';
 
 const targetOf = (item) => item.target || 'screening_standards.md';
 const typeOf = (item) => item.change_type || 'add_rule';
 const applicable = (item) => (targetOf(item) === 'screening_standards.md' && ['add_rule', 'add_downgrade_signal', 'delete_rule', 'revise_rule'].includes(typeOf(item)))
-  || (targetOf(item) === 'pubmed_pmc_search.json' && ['add_keyword', 'remove_keyword'].includes(typeOf(item)));
+  || (targetOf(item) === 'pubmed_pmc_search.json' && ['add_keyword', 'remove_keyword', 'update_keywords'].includes(typeOf(item)));
 
 function exactRuleLine(content, needle) {
   const lines = content.split('\n');
@@ -49,6 +51,18 @@ function planMarkdown(content, item, rule, decision) {
 }
 
 function planKeywordConfig(content, item, rule) {
+  if (typeOf(item) === 'update_keywords') {
+    const change = normalizeSearchChange({ ...item, search_change: rule === (item.rule_text || item.suggested_rule) ? item.search_change : null, rule_text: rule });
+    if (!change || change.data_source !== 'pubmed_pmc' || change.strategy_id !== 'main' || change.application_boundary !== 'keyword_groups') throw new Error('SEARCH_MUTATION_UNCLEAR');
+    const labels = { required: '必含', optional: '可选', negative: '排除' };
+    const additions = Object.values(change.additions).flat();
+    const all = [...additions, ...change.removals].map(term => term.normalize('NFKC').toLowerCase());
+    if (!all.length || new Set(all).size !== all.length) throw new Error('SEARCH_CHANGE_CONFLICT');
+    let planned = content;
+    for (const [group, terms] of Object.entries(change.additions)) for (const term of terms) planned = planKeywordConfig(planned, { change_type: 'add_keyword' }, `添加${labels[group]}检索词：${term}`);
+    for (const term of change.removals) planned = planKeywordConfig(planned, { change_type: 'remove_keyword' }, `移除检索词：${term}`);
+    return planned;
+  }
   const adding = typeOf(item) === 'add_keyword';
   const match = adding ? /^添加(必含|可选|排除)检索词：(.+)$/.exec(rule) : /^移除检索词：(.+)$/.exec(rule);
   if (!match) throw new Error('SEARCH_MUTATION_UNCLEAR');
@@ -74,8 +88,8 @@ function planKeywordConfig(content, item, rule) {
 // A successful accept means the formal owner was changed and verified.
 // Unsupported mutation types remain pending and return an explicit error.
 export class RuleSuggestionService {
-  constructor({ reviewRoot, root, pubmedConfigPath, noFormalRuleApply = false, atomicOptions } = {}) {
-    Object.assign(this, { reviewRoot, root, pubmedConfigPath, noFormalRuleApply, atomicOptions });
+  constructor({ reviewRoot, root, pubmedConfigPath, noFormalRuleApply = false, atomicOptions, env = process.env, configPath } = {}) {
+    Object.assign(this, { reviewRoot, root, pubmedConfigPath, noFormalRuleApply, atomicOptions, env, configPath });
   }
   async readLog() {
     try {
@@ -85,6 +99,7 @@ export class RuleSuggestionService {
     } catch (error) { if (error.code === 'ENOENT') return { suggestions: [] }; throw error; }
   }
   async list() { return (await this.readLog()).suggestions.map((item) => ({ ...item, content_issue: suggestionContentIssue(item.rule_text || item.suggested_rule), can_apply: applicable(item) && !this.noFormalRuleApply })); }
+  async listPending() { return (await this.list()).filter(isActiveRuleSuggestion); }
   async decideWithReceipt(input) { return this.decide(input); }
   async decide({ id, decision, revisedRule = '', humanApproval = false }) {
     if (!['accepted', 'rejected', 'revised'].includes(decision)) throw new Error('SUGGESTION_DECISION_INVALID');
@@ -96,7 +111,7 @@ export class RuleSuggestionService {
       if (matches.length !== 1) throw new Error('SUGGESTION_ID_INVALID');
       const suggestion = matches[0];
       if (suggestion.status === decision && (decision !== 'revised' || suggestion.revised_rule === revisedRule)) return { id, status: decision, duplicate: true };
-      if (!['pending', 'candidate'].includes(suggestion.status)) throw new Error('SUGGESTION_NOT_PENDING');
+      if (!isActiveRuleSuggestion(suggestion)) throw new Error('SUGGESTION_NOT_PENDING');
       const rule = decision === 'revised' ? revisedRule : suggestion.rule_text || suggestion.suggested_rule;
       if (decision === 'revised' && (typeof revisedRule !== 'string' || !revisedRule.trim() || revisedRule.length > 4000 || /[\r\n\u0000]/.test(revisedRule))) throw new Error('SUGGESTION_RULE_INVALID');
       if (decision !== 'rejected') {
@@ -105,18 +120,27 @@ export class RuleSuggestionService {
         if (!applicable(suggestion)) throw new Error('FORMAL_MUTATION_OWNER_UNVERIFIED');
         if (typeof rule !== 'string' || !rule.trim() || rule.length > 4000 || /[\r\n\u0000]/.test(rule)) throw new Error('SUGGESTION_RULE_INVALID');
       }
-      const formalPath = decision === 'rejected' ? null : targetOf(suggestion) === 'screening_standards.md'
+      let formalPath = decision === 'rejected' ? null : targetOf(suggestion) === 'screening_standards.md'
         ? screeningStandardsPath(this.reviewRoot)
         : this.pubmedConfigPath || (this.root ? path.join(this.root, 'config', 'pubmed_pmc_search.json') : null);
+      const configRoot = formalPath ? path.dirname(path.dirname(formalPath)) : this.root;
+      const configOptions = { root: configRoot, env: this.env, configPath: this.configPath };
+      const canonicalPubmed = formalPath && targetOf(suggestion) === 'pubmed_pmc_search.json' && readApplicationConfig(configOptions);
+      if (canonicalPubmed) formalPath = applicationConfigPath(configOptions);
       if (decision !== 'rejected' && !formalPath) throw new Error('FORMAL_MUTATION_OWNER_UNVERIFIED');
       const apply = async () => {
         let before;
         let changed = false;
         if (formalPath) {
           before = await fs.readFile(formalPath, 'utf8');
-          const plan = targetOf(suggestion) === 'screening_standards.md'
+          let plan = targetOf(suggestion) === 'screening_standards.md'
             ? planMarkdown(before, suggestion, rule, decision)
-            : planKeywordConfig(before, suggestion, rule);
+            : planKeywordConfig(canonicalPubmed ? JSON.stringify(JSON.parse(before).pubmed || {}) : before, suggestion, rule);
+          if (canonicalPubmed) {
+            const candidate = { ...JSON.parse(before), pubmed: JSON.parse(plan) };
+            validateRunnerConfigObject(candidate);
+            plan = JSON.stringify(candidate, null, 2) + '\n';
+          }
           if (plan !== before) {
             await writeAtomicText(`${formalPath}.backup`, before);
             await writeAtomicText(formalPath, plan, this.atomicOptions);

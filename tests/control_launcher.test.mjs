@@ -6,7 +6,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { startControlCenter, resolveControlCenterStartup, controlCenterInstance, CONTROL_CENTER_HOST, CONTROL_CENTER_PORT } from '../workflow/tools/web/server.mjs';
-import { launchControlCenter, probeControlCenter, waitUntilReady, browserInvocation, requestLocal, LAUNCH_ERRORS } from '../workflow/tools/web/launcher.mjs';
+import { launchControlCenter, probeControlCenter, inspectControlCenter, controlCenterPorts, waitUntilReady, browserInvocation, requestLocal, LAUNCH_ERRORS } from '../workflow/tools/web/launcher.mjs';
 const repo = fileURLToPath(new URL('../', import.meta.url));
 async function fixture(t) {
   const base = path.join(repo, 'tests', 'runs', 'control-launcher'); await fs.mkdir(base, { recursive: true });
@@ -33,24 +33,24 @@ test('shared bootstrap resolves official Local runtime/config from an explicit s
   const ready = await requestLocal(`${app.url}/api/ready`);
   assert.equal(JSON.stringify(ready.json).includes(root), false); assert.equal(JSON.stringify(ready.json).includes('local output'), false);
 });
-test('already-running same instance opens once without spawn, different workspace fails closed', async (t) => {
+test('already-running same instance opens once without spawn; another workspace is a legitimate other instance', async (t) => {
   const root = await fixture(t); const startup = { root, context: {} }; const app = await server(t, { root });
   let opened = 0;
   const result = await launchControlCenter({ root, port: app.server.address().port, resolveStartup: async () => startup, spawnImpl: () => assert.fail('duplicate child'), openBrowser: async (url) => { assert.equal(url, app.url); opened++; } });
   assert.equal(result.status, 'reused'); assert.equal(opened, 1);
-  await assert.rejects(launchControlCenter({ port: app.server.address().port, resolveStartup: async () => ({ root: `${root}-other`, context: {} }), spawnImpl: () => assert.fail('must not spawn'), openBrowser: () => assert.fail('must not open') }), /PORT_OCCUPIED/);
+  assert.equal(await inspectControlCenter(app.url, controlCenterInstance(`${root}-other`)), 'other');
 });
 test('startup opens browser only after readiness and spawns a detached shell-free shared bootstrap', async () => {
   const events = []; let attempts = 0; const child = new EventEmitter(); child.unref = () => events.push('unref');
-  await launchControlCenter({ root: repo, argv: ['--mode', 'local'], resolveStartup: async () => ({ root: repo, context: {} }), probe: async () => ++attempts >= 3,
-    spawnImpl: (exe, args, options) => { assert.equal(exe, process.execPath); assert.match(args[0], /web[\\/]launcher\.mjs$/); assert.deepEqual(args.slice(1), ['--serve', '--mode', 'local']); assert.equal(options.detached, true); assert.equal(options.windowsHide, true); assert.equal(options.shell, false); assert.equal(options.cwd, repo); events.push('spawn'); return child; },
+  await launchControlCenter({ root: repo, argv: ['--mode', 'local'], resolveStartup: async () => ({ root: repo, context: {} }), probe: async () => events.includes('spawn') && ++attempts >= 3 ? 'same' : 'vacant',
+    spawnImpl: (exe, args, options) => { assert.equal(exe, process.execPath); assert.match(args[0], /web[\\/]launcher\.mjs$/); assert.deepEqual(args.slice(1), ['--serve', '--port', '8765', '--mode', 'local']); assert.equal(options.detached, true); assert.equal(options.windowsHide, true); assert.equal(options.shell, false); assert.equal(options.cwd, repo); events.push('spawn'); queueMicrotask(() => child.emit('message', { ready: true })); return child; },
     openBrowser: async () => { assert.ok(attempts >= 3); events.push('open'); } });
   assert.deepEqual(events, ['spawn', 'unref', 'open']);
 });
 test('readiness timeout is bounded and does not open browser; only owned child is terminated', async () => {
   await assert.rejects(waitUntilReady(async () => false, { timeoutMs: 5, intervalMs: 1 }), /READY_TIMEOUT/);
   const child = new EventEmitter(); child.unref = () => {}; child.exitCode = null; let killed = 0; child.kill = () => killed++;
-  await assert.rejects(launchControlCenter({ resolveStartup: async () => ({ root: repo, context: {} }), probe: async () => false, timeoutMs: 5, spawnImpl: () => child, openBrowser: () => assert.fail('not ready') }), /READY_TIMEOUT/);
+  await assert.rejects(launchControlCenter({ resolveStartup: async () => ({ root: repo, context: {} }), probe: async () => 'vacant', timeoutMs: 5, spawnImpl: () => child, openBrowser: () => assert.fail('not ready') }), /READY_TIMEOUT/);
   assert.equal(killed, 1);
 });
 test('wrong service, redirects, oversized response and unresponsive port are rejected', async (t) => {
@@ -59,10 +59,95 @@ test('wrong service, redirects, oversized response and unresponsive port are rej
   t.after(async () => { wrong.closeAllConnections(); await new Promise((resolve) => wrong.close(resolve)); });
   const url = `http://127.0.0.1:${wrong.address().port}`;
   await assert.rejects(probeControlCenter(url, 'anything'), /PORT_OCCUPIED/);
-  await assert.rejects(requestLocal(`${url}/hang`, { timeoutMs: 20 }), /PORT_OCCUPIED/);
+  await assert.rejects(requestLocal(`${url}/hang`, { timeoutMs: 20 }), /LISTENER_TIMEOUT/);
   await assert.rejects(probeControlCenter(url, 'anything', async () => ({ status: 302, json: {} })), /PORT_OCCUPIED/);
   wrong.removeAllListeners('request'); wrong.on('request', (_req, res) => res.end('x'.repeat(5000)));
   await assert.rejects(requestLocal(url), /PORT_OCCUPIED/);
+});
+
+test('probe distinguishes vacant, same, other, malformed and unresponsive listeners', async () => {
+  const instance = 'a'.repeat(64);
+  const ready = { product: 'PaperEcho Control Center', protocol: 1, ready: true, instance };
+  assert.equal(await inspectControlCenter('http://127.0.0.1:8765', instance, async () => { throw Object.assign(new Error(), { code: 'ECONNREFUSED' }); }), 'vacant');
+  assert.equal(await inspectControlCenter('http://127.0.0.1:8765', instance, async () => { throw new Error('LISTENER_TIMEOUT'); }), 'unresponsive');
+  for (const [data, expected] of [[ready, 'same'], [{ ...ready, instance: 'b'.repeat(64) }, 'other'], [{ ...ready, instance: '' }, 'foreign'], [{ ...ready, instance: 'fake' }, 'foreign'], [{ ...ready, protocol: 2 }, 'foreign'], [{ ...ready, ready: false }, 'foreign'], [{ ...ready, product: 'foreign' }, 'foreign']]) {
+    assert.equal(await inspectControlCenter('http://127.0.0.1:8765', instance, async () => ({ status: 200, json: data })), expected);
+  }
+});
+
+test('both workspace launch orders coexist, reopen correctly, and rediscover alternate after base becomes vacant', async () => {
+  for (const reverse of [false, true]) {
+    const roots = [`${repo}/tests/runs/synthetic-dev`, `${repo}/tests/runs/synthetic-production`];
+    if (reverse) roots.reverse();
+    const listeners = new Map(); const opened = []; let spawned = 0;
+    const launch = root => launchControlCenter({ root, resolveStartup: async () => ({ root, context: {} }),
+      probe: async (url, instance) => !listeners.has(url) ? 'vacant' : listeners.get(url) === instance ? 'same' : 'other',
+      spawnImpl: (exe, args) => { spawned++; assert.equal(exe, process.execPath); const url = `http://127.0.0.1:${args[3]}`; listeners.set(url, controlCenterInstance(root)); const child = new EventEmitter(); child.unref = () => {}; queueMicrotask(() => child.emit('message', { ready: true })); return child; },
+      openBrowser: async url => opened.push({ root, url, instance: listeners.get(url) }) });
+    const first = await launch(roots[0]); const second = await launch(roots[1]);
+    assert.equal(first.url, 'http://127.0.0.1:8765'); assert.notEqual(first.url, second.url);
+    assert.equal(second.url, `http://127.0.0.1:${controlCenterPorts(controlCenterInstance(roots[1]))[1]}`);
+    for (const root of roots) assert.equal((await launch(root)).status, 'reused');
+    assert.equal(spawned, 2);
+    assert.ok(opened.every(item => item.instance === controlCenterInstance(item.root)));
+    listeners.delete(first.url);
+    assert.equal((await launch(roots[1])).url, second.url);
+    assert.equal(spawned, 2);
+  }
+});
+
+test('deterministic discovery skips legitimate others and never skips foreign or ambiguous listeners', async () => {
+  const root = repo; const ports = controlCenterPorts(controlCenterInstance(root));
+  assert.equal(ports.length, 9); assert.deepEqual(ports, controlCenterPorts(controlCenterInstance(root)));
+  assert.ok(ports.every(port => Number.isInteger(port) && port > 0 && port <= 65535));
+  let spawned = 0;
+  const result = await launchControlCenter({ resolveStartup: async () => ({ root, context: {} }),
+    probe: async url => [ports[0], ports[1]].some(port => url.endsWith(`:${port}`)) ? 'other' : spawned && url.endsWith(`:${ports[2]}`) ? 'same' : 'vacant',
+    spawnImpl: (_exe, args) => { assert.equal(args[3], String(ports[2])); spawned++; const child = new EventEmitter(); child.unref = () => {}; queueMicrotask(() => child.emit('message', { ready: true })); return child; }, openBrowser: async () => {} });
+  assert.equal(result.url, `http://127.0.0.1:${ports[2]}`);
+  for (const blocked of ['foreign', 'unresponsive']) await assert.rejects(launchControlCenter({ resolveStartup: async () => ({ root, context: {} }), probe: async url => url.endsWith(':8765') ? 'other' : blocked, spawnImpl: () => assert.fail('foreign must not spawn'), openBrowser: () => assert.fail('foreign must not open') }), /PORT_OCCUPIED/);
+  await assert.rejects(launchControlCenter({ resolveStartup: async () => ({ root, context: {} }), probe: async () => 'other', spawnImpl: () => assert.fail('exhausted') }), /PORT_OCCUPIED/);
+});
+
+test('a bind race with another legitimate workspace rediscoveries the next candidate', async () => {
+  let spawned = 0; let occupied = false;
+  const ports = controlCenterPorts(controlCenterInstance(repo));
+  const result = await launchControlCenter({ resolveStartup: async () => ({ root: repo, context: {} }),
+    probe: async url => url.endsWith(':8765') && occupied ? 'other' : spawned === 2 && url.endsWith(`:${ports[1]}`) ? 'same' : 'vacant',
+    spawnImpl: () => { spawned++; const child = new EventEmitter(); child.unref = () => {}; child.exitCode = spawned === 1 ? 5 : null; queueMicrotask(() => { if (spawned === 1) { occupied = true; child.emit('message', { error: 'EADDRINUSE' }); } else child.emit('message', { ready: true }); }); return child; }, openBrowser: async () => {} });
+  assert.equal(spawned, 2); assert.equal(result.url, `http://127.0.0.1:${ports[1]}`);
+});
+
+test('real concurrent launchers bind one server and stop discovery affects only their own workspace', async (t) => {
+  const roots = [await fixture(t), await fixture(t)];
+  const env = { ...process.env, PAPERECHO_SKIP_DOTENV: '1' };
+  for (const root of roots) {
+    await fs.mkdir(path.join(root, 'config'));
+    await fs.writeFile(path.join(root, 'config', 'paperecho.config.json'), JSON.stringify({ schemaVersion: 6, mode: 'local', common: { projectRoot: root } }));
+  }
+  const listener = http.createServer(); await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
+  const port = listener.address().port; await new Promise(resolve => listener.close(resolve));
+  const options = root => ({ root, env, port, openBrowser: async () => {}, timeoutMs: 10000 });
+  t.after(async () => { for (const root of roots) await launchControlCenter({ ...options(root), stop: true }).catch(() => {}); });
+  const results = await Promise.all([launchControlCenter(options(roots[0])), launchControlCenter(options(roots[0]))]);
+  assert.equal(results[0].url, results[1].url);
+  assert.deepEqual(results.map(item => item.status).sort(), ['reused', 'started']);
+  const other = await launchControlCenter(options(roots[1]));
+  assert.notEqual(other.url, results[0].url);
+  const instances = await Promise.all(roots.map(async root => { const startup = await resolveControlCenterStartup({ root, env }); return controlCenterInstance(root, startup.context); }));
+  assert.equal(await inspectControlCenter(results[0].url, instances[0]), 'same');
+  assert.equal(await inspectControlCenter(other.url, instances[1]), 'same');
+  assert.equal((await launchControlCenter(options(roots[0]))).url, results[0].url);
+  assert.equal((await launchControlCenter(options(roots[1]))).url, other.url);
+  assert.equal((await launchControlCenter({ ...options(roots[0]), stop: true })).status, 'stopping');
+  await waitUntilReady(async () => await inspectControlCenter(results[0].url, instances[0]) === 'vacant', { timeoutMs: 2000, intervalMs: 10 });
+  assert.equal(await inspectControlCenter(other.url, instances[1]), 'same');
+  assert.equal((await launchControlCenter(options(roots[1]))).url, other.url);
+  assert.equal((await launchControlCenter({ ...options(roots[1]), stop: true })).status, 'stopping');
+  await waitUntilReady(async () => await inspectControlCenter(other.url, instances[1]) === 'vacant', { timeoutMs: 2000, intervalMs: 10 });
+  const source = await fs.readFile(new URL('../workflow/tools/web/launcher.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /taskkill|process\.kill|Stop-Process|killall/);
+  assert.doesNotMatch(LAUNCH_ERRORS.BROWSER_FAILED[1], /8765/);
 });
 test('readiness retains Host/CORS boundary; shutdown requires existing session, Origin and CSRF', async (t) => {
   const root = await fixture(t); const app = await server(t, { root });

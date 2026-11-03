@@ -1,6 +1,34 @@
 # PaperEcho Control Center — v2.4 使用与兼容说明
 
+v2.6 的首次配置入口为欢迎 → 数据位置确认 → 基础配置 → 可选凭据 → 本地检查摘要；自动判断和恢复来自 ConfigService 与原 preflight，不依赖完成标记。已配置用户直接进入 Control Center，所有保存复用 Settings/SecretService，Headless 不等待向导。运行与验证契约见 [首次运行配置向导](configuration.md#首次运行配置向导)。Windows Installer Phase 3A 仍为 Blocked。
+
+## Electron 技术 PoC（独立实验入口）
+
+`desktop/electron-poc/` 固定 Electron 版本，只加载现有 Control Center 静态资源与 HTTP/application services。服务复用原 workspace 指纹、候选端口及 foreign listener 检查；同 workspace 复用，退出仅关闭本窗口持有的服务对象。renderer 保持 Node 关闭、context isolation/sandbox/webSecurity 开启，无 preload 或 IPC；外部导航、新窗口和非本实例请求均拒绝。
+
+PoC 仅使用 `tests/runs/electron-poc/` 下隔离数据，Electron profile/session/logs 也位于该目录，不加载开发 `.env` 或继承 provider 凭据。它不替换根目录 Windows/macOS 启动器，不执行真实 workflow。安装依赖需要开发 Node >= 22.12；依赖完整时，窗口与下述 smoke 的 Electron 子进程可在空 PATH 下启动。
+
+仓库根目录中的 PowerShell 7 命令（已有根目录依赖）：
+
+```powershell
+$env:TEMP = Join-Path $PWD 'tests/runs/electron-poc/tmp'
+$env:TMP = $env:TEMP
+$env:electron_config_cache = Join-Path $PWD 'tests/runs/electron-cache'
+New-Item -ItemType Directory -Force $env:TEMP | Out-Null
+npm ci --prefix desktop/electron-poc --cache tests/runs/electron-npm-cache --no-audit --no-fund
+node desktop/electron-poc/node_modules/electron/install.js
+node tests/helpers/electron_smoke_runner.mjs
+```
+
+下载器采用 Node fetch；需要环境代理时在下载命令前设置 `NODE_USE_ENV_PROXY=1`。GUI 验证需要可启动 Electron 子进程的正常桌面执行环境：本机 Codex 受限执行环境曾产生 renderer launch-failed 49、GPU 0xC0000135；同二进制在普通进程边界下正常，无须改变产品 sandbox 或禁用 GPU。
+
+Smoke 使用真实 BrowserWindow、fixture、DOM、精确 viewport 和原安全断言，覆盖桌面及 390px 响应式。当前 Windows 主机的 `capturePage()` surface copy 会拒绝并报 `UnknownVizError`；测试通过 Electron 原生 debugger 的 `Page.captureScreenshot`、`fromSurface:false` 获取同窗口视图，结束 detach，不开启远程调试端口。console/runtime 错误仍须为零，主动验证 CSP 拒绝的消息除外。旧证据先归档；PNG、报告等运行产物不提交。
+
+Shell GUI 验证与发行分开：源码依赖布局尚不能证明 packaged module resolution、发行 fuses 或只读安装目录兼容。`ELECTRON_RUN_AS_NODE=1` 的无窗口依赖加载、子进程和正式 launcher `--check` 仅证明开发目录下的运行时路径；未执行真实 `--run --scheduled-daily`，也未完成独立 bundled Node 比较或 macOS 实测。Runtime Distribution、正式 Headless 与 macOS 仍为后续 Gate。[Electron debugger](https://www.electronjs.org/docs/latest/api/debugger) 与 [fuses](https://www.electronjs.org/docs/latest/tutorial/fuses) 为对应官方接口说明。
+
 ## 启动与使用
+
+文献卡片的 Feedback / Manual Review 共用 `review_display_metadata.mjs`：publication venue 与 RSS feed provenance 分离；通用 feed label 不作为期刊，缺失 venue 时可仅显示 RSS。已有翻译和共享 cache 只读投影；可达 Manual 项目的新翻译由 workflow 的 `manual_review_translation_step.mjs` 复用共享生成器完成，页面请求不调用模型。旧 pending 继续保存身份与历史，当前 artifact 提供展示元数据。
 
 普通用户在已有 PaperEcho 项目目录中双击：
 
@@ -36,7 +64,9 @@ Windows 的 `PaperEcho.exe` 是基于系统 .NET Framework 4.x 的小型 C# GUI 
 2. **文献**：当前结果的只读汇总，仅显示 A/B/C 最终等级，点击等级按钮筛选，每页最多 50 篇；D 仍保留在内部工作流，不进入用户界面。英文原始标题在前、中文翻译在后。基于实际运行根的 registered run manifest 查询；Desktop/Web 经过现有 verified-write filter，Local 复用 Local Stage4 筛选规则，不依赖临时 export source。绝不展示 Stage1 全候选池，也不在此页提交反馈。
 3. **研究反馈**：自然语言直接调用共享 evaluation 核心，先保存收据再尝试处理。需要原有 LLM 配置。失败保留输入，显示 blocker；重试相同请求不会重复生成已完成建议。网页不显示 prompt 或 raw LLM response。
 4. **规则建议**：一次审阅一条，点击“接受”“拒绝”直接提交人工决策；“修改后接受”先进入编辑区，再显式提交。不重复弹窗确认。接受成功即表示正式规则或检索配置已写入并核验，下一次运行会读取；高风险仍须通过精确定位、校验、备份和人工确认。无法安全定位的建议会明确报错并保持 pending，不会显示为已接受。
-5. **设置**：常用设置、模型与审阅、运行路径、自动化、连接与通知作为主 Sidebar 内的二级导航。长期交互契约是“选择器或开关 → 当前能力专属配置 → 保存 → 状态”；能力参数不完整时开关仍可操作，启用不等于已就绪，关闭不会清空配置。工作台隐藏研究领域、检索词、检索式、运行 profile 和高级底层参数；标题翻译有独立开关，等级复审与 LLM 偏好学习由一个产品开关协调，并同步正式总开关与两个子开关。v2.3 已通过 `TITLE_TRANSLATION_CONFIG_PATH` / `PREFERENCE_LEARNING_CONFIG_PATH` 选择模型配置文件时，工作台读取和保存同一 owner，不另写默认文件。Local、Zotero Desktop、Zotero Web 三条真实路径互斥，只显示所选路径需要的字段，无关字段不得跨模式出现；Zotero Web 页面默认使用个人文库并要求数字 User ID，官方 API base 与 v3 版本由内部管理，API Key 与 Desktop 设置分离。普通设置按组原子保存，空替换值表示保持原值；secret 仅显示配置状态并提供明确配置、替换和清除入口，永不回显原值。
+5. **设置**：常用设置、模型与审阅、运行路径、自动化、通知与推送作为主 Sidebar 内的二级导航。长期交互契约是“选择器或开关 → 当前能力专属配置 → 保存 → 状态”；能力参数不完整时开关仍可操作，启用不等于已就绪，关闭不会清空配置。工作台隐藏研究领域、检索词、检索式、运行 profile 和高级底层参数；标题翻译有独立开关，等级复审与 LLM 偏好学习由一个产品开关协调，并同步正式总开关与两个子开关。v2.3 已通过 `TITLE_TRANSLATION_CONFIG_PATH` / `PREFERENCE_LEARNING_CONFIG_PATH` 选择模型配置文件时，工作台读取和保存同一 owner，不另写默认文件。Local、Zotero Desktop、Zotero Web 三条真实路径互斥，只显示所选路径需要的字段，无关字段不得跨模式出现；Zotero Web 页面默认使用个人文库并要求数字 User ID，官方 API base 与 v3 版本由内部管理，API Key 与 Desktop 设置分离。普通设置按组原子保存，空替换值表示保持原值；secret 仅显示配置状态并提供明确配置、替换和清除入口，永不回显原值。
+
+通知与推送提供独立通知偏好和邮箱渠道设置。邮箱关闭时收起参数，保留配置和密码；显式配置与测试不启用自动通知。测试使用已保存配置，配置就绪与发送成功分别显示，发送中禁止重复点击。最近发送状态来自既有回执；失败提示仅显示安全错误类别。
 
 ## 反馈语义与存储
 
@@ -56,13 +86,15 @@ UI 定向验证：`node --test workflow/tests/control_ui.test.mjs workflow/tests
 
 ### 连续等级审阅
 
-反馈回答“最终等级是否正确”，不会改写本次 rule / semantic / final grade、Weekly 结果或即时修改 Zotero。文献队列分类及等级字段兼容规则归 Stage4 `spreadsheet_adapter.mjs#getWeeklyReviewEvidence`，查询服务复用该 owner，Web 不根据等级差另推人工复核资格。现有 `needs_human_review` 及 legacy aliases 保持兼容；普通队列与人工复核队列互斥，保留输入结果顺序，默认定位尚未反馈且具可靠标识的文献。
+反馈回答“最终等级是否正确”，不会改写本次 rule / semantic / final grade、Weekly 结果或即时修改 Zotero。分类 policy 归 Stage1 `semantic_grade_synthesis.mjs#classifyLiterature`；Stage4 的既有最终 eligibility boundary 决定可见范围，`finalize_exports_support.mjs#buildFinalReviewMembership` 在该范围内划分 Feedback / Manual / Excluded，workbook 和查询服务共同消费。`getWeeklyReviewEvidence` 只投影等级证据和分类结果，Web 不复制 truth table；展示标签不能决定 membership。查询层 `getCurrentReviewLifecycle` 为两类队列共享 current-scope visibility 与 canonical decision overlay：actionable 是 scope membership 减去已决定项，已处理项在刷新、回看和改评时仍保留，只有正式 artifact scope 替换才退出；不建立第二 ledger，也不改变 export/writeback eligibility。Feedback 的 scope 来自最新有效成功 Weekly，Manual 来自现有 `currentReviewScope`；Radar、skipped、stale artifact 不建立新 review scope。
 
 一次仅突出一篇，卡片与文献页共享同一左对齐内容列，统一显示英文标题、中文标题、期刊/年份/来源、规则评级、语义评级、最终评级和已有推荐理由；三个系统评级始终是不可覆盖的证据。普通 Feedback 保持相对纠正：A 级仅禁用升级，B/C 级四个动作均可用，C 级降级与排除分别保留为 `downgrade` / `drop`，D 不进入普通队列。人工复核改为直接选择 A/B/C/D；canonical revision 额外保存 `manual_grade` 与 `original_final_grade`，并派生旧 feedback 动作用于现有学习/条目动作兼容。点击即保存，成功后前进，失败停留并允许重试；回看改评继续追加 revision，不改写原 rule / semantic / final grade。
 
 文献工作区：1 升级、2 不变、3 降级、4 排除；人工复核：1 A、2 B、3 C、4 D；规则工作区：1 接受、2 拒绝、3 进入修订；↑ / ↓ 回看或继续。每种任务在页面内提供独立的键盘帮助，快捷键仅绑定当前审阅工作区，在 input、textarea、select、contenteditable、dialog 或编辑状态内禁用；不拦截系统组合键，保存期间拒绝重复动作。鼠标和触屏可使用卡片下方等宽的上一篇／下一篇按钮。
 
-完整 Weekly 的新候选同时取得规则评级与标题语义评级后，双方均为 D 的文献直接排除、留在机器审计中，不进入人工复核或 Zotero。两级不一致，或语义评级缺失时，先写入 `review_results/文献评价/pending_paper_review.json` 待审队列，不写回 Zotero；跨次运行按 DOI、PMID 等标识和受约束的规范化标题复用同一记录。工作台“人工复核”可直接确认 A/B/C/D：确认 D 保持排除，确认 A/B/C 后，下一次完整工作流读取 canonical feedback，重新执行正式去重和写回门槛，再按确认等级处理。工作台保存人工评级时不会直接连接或修改 Zotero；待审队列也不混入已写回 Weekly 列表。旧 XLSX/DOCX 继续作为兼容入口。
+完整 Weekly 中，D 是排除边界，A/B/C 表示相关程度。相同 ABC 自动确认、相邻 ABC 采用语义等级、D→C 自动 soft rescue；D→B/A、ABC→D、A↔C 需要人工。double D 确认排除，但显式 manual request 优先，已有 canonical manual decision 则优先 replay。正式低置信冲突需要人工，不能扩展成所有低置信条目。正常完成的 semantic stage 中单篇缺失分类为 semantic_unavailable；批次/stage 失败保持 workflow blocker、等待重试并阻止写回，不产生大批人工任务。没有足够 stage 证据的缺失结果 fail closed，不猜测分类。
+
+`pending_paper_review.json` 只负责 durable identity、历史 hold、重复 sightings 和人工结果 replay，不拥有 grading policy。Stage1 人工证据或 safety hold 不直接成为用户任务；只有进入 Stage4 既有最终集合的 Manual 才能出现在 workbook / 工作台。没有已完成 Weekly 时也只通过同一 Stage4 pure eligibility builder 推导 prospective 集合。人工选择 A/B/C/D 继续追加 canonical revision；后续 workflow 重跑正式去重和写回门槛，确认 D 保持排除。工作台保存人工评级不会即时连接或修改 Zotero。旧 XLSX/DOCX 保留兼容入口。
 
 | 按钮 / 兼容 API 值 | 原 workflow 值 | 意义 |
 |---|---|---|
@@ -76,7 +108,13 @@ UI 定向验证：`node --test workflow/tests/control_ui.test.mjs workflow/tests
 
 Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/无反馈时仍使用原 XLSX adapter。原有 Local 显式 JSONL 输入优先级保留。论文动作使用稳定 DOI/PMID/PMCID 匹配；无法匹配时保留人工处理，不回退到猜标题。下一次 workflow 通过既有 collection guard 执行动作，网页提交不会直接操作 Zotero。
 
-研究评价收据位于 `review_results/文献评价/research_evaluations/`；pending schema、去重与状态仍使用 `standards_rule_suggestions_log.json`。这些存储边界不合并。
+研究反馈由 `ResearchEvaluationService` 保存到原 `review_results/文献评价/research_evaluations/<requestId>.json`，保留原始反馈（按现有 Secret 脱敏边界）、digest、时间和 requestId；同一 requestId 同内容返回原收据，不调用 LLM。提交后显示“已保存，等待下一次工作流处理”。旧 `processed` 事件不会重新生成。
+
+正式 Desktop/Web Radar/Weekly 在已有 workflow lease、调度 claim 和启动门禁通过后冻结事件。状态为 `pending → preparing → prepared → consumed`；隐藏的 `research_evaluation_batch.json` 位于原受保护 run-state 目录，保存版本、确定性事件/上下文 hash、结果 hash 及原批次引用。单批 LLM 输入最多 20,000 字符，尚未冻结或运行期间新增的事件留到下一批。相同内容的多个事件保留，只合并模型输入；prepared 结果可跨失败运行复用。
+
+同一数据源、策略、应用边界及风险的关键词 additions/removals 归并为一条结构化建议；冲突操作保留并阻止接受，不能静默抵消。统一 suggestion owner 以结构化操作集合去重，既有 active 建议关联新反馈，终态审核历史不复活。正文规则不使用模糊相似度合并不同意图。明确的 PubMed 组合关键词修改仍由原 RuleSuggestionService 验证并原子 apply；修订需保持明确的添加/移除词语格式。
+
+Radar 在正式无写回业务结果验证完成后发布；Weekly 在正式 Stage4 导出验证完成后发布，不等待通知。只有此时才写入原 `standards_rule_suggestions_log.json` 的 pending 队列，审核接受前不影响检索或评级。发布先提交幂等建议日志，再标记批次及事件消费；中断后 resume 可补齐，已接受/拒绝的建议不会被重新激活。已确认生成失败保留 pending，当前 run 不重试 LLM；若进程在模型调用中中断、结果未知，则保留 preparing 并审计 `generation_outcome_unknown`，不自动重发同批付费请求。建议服务失败不会改变成功的文献业务结果。
 
 ## Legacy compatibility 与单向 import
 
@@ -111,7 +149,7 @@ Stage1 在存在 canonical feedback 时从该 state 读取当前值；无 state/
 | 下一次调度／实时状态 | 无可靠证据显示未知；Zotero 为历史写入状态，非实时连接检测 | 不影响查看、反馈或配置；不把未知状态冒充正常 | D. Deferred enhancement |
 | Weekly 间隔编辑 | 只读，正式 scheduler 仍由原 owner 管理 | 已配置用户可继续按原调度运行；网页调度管理不是日常反馈前提 | D. Deferred enhancement |
 | 模型能力共享 owner | 等级复审、overview 复用 preference learning 模型配置 | 常用模型可修改，不需要为每个能力制造独立配置 | B. Accepted safety boundary |
-| 缺失配置文件的初始化 | 显示未初始化，首次按原配置指南准备文件 | 初次安装配置入口未统一；已有 v2.3 项目的日常设置不因此缺失。不会自动选择或切换运行模式 | D. Deferred enhancement |
+| 缺失配置文件的初始化 | v2.6 首次向导通过 ConfigService 保存，旧配置只读检查时不覆盖 | 用户明确选择运行模式，凭据由 SecretService 单独管理；Headless 沿用原 preflight | Resolved（v2.6，原 D） |
 | Config Registry 和检索式 owner | 固定字段白名单；keyword groups 存在时通过词组控件生成 PubMed query | 模型、sources、搜索、RSS、review、Radar、Weekly、Integrity、Zotero、邮件均有常用控件；拒绝任意 JSON/path 编辑不阻断正常设置 | B. Accepted safety boundary |
 | 高风险／删除／搜索建议 | 有明确 owner 且通过精确校验时，接受后立即写入正式文件；否则保持 pending 并返回错误 | 安全门槛仍有效，不能把未应用意向显示为已接受 | B. Accepted safety boundary |
 | Credentials Test／原值读取 | 五类本地凭据可 Replace/Clear；Test 未开放，原值永不返回 | UI 明示 Configured 不等于连接成功；缺少安全 test owner 不影响凭据维护 | B. Accepted safety boundary |
@@ -128,13 +166,21 @@ canonical feedback、研究评价收据和 pending suggestions 均使用解析�
 
 ## 凭据安全写入约定
 
+所有凭据入口复用 `appendCredentialEditor()`：本地已配置项默认只显示状态与“修改”，点击后才展示空密码框；未配置项直接提供空密码框与“保存”。空值禁用保存且不代表清除，输入按原样提交。外部托管、来源不明及只读自定义引用不提供写入入口。独立清除仍须确认，取消修改不发送写入请求。
+
+保存必须取得持久化收据并重新读取配置状态，才显示相应成功与生效范围；写入失败允许修正输入后重试，写入已返回但状态刷新失败时提示重新读取确认。成功、取消、关闭浮层、切换渠道或 Settings、页面离开及重载均清空密码框。新值只在当前编辑框中暂存，不进入浏览器持久存储、URL、普通设置或错误提示；旧值永不取回。
+
 `control_credentials_service.mjs` 中的 SecretService 是唯一网页凭据写入 owner；持久存储仍为项目 `.env`。只接受 allowlist key 和最多 4096 字符的单行值，不接受控制字符或同时包含两种引号的值。格式检查复用既有 loader 的解析结果，并仅支持无重复 key 的单行赋值、空行及注释；多行、export、含糊引号等格式拒绝写入，请通过原环境配置入口维护。未知 entries 保持原样。
 
-写入使用既有原子文件 owner 和锁，临时文件 POSIX mode 为 0600（Windows 继承目录 ACL），不生成含 secret 的备份；`.env`、临时文件和锁均被 gitignore 排除。写入失败不更新当前环境，错误仅返回固定代码。旧值在当前服务进程内继续用于脱敏，清除不会使旧值重新出现在响应中。
+写入复用既有原子文件 owner 和锁；凭据锁最多等待 15 秒，不抢占旧锁。POSIX 使用 0600；Windows 在临时文件写入任何凭据字节前设置受保护 DACL，并校验临时文件及替换后的最终文件，已有文件中无法确认的授权主体会阻止保存。回滚副本先收紧权限再写入，正常成功或失败后清理；最终校验失败恢复旧内容，恢复本身失败则保留受保护副本并报告需要恢复。成功前不更新当前环境，错误仅返回固定代码。
 
-当前进程中的外部环境值与本地文件不一致时该项只读，需在原注入入口维护后重启。本地修改对当前 Control Center 和下一次 workflow 生效，已运行的其他进程需重启。Clear 将目标值置空，不修改其他 key；例如 preference learning 仍可能按既有规则回退使用 title translation key。
+来源由环境加载器记录并随 runtime 副本传递，不比较密钥值；外部注入即使与本地值相同也只读，自定义引用及无法确认来源的项同样禁止通过默认凭据入口写入。保存收据分别记录文件保存、当前凭据服务更新和新 workflow 启动时加载的语义；外部环境仍优先，已运行的其他进程需重启。Clear 将目标值置空，不修改其他 key；例如 preference learning 仍可能按既有规则回退使用 title translation key。
+
+SecretService 与 Runner 复用 `credential_registry.mjs` 的 allowlist 和脱敏规则：先按长度从长到短移除全部完整值，再移除前后缀片段，避免共享片段破坏后续匹配。旧值在当前服务进程内继续脱敏，清除后也不回显。安全测试使用隔离假凭据；hardlink 的目标位于新建目录、创建前不存在，验证真实 link count 及拒绝写入后源内容不变，不关闭正式文件检查。
 
 ## 安全与验证
+
+System 页提供轻量 System Health：点击检查后调用受现有会话保护的 `/api/doctor`，显示“正常 / 建议处理 / 立即阻塞 / 无法确认”、关键条件及人工处理提示，不后台轮询或提供一键修复。与 Headless `--doctor` 共用同一 application service；只读、限量、固定提示及状态分类见 [Doctor 契约](configuration.md#doctor--system-health)。
 
 默认只绑定 `127.0.0.1`，程序调用只允许 `127.0.0.1`/`::1`；Host allowlist、防跨站 Origin 检查、HttpOnly SameSite session cookie 和 CSRF header 共同保护 mutation。请求体限制 64 KiB，静态资源固定 allowlist，CORS 默认不开放。UI 使用 textContent，安全外链限制 http/https，并设置 CSP、防嵌入和 no-referrer。
 
@@ -147,3 +193,11 @@ npm test
 ```
 
 新增测试只写项目内临时 fixture，HTTP 使用临时 loopback port，LLM 为注入 mock；不连接真实 Zotero、LLM、SMTP，不访问 Production。运行全量旧 tests 时，将 TEMP/TMP 与 npm_config_cache 指向工作区临时目录，以保持输出隔离。不得为 Control Center 的验收更改正式 scheduler、配置、ledger、索引或用户反馈。
+
+## 通知偏好与渠道设置
+
+“通知偏好”是通知设置的唯一主区域：Radar 与周报独立选择参与渠道，下方五张卡片分别打开全局设置浮层；旧 `settings/connections/{channel}` 深链接仍进入此页面并打开对应浮层。Enabled 与 Configured 独立，关闭不清除配置或凭据；配置完整的关闭渠道仍可显式测试。浮层保存成功后读取最新状态再关闭，失败保留输入；凭据继续由 SecretService 单独写入，原值永不回显，外部环境凭据只读。
+
+事件渠道选择复用 canonical `common.notifications.{radar,weekly}.channels`（schema 6 可选数组）。未提供时保留历史全部已启用渠道，空数组表示该事件不发送；渠道总开关与事件 enabled 仍生效。Runner 将选择传入既有 delivery policy，不另建发送或恢复路径。通知保持 summary-only，QQ 使用原生 Markdown，无模板设置。
+
+Manual reachability 依赖可可靠匹配并重放的稳定 identity，不要求一定有标题；缺标题使用现有显示 fallback，identity 缺失或冲突继续 fail closed。

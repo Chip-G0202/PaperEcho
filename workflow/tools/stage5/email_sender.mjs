@@ -1,7 +1,14 @@
+import { isIP } from 'node:net';
+
+export function isValidSmtpHost(value) {
+  return typeof value === 'string' && value.length <= 253 && (Boolean(isIP(value)) || value.split('.').every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label)));
+}
+
 export function emailTransportConfig(env = process.env) {
   const required = ["SMTP_HOST", "SMTP_USER", "SMTP_PASS"];
   const missing = required.filter((name) => !env[name]);
   if (missing.length) return { configured: false, missing, error: `SMTP is not configured. Missing: ${missing.join(", ")}` };
+  if (!isValidSmtpHost(env.SMTP_HOST)) return { configured: false, missing: [], error: 'SMTP_HOST must be a valid host name or IP address' };
   const portValue = String(env.SMTP_PORT ?? "").trim();
   const port = portValue ? Number(portValue) : 465;
   if (!Number.isInteger(port) || port < 1 || port > 65535) return { configured: false, missing: [], error: "SMTP_PORT must be an integer between 1 and 65535" };

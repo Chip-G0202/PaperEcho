@@ -1,3 +1,4 @@
+import { testModelConnection } from '../lib/model_transport.mjs';
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -6,20 +7,28 @@ import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { createControlServices } from '../lib/control_application_services.mjs';
 import '../lib/env_file_bootstrap.mjs';
 import { resolveApplicationRuntimeContext } from '../lib/runtime_config.mjs';
+import { assertRestoreWritable, restoreIdentity, inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const CONTROL_CENTER_HOST = '127.0.0.1';
 export const CONTROL_CENTER_PORT = 8765;
 export const CONTROL_CENTER_PRODUCT = 'PaperEcho Control Center';
 export const CONTROL_CENTER_ROOT = path.resolve(here, '../../..');
+export async function readControlCenterVersion(metadataUrl = new URL('../../../package.json', import.meta.url)) {
+  try {
+    const metadata = JSON.parse(await fs.readFile(metadataUrl, 'utf8'));
+    return ['paperecho-core', 'paperecho'].includes(metadata.name) && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(metadata.version) ? metadata.version : null;
+  } catch { return null; }
+}
 export function controlCenterInstance(root, context = {}) {
+  if (context.layout && context.layout !== 'dev') root = context.userDataRoot;
   return createHash('sha256').update(JSON.stringify([path.resolve(root), context.configPath, context.mode, context.reviewRoot, context.researchRoot, context.localRepository?.root])).digest('hex');
 }
 export async function resolveControlCenterStartup({ root = CONTROL_CENTER_ROOT, env = process.env, argv = [] } = {}) {
   const context = await resolveApplicationRuntimeContext({ cwd: root, env, argv });
-  return { root, env, argv, context };
+  return { root, env: context.layout !== 'dev' ? context.env : env, argv, context };
 }
-const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/paperecho-mark.svg', ['paperecho-mark.svg', 'image/svg+xml']]]);
+const assets = new Map([['/ai-capabilities.js', ['../lib/ai_capabilities.cjs', 'text/javascript; charset=utf-8']],['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/paperecho-mark.svg', ['paperecho-mark.svg', 'image/svg+xml']]]);
 export const MAX_BODY_BYTES = 65536;
 export function safeLink(value) {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : null; } catch { return null; }
@@ -48,6 +57,9 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
     services = createControlServices({ root, env, context });
   }
   const instance = controlCenterInstance(root, context);
+  const version = await readControlCenterVersion();
+  const dataRoot = context?.userDataRoot || root;
+  const startupIdentity = await fs.lstat(dataRoot).then(restoreIdentity, error => { if (error.code === 'ENOENT') return null; throw error; });
   const session = randomBytes(32).toString('hex');
   const token = randomBytes(32).toString('hex');
   const server = http.createServer(async (req, res) => {
@@ -55,9 +67,14 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
-    const send = (status, value) => {
+    const send = (status, value, credentialReceipt = false) => {
+      // Only fixed, confirmed credential outcome metadata is independent of secret fingerprints.
+      const safeStatus = credentialReceipt && value?.savedToFile === true && value.currentServiceUpdated === true
+        && ['replaced', 'cleared'].includes(value.status) ? value.status : null;
+      const filtered = services.secrets.redact(JSON.stringify(safeStatus ? { ...value, status: undefined } : value));
+      const text = safeStatus ? JSON.stringify({ ...JSON.parse(filtered), status: safeStatus }) : filtered;
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(services.secrets.redact(JSON.stringify(value)));
+      res.end(text);
     };
     try {
       const actualPort = server.address().port;
@@ -77,27 +94,53 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
       if (req.method === 'GET' && assets.has(decoded)) {
         const [name, type] = assets.get(decoded);
         res.writeHead(200, { 'Content-Type': type });
-        return res.end(await fs.readFile(path.join(here, 'static', name)));
+        return res.end(await fs.readFile(name === '../lib/ai_capabilities.cjs' ? path.join(here, '../lib/ai_capabilities.cjs') : path.join(here, 'static', name)));
       }
       if (!decoded.startsWith('/api/')) return send(404, { error: 'NOT_FOUND' });
       const cookie = String(req.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
       if (!equal(cookie, session)) return send(403, { error: 'SESSION_REQUIRED' });
       if (req.method === 'GET') {
-        if (decoded === '/api/schedule-status') return send(200, await services.schedule.status());
+        if (decoded === '/api/run') return send(200, await services.manualRun.status());
+        if (decoded === '/api/version') return send(200, { version });
+        if (decoded === '/api/doctor/configuration') return send(200, await services.doctor.configuration());
+        if (decoded === '/api/doctor') return send(200, await services.doctor.status());
+        if (decoded === '/api/setup') return send(200, await services.setup.status());
+        if (decoded === '/api/schedule-status') return send(200, { ...await services.schedule.status(), registration: await services.automation?.status() || { state: 'unknown' } });
         if (decoded === '/api/status') return send(200, await services.review.status());
         if (decoded === '/api/weekly') return send(200, await services.review.weekly({ offset: Number(url.searchParams.get('offset') || 0), limit: Number(url.searchParams.get('limit') || 50) }));
         if (decoded === '/api/pending-summary') return send(200, await services.review.pendingSummary());
         if (decoded === '/api/settings') return send(200, await services.config.list());
         if (decoded === '/api/credentials') return send(200, await services.secrets.list());
+        if (decoded === '/api/notifications') return send(200, await services.notifications.settings());
         if (decoded === '/api/suggestions') {
-          const list = await services.rules.list();
-          return send(200, list.map((entry) => Object.fromEntries(['id', 'suggestion_id', 'target', 'change_type', 'rule_text', 'suggested_rule', 'rationale', 'evidence_titles', 'evidence_text_excerpt', 'risk_level', 'status', 'content_issue', 'can_apply', 'decision_receipt'].map((key) => [key, entry[key]]))));
+          const list = await services.rules.listPending();
+          return send(200, list.map((entry) => Object.fromEntries(['id', 'suggestion_id', 'target', 'change_type', 'rule_text', 'suggested_rule', 'rationale', 'evidence_titles', 'evidence_text_excerpt', 'risk_level', 'status', 'content_issue', 'can_apply', 'decision_receipt', 'search_change', 'feedback_event_ids'].map((key) => [key, entry[key]]))));
         }
       }
       if (req.method !== 'POST') return send(405, { error: 'METHOD_NOT_ALLOWED' });
       if (req.headers.origin !== `http://${req.headers.host}`) return send(403, { error: 'ORIGIN_REJECTED' });
       if (!equal(req.headers['x-csrf-token'], token)) return send(403, { error: 'CSRF_REQUIRED' });
+        assertRestoreWritable(dataRoot);
+        if (startupIdentity ? restoreIdentity(await fs.lstat(dataRoot)) !== startupIdentity : inspectRestoreTransaction(dataRoot).state !== 'ABSENT') return send(409, { error: 'WORKSPACE_CHANGED' });
       const input = await body(req);
+      if (decoded === '/api/support-bundle') {
+        if (url.search || Object.keys(input).length) return send(400, { error: 'SUPPORT_INPUT_INVALID' });
+        const controller = new AbortController();
+        const cancel = () => { if (!res.writableFinished) controller.abort(); };
+        res.once('close', cancel); req.once('aborted', cancel);
+        try {
+          const zip = await services.supportBundle.export({ signal: controller.signal });
+          if (controller.signal.aborted || res.destroyed) return;
+          res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="paperecho-support.zip"', 'Content-Length': zip.length });
+          return res.end(zip);
+        } finally { res.off('close', cancel); req.off('aborted', cancel); }
+      }
+      if (decoded === '/api/run') {
+        if (Object.keys(input).length) return send(400, { error: 'RUN_INPUT_INVALID' });
+        return send(202, await services.manualRun.start());
+      }
+      if (decoded === '/api/ai/test') return send(200, await testModelConnection(input, { secrets: services.secrets }));
+      if (decoded === '/api/notifications/test') return send(200, await services.notifications.test(input));
       if (decoded === '/api/shutdown') {
         res.once('finish', () => {
           const timer = setTimeout(() => server.closeAllConnections(), 2000); timer.unref();
@@ -106,8 +149,11 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
         return send(202, { status: 'stopping' });
       }
       if (decoded === '/api/credentials') {
-        if (input.action === 'replace') return send(200, await services.secrets.replace(input.id, input.value));
-        if (input.action === 'clear') return send(200, await services.secrets.clear(input.id));
+        if (['replace', 'clear'].includes(input.action)) {
+          const result = await services.secrets[input.action](input.id, ...(input.action === 'replace' ? [input.value] : []));
+          await services.automation?.reconcile();
+          return send(200, result, true);
+        }
         return send(400, { error: 'CREDENTIAL_ACTION_NOT_SUPPORTED' });
       }
       if (decoded === '/api/feedback') {
@@ -129,6 +175,8 @@ export async function startControlCenter({ root = CONTROL_CENTER_ROOT, host = CO
   server.headersTimeout = 10000;
   server.maxHeadersCount = 40;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
+  // Called once per owned local backend, not on GET, tab navigation or Headless runs.
+  await services.automation?.reconcile();
   return { server, url: `http://${host === '::1' ? '[::1]' : host}:${server.address().port}` };
 }
 

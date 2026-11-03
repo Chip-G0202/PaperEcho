@@ -1,7 +1,10 @@
+import { requestModelText } from './model_transport.mjs';
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { resolveCapabilityInput } from './application_config.mjs';
+import { modelCredentials } from './model_credentials.mjs';
 import { fileURLToPath } from "node:url";
 import { createServiceConcurrencyController, parseServerDelayMs } from "./adaptive_concurrency.mjs";
 import { registerEphemeral } from "./ephemeral_registry.mjs";
@@ -190,10 +193,13 @@ function loadConfigFile(configPath) {
 }
 
 function resolveTranslationConfig({ env = process.env } = {}) {
-  const configPath = env.TITLE_TRANSLATION_CONFIG_PATH
+  const legacyPath = env.TITLE_TRANSLATION_CONFIG_PATH
     ? path.resolve(env.TITLE_TRANSLATION_CONFIG_PATH)
     : resolveConfigPath();
-  const fileConfig = loadConfigFile(configPath);
+  const input = resolveCapabilityInput('translation', { env, legacyPath });
+  env = input.env;
+  const configPath = input.configPath;
+  const fileConfig = input.value || {};
   const rateLimit = fileConfig.rate_limit || {};
   const promptFile = env.TITLE_TRANSLATION_PROMPT_FILE
     || fileConfig.prompt_file
@@ -204,8 +210,11 @@ function resolveTranslationConfig({ env = process.env } = {}) {
     : DEFAULT_PROMPT_TEMPLATE;
 
   return {
+    provider: fileConfig.provider || 'compatible',
+    api_version: fileConfig.api_version || '2023-06-01',
     enabled: coerceBoolean(env.TITLE_TRANSLATION_ENABLED ?? fileConfig.enabled, DEFAULT_CONFIG.enabled),
-    apiKeyConfigured: Boolean(normalizeSecretValue(env.TITLE_TRANSLATION_API_KEY)),
+    apiKeyConfigured: Boolean(normalizeSecretValue(modelCredentials(env).translation)),
+    apiKey: normalizeSecretValue(modelCredentials(env).translation),
     endpoint: normalizeEndpointValue(env.TITLE_TRANSLATION_ENDPOINT)
       || normalizeEndpointValue(fileConfig.endpoint)
       || "",
@@ -515,75 +524,10 @@ export async function parseStreamingTranslationText(res) {
   return normalizeTranslationText(out);
 }
 
-function buildTranslationRequestBody(runtime, prompt, { maxOutputTokens, stream = runtime.stream } = {}) {
-  const thinking = runtime.thinking && typeof runtime.thinking === "object"
-    ? runtime.thinking
-    : runtime.thinking
-      ? { type: "enabled" }
-      : { type: "disabled" };
-  const body = {
-    temperature: runtime.temperature,
-    top_p: runtime.top_p,
-    stream: Boolean(stream),
-    thinking,
-    messages: [
-      { role: "user", content: prompt },
-    ],
-  };
-  if (String(runtime.user_id || "").trim()) {
-    body.user_id = String(runtime.user_id).trim();
-  }
-  if (String(runtime.model || "").trim()) {
-    body.model = runtime.model;
-  }
-  if (!stream) {
-    body.max_tokens = Number(maxOutputTokens) || estimateMaxOutputTokens(1);
-  }
-  return body;
-}
-
 async function fetchTranslation(runtime, prompt, { maxOutputTokens, stream = runtime.stream } = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("translation_timeout")), runtime.timeout_ms);
-  try {
-    const res = await fetch(runtime.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${String(process.env.TITLE_TRANSLATION_API_KEY || "")}`,
-      },
-      body: JSON.stringify(buildTranslationRequestBody(runtime, prompt, { maxOutputTokens, stream })),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      const t = await res.text().catch(() => "");
-      const err = new Error(`HTTP_${res.status}${t ? `:${t.slice(0, 180)}` : ""}`);
-      err.status = res.status;
-      err.retryAfterMs = parseServerDelayMs(res.headers.get("Retry-After"));
-      err.backoffMs = parseServerDelayMs(res.headers.get("Backoff"));
-      throw err;
-    }
-
-    if (stream) {
-      return {
-        text: await parseStreamingTranslationText(res),
-        usage: { available: false, input_tokens: null, output_tokens: null, total_tokens: null },
-        response_excerpt: "",
-      };
-    }
-
-    const data = await res.json();
-    const content = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.delta?.content ?? data?.output_text ?? data?.text ?? "";
-    const text = normalizeTranslationText(content);
-    return {
-      text,
-      usage: extractUsage(data),
-      response_excerpt: text.slice(0, 600),
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
+  if (runtime.enabled === false) throw new Error('translation_disabled');
+  const text = normalizeTranslationText(await requestModelText({ ...runtime, apiKey: runtime.apiKey ?? normalizeSecretValue(modelCredentials(process.env).translation) }, prompt, { maxTokens: maxOutputTokens || estimateMaxOutputTokens(1), stream: stream !== false }));
+  return { text, usage: { available: false, input_tokens: null, output_tokens: null, total_tokens: null }, response_excerpt: '' };
 }
 
 async function translateWithRuntime(title, {
@@ -592,6 +536,7 @@ async function translateWithRuntime(title, {
   concurrencyController = null,
 } = {}) {
   const q = String(title || "").trim();
+  if (runtime.enabled === false) return { ok: false, zh: q, reason: 'disabled' };
   if (!q) return { ok: false, zh: q, reason: "empty" };
   if (!runtime.apiKeyConfigured) {
     return runtime.fallback_to_english

@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { buildSkillAlignmentMatrix } from "../lib/research_os_exports.mjs";
-import { buildFinalExportPayload, buildStage4StandaloneExportSource } from "./finalize_exports_support.mjs";
+import { buildFinalExportPayload, buildStage4StandaloneExportSource, buildReviewProjectionContext, buildFinalReviewMembership } from "./finalize_exports_support.mjs";
+import { readCanonicalFeedback, currentPaperFeedback } from '../lib/control_feedback_service.mjs';
+import { readPendingPaperReview } from '../lib/pending_paper_review.mjs';
 import { loadTranslationCache } from "../lib/title_translation_support.mjs";
 import {
   buildNoWriteBackfillFallback,
@@ -99,6 +101,11 @@ export async function prepareStage4ExportSource({
     backfillReport,
     translationCache,
     allAbcItems: stage4Source.allAbcItems,
+    manualCandidates: (await readJsonIfPresent(path.join(paths.pipelineDir || path.dirname(paths.sourcePath), 'triaged_items.json'))).value || [],
+    reviewContext: buildReviewProjectionContext(runReport, {
+      current: currentPaperFeedback(await readCanonicalFeedback(paths.reviewRoot)),
+      pendingRecords: (await readPendingPaperReview(paths.reviewRoot)).records,
+    }),
     reportContext: {
       triggerMode: runReport.triggerMode || runReport.trigger_mode || "",
       feedbackLearning: runReport.steps.feedback_learning,
@@ -143,11 +150,15 @@ export async function prepareStage4ExportSource({
   };
 }
 
-export function buildLocalStage4ExportSource({ papers = [], runReport = {}, preferenceLearningAudit = {} } = {}) {
-  const triaged = (Array.isArray(papers) ? papers : []).filter((paper) => {
+export function buildLocalStage4ExportSource({ papers = [], runReport = {}, preferenceLearningAudit = {}, runId = '' } = {}) {
+  const normalItems = (Array.isArray(papers) ? papers : []).filter((paper) => {
     const grade = String(paper?.final_grade || paper?.grade || paper?.rule_grade || "").slice(0, 1).toUpperCase();
     return grade && grade !== "D";
   }).map((paper) => ({ ...paper }));
+  const reviewContext = buildReviewProjectionContext(runReport, { manualCandidates: papers, currentRunId: runId });
+  const membership = buildFinalReviewMembership(normalItems, reviewContext);
+  const admitted = new Set([...membership.feedback, ...membership.manual, ...membership.excluded, ...membership.blocked]);
+  const triaged = reviewContext.semanticStageStatus === 'failed' ? [] : [...normalItems.filter(item => admitted.has(item)), ...membership.manual.filter(item => !normalItems.includes(item)).map(item => ({ ...item }))];
   for (const paper of triaged) {
     delete paper.itemKey;
     delete paper.item_key;

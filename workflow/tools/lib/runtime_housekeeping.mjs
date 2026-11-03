@@ -128,7 +128,7 @@ export async function startRunGroup({ runRoot, runId, pipelineMode, startedAt, a
   return { manifestPath, lockPath, manifest };
 }
 
-export async function finishRunGroup({ manifestPath, status, finishedAt, pipelineMode, artifacts = [], monthlyAggregationPending, fsApi = fs } = {}) {
+export async function finishRunGroup({ manifestPath, status, finishedAt, pipelineMode, artifacts = [], monthlyAggregationPending, notificationRecovered = false, fsApi = fs } = {}) {
   const current = await readJson(manifestPath, fsApi);
   if (!current) return { updated: false, reason: "manifest_missing" };
   const additions = artifacts.map(relativeArtifact);
@@ -142,7 +142,7 @@ export async function finishRunGroup({ manifestPath, status, finishedAt, pipelin
   const next = {
     ...current,
     ...(pipelineMode ? { pipelineMode: String(pipelineMode) } : {}),
-    status: terminalWorkflowStatus(current.status === "running" ? null : current.status, status),
+    status: notificationRecovered && status === "completed" ? "completed" : terminalWorkflowStatus(current.status === "running" ? null : current.status, status),
     finishedAt: String(finishedAt || new Date().toISOString()),
     artifacts: merged,
     references: {

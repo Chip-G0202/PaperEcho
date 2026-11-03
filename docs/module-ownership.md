@@ -11,14 +11,39 @@
 
 ## 1. 能力归属表
 
+Deployment paths：`workflow/tools/lib/runtime_config.mjs` 独占 `resolveRuntimePaths/prepareRuntimePaths`。config resolver、`.env` bootstrap、SecretService、Control Center 与 Runner 复用它；业务状态仍由原 owner 管理，不另建 root resolver。Portable/Installed/Dev、旧布局与安全失败规则见 [配置指南](configuration.md)。
+
+Packaged runtime：`desktop/electron-poc/package-win.mjs` 负责构建 allowlist、官方 ZIP 校验、ASAR 和 fuses；`runtime.mjs` 仅固定程序/资源位置并调用统一路径 owner。Shell 复用现有 Control Center；`headless.mjs` 调 Shared Runner，无独立业务后端或 SecretStore。测试 `packaged_probe.mjs` 用真实路径包含判断校验包内模块，不接受 Dev/Production 或链接越界来源。
+
+Windows TEST ONLY Installer：`installer-win.mjs` 与 `installer-database.ps1` 仅构建用户级 MSI，安装、卸载与安装事务由 Windows Installer 标准动作持有。只交付已验证的程序文件，不拥有用户数据、Secret、迁移或 Scheduler。`sandbox_installer.ps1` 持有真实隔离 Guest 验收；Hyper-V 管理身份与普通安装身份分离，UI 观察信号由 `hyperv_ui_signal.ps1` 关闭写句柄后原子发布。验收与发行边界见 [Windows MSI Gate](release-checklist.md#windows-test-only-msi验收phase-3a)。
+
+Release readiness：`desktop/electron-poc/package-policy.mjs` 持有 builder 与 verifier 共用的版本、源文件白名单和 fuses；`release.mjs` 仅编排发行清单、只读完整性检查与签名/公证前置 Gate，不拥有安装、迁移、Scheduler 或用户数据。哈希不等于签名，缺少真实平台证据时不能产生 RELEASE_READY；见 [发行清单](release-checklist.md#phase-11-离线发行准备)。
+
+Runtime logging：`workflow/tools/lib/runtime_logging.mjs` 独占固定运行事件、日志 ownership、跨进程写入与 1 MiB × 2 轮转；复用 `runtime_config.mjs` 的 `logsRoot`、`atomic_json.mjs` 和 `credential_registry.mjs`。Runner/GUI/Headless 只提交安全事件，Doctor 只读检查健康状态；业务 ledger、receipt、feedback、研究结果仍由原 owner 管理，不受日志轮转影响。契约与测试命令见 [配置指南](configuration.md#runtimelog-与日志轮转)。
+
+User data backup：`workflow/tools/lib/backup_service.mjs` 持有数据 owner 清单、一致性编排、安全发布与只读 Verify；`backup_format.mjs` 持有版本化加密容器和完整性校验，`runner/backup.mjs` 仅负责显式 CLI 与密码输入。复用 Runtime Root、Config/Secret 校验、writer lock 和 workflow lease，不替代原业务状态 owner，不复用诊断包白名单，也不执行 Restore。契约与测试见 [配置指南](configuration.md#用户数据备份与-verify)。
+
+Restore：`workflow/tools/lib/restore_service.mjs` 复用 BackupService 的认证内容读取，持有全新根发布；`recovery/restore_transaction.mjs` 编排已有根的显式替换、保留旧根、回滚与崩溃恢复，`restore_transaction_status.mjs` 提供只读状态投影和正式 writer admission。`restore_filesystem.mjs` 持有 Windows NTFS 父目录句柄、私有 staging 与排他操作句柄。Config、Secret、ledger 等仍归原 owner；复用 BackupService 的 writer lock 清单，不另建业务状态。CLI 复用 `runner/backup.mjs`，历史自动激活仍由 preflight 阻止。契约与测试见 [恢复指南](configuration.md#恢复到全新-user-data-root)。
+
+Upgrade planning：`workflow/tools/lib/upgrade_preflight_service.mjs` 只编排兼容性证据、只读预检和版本化迁移计划，`runner/upgrade.mjs` 持有显式 CLI。复用 Config 纯迁移预览、BackupService 的源选择/清单与认证 Verify、Runtime Root、SecretService、恢复状态及文件系统检查；不调用迁移/Restore 执行器、不持有新状态。契约与验证见 [离线升级预检](configuration.md#离线升级兼容性预检phase-6a)。
+
+Isolated upgrade execution：`workflow/tools/lib/upgrade_migration_service.mjs` 仅编排合成测试工作区的执行、源绑定复核与正式配置转换；发布、回滚和崩溃恢复仍归 `RestoreTransaction` 的同一 journal，源门禁引用不另存进度。普通数据根拒绝执行，schema 1/2 不迁移，历史不自动激活；见 [隔离迁移契约](configuration.md#隔离迁移执行phase-6b)。
+
 Control Center application boundary：
 
-- `workflow/tools/lib/control_application_services.mjs`：组合 services；纯文本评价调用 `stage1/manual_standard_evaluation.mjs` 的共享核心，propose 默认不变。
+- `control_support_bundle_service.mjs`：用户主动导出的只读诊断投影与内存 ZIP owner；复用 Doctor、RuntimeLog 固定事件、SecretService 和 Runtime Root。受保护 POST 返回下载，不保存诊断副本、不上传、不创建平行状态或日志系统；schema/限制见 [配置指南](configuration.md#support-bundle)。
+- `workflow/tools/lib/control_application_services.mjs`：组合 services；研究反馈提交只调用 `research_evaluation_service.mjs` 持久保存，不即时调用 LLM。
+- `research_evaluation_service.mjs`：原 `research_evaluations` 事件生命周期及 run-scoped 准备/发布 owner；复用 `manual_standard_evaluation.mjs` 的 prepare-only 核心与统一 suggestion owner，不创建第二套建议队列。
 - `control_feedback_service.mjs`：canonical paper feedback history/current、幂等提交和批量原子写入；`control_legacy_feedback_adapter.mjs`：单向 XLSX import。
-- `control_config_service.mjs`：固定字段 registry，映射现有 domain JSON；Runner 对象校验仍由 `runner/config_loader.mjs` 持有。
+- `control_config_service.mjs`：固定字段 registry，映射 canonical application config（迁移前兼容 domain JSON）；Runner 对象校验仍由 `runner/config_loader.mjs` 持有。
+- `control_setup_service.mjs`：首次配置只读状态与本地 preflight 摘要；复用 ConfigService、Runner resolver 和 preflight，不持有完成标记、不写配置或凭据、不触发外部服务。GUI 保存仍走原 Settings/SecretService。
+- `recovery/run_recovery.mjs`：启动安全只读投影与原恢复编排；Runner/preflight、正式 Stage0/Local 入口共享其准入检查，lease 仍由 `operation_ledger.mjs` 持有，schedule claim 校验仍归 `schedule_support.mjs`。已配置用户的恢复阻塞经 SetupService 投影到 System Health，不创建第二套恢复状态。契约见 [配置指南](configuration.md#crash-recovery-与启动安全)。
+- `control_doctor_service.mjs`：CLI 与 System Health 共用的只读诊断汇总。读取原 Config/Secret/preflight、运行登记、lease/ledger/recovery/receipt 与 ResearchEvaluationService 有界摘要；不持有状态、不修复、不调用外部服务。Runner `--doctor` 和 packaged bootstrap 使用原路径 owner 的只读选项，不创建目录或写入探针；正常启动不变。契约见 [配置指南](configuration.md#doctor--system-health)。
 - `control_rule_suggestion_service.mjs`：人工决策及安全 apply 编排；schema/dedup 仍归 `unified_pending_rule_suggestions.mjs`，正文插入逻辑复用 `screening_standards_rule_suggestions.mjs`。DOCX adapter 调同一 service。
 - `control_review_query_service.mjs`：registered run manifest/Stage4 artifact 只读查询，复用 verified-write filter。
 - `control_credentials_service.mjs`：SecretService 的 allowlist 凭据状态、原子 Replace/Clear 和输出脱敏；复用 `.env` loader 解析，无独立 credential store，外部注入覆盖时只读。
+- `control_notification_service.mjs`：Email/QQ 共用 channel application contract；应用层配置就绪状态、显式测试及各渠道原回执的最近状态。普通设置由 ConfigService、凭据由 SecretService 持有；测试使用 content/render/delivery/receipt/transport 链路，不运行业务流程。
+- `workflow/tools/notification/policy.mjs`：渠道开关与 Radar/Weekly 事件偏好分开解析；disabled/no-channel 无发送要求，不创建通知恢复操作，不影响业务成功。
 - `workflow/tools/web/server.mjs` 与 `web/static/`：loopback HTTP 和 UI，不持有 retrieval、ranking、Zotero、learning 或配置文件写入逻辑。
 
 | 能力 | 当前 Owner | CLI Wrapper | 当前状态 |
@@ -34,6 +59,13 @@ Control Center application boundary：
 | feedback learning | `workflow/tools/lib/feedback_learning_support.mjs` | 无 | 独立 lib 模块 |
 | runtime config | `workflow/tools/lib/runtime_config.mjs` | 无 | 独立 lib 模块 |
 | schedule / interval gate | `workflow/tools/lib/schedule_support.mjs` | 无 | 独立 lib 模块 |
+| OS schedule definition / readonly inspection | `workflow/tools/lib/os_scheduler.mjs` | `runner/os_scheduler.mjs`、packaged `--headless` | 只生成 XML/plist 和脱敏 dry-run；无 OS 注册接口。业务判定继续归 `runner/scheduled_daily.mjs`、Stage0 claim 与 workflow lease |
+| OS schedule management / native boundary | `workflow/tools/lib/os_scheduler_management.mjs`、`workflow/tools/lib/windows_task_scheduler.mjs` | `runner/os_scheduler.mjs`、packaged `--headless` | 显式管理命令；复用只读预检及 canonical spec。Windows COM 当前用户 / InteractiveToken / LeastPrivilege；拒绝任务接管、任意 XML/命令与跨根参数。真实系统验收仅在受控 Sandbox |
+| notification content | `workflow/tools/stage5/notification_content.mjs` | 无 | 从现有 Radar/Weekly 业务结果构建内容，不检索、不重新评级 |
+| email rendering | `stage5/radar_report.mjs`、`stage5/report_summary.mjs`、`stage5/test_notification_report.mjs` | 无 | 共用 `stage5/email_layout.mjs` 的品牌布局与 HTML escaping；HTML/text 使用同一内容模型 |
+| QQ rendering / transport | `notification/qq_renderer.mjs`、`notification/qq_transport.mjs` | 无 | 同一 summary-only content 的有界原生 Markdown（msg_type=2、markdown.content，无模板）；官方单聊/群聊主动发送，内存 token，无 inbound；5000 UTF-8 字节为产品预算，provider 硬上限未验证 |
+| business channel fan-out | `notification/channel_delivery.mjs` | Stage5 / Radar 入口 | 共用事件偏好，各渠道独立 receipt/ledger；v5 通知部分失败保持业务成功，不建立平行 QQ 服务 |
+| notification delivery / recovery | `notification/delivery.mjs`、`stage5/email_receipt.mjs`、`recovery/notification_recovery.mjs`（均在 `workflow/tools/`） | 原 Runner `--resume` | SMTP 仍归 `stage5/email_sender.mjs`；已成功业务不重跑，原回执和 ledger 完成恢复 |
 | triage policy | `workflow/tools/stage1/rule_classifier.mjs` | `workflow/tools/stage1/main.mjs` | Stage1-local rule classifier；旧 `workflow_classifier.mjs` / `triage_policy.mjs` 兼容入口已删除 |
 
 ---

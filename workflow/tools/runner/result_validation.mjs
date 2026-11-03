@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { CHANNEL_IDS } from '../notification/channels.mjs';
 import path from "node:path";
 
 export function extractLastJsonObject(text = "") {
@@ -98,7 +99,10 @@ export async function validateProductionResult({ options, plan, processResult, f
   const stages = stageSummary(options.mode, report);
   if (Object.values(stages).includes("FAILED") || Object.values(stages).includes("MISSING")) return { ok: false, reason: "required_stage_failed", runId, stages, exitCode: 6 };
   const stage5 = stage5State(report);
-  const stage5Accepted = radarProfile
+  const delivery = report?.steps?.stage5_notification || report?.stage5_notification;
+  const channelReport = delivery?.businessStatus === 'success' && delivery?.channels
+    && Object.keys(delivery.channels).length >= 2 && Object.entries(delivery.channels).every(([channel,value]) => CHANNEL_IDS.includes(channel) && ['accepted', 'sent', 'skipped', 'failed', 'unknown', 'pending'].includes(value?.status));
+  const stage5Accepted = channelReport ? ['ACCEPTED', 'SENT', 'PARTIAL'].includes(stage5) || stage5 === 'SKIPPED' && Object.values(delivery.channels).every(value => value.status === 'skipped') : radarProfile
     ? ["ACCEPTED", "SKIPPED"].includes(stage5)
     : ["SENT", "SKIPPED"].includes(stage5) && (!(plan.emailRequested || options.email) || stage5 === "SENT");
   if (!stage5Accepted) return { ok: false, reason: "stage5_requirement_failed", runId, stages, stage5, exitCode: 6 };

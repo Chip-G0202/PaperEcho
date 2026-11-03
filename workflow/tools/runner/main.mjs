@@ -4,28 +4,27 @@ import { watchProductionChild } from "./child_watchdog.mjs";
 import { writeAtomicJson } from "../lib/atomic_json.mjs";
 import { terminalWorkflowStatus, workflowLedgerStatus } from "../lib/orchestrator_status.mjs";
 import { finishRunGroup } from "../lib/runtime_housekeeping.mjs";
-import { OperationLedgerStore } from "../recovery/operation_ledger.mjs";
+import { OperationLedgerStore, releaseRunLease } from "../recovery/operation_ledger.mjs";
+import { acquireStartupWorkflowLease, inspectStartupRecovery } from '../recovery/run_recovery.mjs';
 import { pathToFileURL } from "node:url";
 
 import "../lib/env_file_bootstrap.mjs";
 import { parseRunnerArgs } from "./args.mjs";
-import { resolveRunnerConfiguration } from "./config_loader.mjs";
+import { resolveRunnerConfiguration, RunnerConfigurationError } from "./config_loader.mjs";
 import { selectScheduledDailyRun } from "./scheduled_daily.mjs";
 import { EXIT_CODES } from "./constants.mjs";
 import { buildExecutionPlan, runPreflight } from "./preflight.mjs";
 import { extractLastJsonObject, validateProductionResult } from "./result_validation.mjs";
 import { notifyRunFailure } from "../notification/failure_notifier.mjs";
 import { processHealthNotifications } from "../notification/health_notifier.mjs";
-
-const SECRET_NAMES = ["SMTP_PASS", "ZOTERO_API_KEY", "TITLE_TRANSLATION_API_KEY", "PREFERENCE_LEARNING_API_KEY", "EASYSCHOLAR_SECRET_KEY"];
+import { emailDeliveryPolicy } from '../notification/policy.mjs';
+import { redactSecrets, secretValues, copyEnvironment } from '../lib/credential_registry.mjs';
+import { resolveRuntimePaths, buildRuntimeConfig } from '../lib/runtime_config.mjs';
+import { RuntimeLog } from '../lib/runtime_logging.mjs';
+import { inspectRestoreTransaction } from '../recovery/restore_transaction_status.mjs';
 
 export function redactText(text, env = process.env) {
-  let safe = String(text || "");
-  for (const name of SECRET_NAMES) {
-    const value = String(env[name] || "");
-    if (value) safe = safe.split(value).join("[REDACTED]");
-  }
-  return safe;
+  return redactSecrets(text, secretValues(env));
 }
 
 export function runProduction(plan, dependencies = {}) {
@@ -38,22 +37,38 @@ export function runProduction(plan, dependencies = {}) {
   return new Promise((resolve, reject) => {
     const child = spawnImpl(process.execPath, [plan.entry, ...plan.args], { cwd: plan.cwd, env: plan.childEnv, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["inherit", "pipe", "pipe", "ipc"] });
     let rawStdout = "";
-    let rawStderr = "";
+    let stderrSeen = false;
+    const omitted = new Set();
+    const pending = { stdout: '', stderr: '' };
+    const output = { stdout, stderr };
+    const flush = (name, chunk = '', final = false) => {
+      pending[name] += chunk;
+      const end = final ? pending[name].length : pending[name].lastIndexOf('\n') + 1;
+      if (end) {
+        const safe = redactText(pending[name].slice(0, end), plan.childEnv);
+        if (/^(?:\s*\[REDACTED\]\s*)+$/.test(safe)) output[name].write(safe);
+        else if (!omitted.has(name)) { omitted.add(name); output[name].write(`[runner] child ${name} content omitted; consult registered run evidence\n`); }
+        pending[name] = pending[name].slice(end);
+      }
+      // ponytail: bounded line buffering; oversized log lines are suppressed.
+      if (pending[name].length > 1048576) { pending[name] = ''; output[name].write('[oversized log line suppressed]\n'); }
+    };
     const watchdog = watchProductionChild(child, { timeoutMs, graceMs: dependencies.graceMs, processApi: dependencies.processApi || process,
       force: dependencies.forceChildTree,
       onStop: (status) => stderr.write(`[runner] ${status}: terminating owned production child\n`),
-      onUnreaped: (status) => { watchdog.cleanup(); child.unref?.(); child.stdout?.destroy?.(); child.stderr?.destroy?.(); if (child.connected) child.disconnect?.(); resolve({ code: 1, status, childExitConfirmed: false, stdout: rawStdout, stderr: rawStderr }); },
+      onUnreaped: (status) => { flush('stdout', '', true); flush('stderr', '', true); watchdog.cleanup(); child.unref?.(); child.stdout?.destroy?.(); child.stderr?.destroy?.(); if (child.connected) child.disconnect?.(); resolve({ code: 1, status, childExitConfirmed: false, stdout: rawStdout, stderr: stderrSeen ? 'CHILD_STDERR_OMITTED' : '' }); },
     });
+    child.on('message', message => { try { dependencies.onProgress?.(message); } catch {} });
     child.stdout?.on("data", (chunk) => {
       rawStdout += chunk;
-      stdout.write(redactText(chunk, plan.childEnv));
+      flush('stdout', chunk);
     });
     child.stderr?.on("data", (chunk) => {
-      rawStderr += chunk;
-      stderr.write(redactText(chunk, plan.childEnv));
+      stderrSeen = true;
+      flush('stderr', chunk);
     });
     child.once("error", (error) => { watchdog.cleanup(); reject(error); });
-    child.once("close", (code, signal) => { const status = watchdog.status || (signal ? "interrupted" : Number(code) === 0 ? "completed" : "failed"); watchdog.cleanup(); resolve({ code: status === "completed" ? 0 : Number(code || 1), status, signal, childExitConfirmed: true, stdout: rawStdout, stderr: rawStderr }); });
+    child.once("close", (code, signal) => { flush('stdout', '', true); flush('stderr', '', true); const status = watchdog.status || (signal ? "interrupted" : Number(code) === 0 ? "completed" : "failed"); watchdog.cleanup(); resolve({ code: status === "completed" ? 0 : Number(code || 1), status, signal, childExitConfirmed: true, stdout: rawStdout, stderr: stderrSeen ? 'CHILD_STDERR_OMITTED' : '' }); });
   });
 }
 
@@ -81,31 +96,74 @@ function notificationSummary(result) {
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
-  const stdout = dependencies.stdout || process.stdout;
-  const stderr = dependencies.stderr || process.stderr;
+  if (argv.some(x => ['--upgrade-preflight', '--upgrade-dry-run', '--reinstall-preflight', '--reinstall-confirm', '--upgrade-execute', '--upgrade-recover', '--upgrade-rollback'].includes(x))) {
+    const { upgradeMain } = await import('./upgrade.mjs');
+    return upgradeMain(argv, dependencies);
+  }
+  if (argv.some(x => ['--schedule-preflight', '--schedule-dry-run', '--schedule-register', '--schedule-query', '--schedule-enable', '--schedule-disable', '--schedule-update', '--schedule-run', '--schedule-delete'].includes(x))) {
+    const { schedulerMain } = await import('./os_scheduler.mjs');
+    return schedulerMain(argv, dependencies);
+  }
+  if (argv.some(x => ['--backup', '--verify-backup', '--verify-backup-data', '--restore-backup', '--restore-existing', '--restore-preflight', '--restore-recover', '--restore-rollback'].includes(x))) {
+    const { backupMain } = await import('./backup.mjs');
+    return backupMain(argv, dependencies);
+  }
+  if (argv.includes('--doctor')) {
+    const { doctorMain } = await import('./doctor.mjs');
+    return doctorMain(argv, dependencies);
+  }
+  const logOwner = dependencies.runtimeLog || new RuntimeLog({ env: dependencies.env || process.env, applicationRoot: dependencies.cwd,
+    warning: code => { try { (dependencies.stderr || process.stderr).write(`[logging] ${code}\n`); } catch {} } });
+  const runtimeLog = { write: async (...args) => { try { return await logOwner.write(...args); } catch { try { (dependencies.stderr || process.stderr).write('[logging] RUNTIME_LOG_UNAVAILABLE\n'); } catch {} return { ok: false }; } } };
+  const context = { ...dependencies, runtimeLog };
+  let code = EXIT_CODES.pipeline;
+  await runtimeLog.write('RUNNER_STARTED');
+  try { code = await executeMain(argv, context); return code; }
+  finally { await runtimeLog.write(code === 0 ? 'RUNNER_FINISHED' : 'RUNNER_FAILED', { exitCode: code, runId: context.logRunId }); }
+}
+
+async function executeMain(argv, dependencies) {
+  let outputEnv = dependencies.env || process.env;
+  const stdout = { write: value => (dependencies.stdout || process.stdout).write(redactText(value, outputEnv)) };
+  const stderr = { write: value => (dependencies.stderr || process.stderr).write(redactText(value, outputEnv)) };
   let cliOptions;
-  try { cliOptions = parseRunnerArgs(argv, { cwd: dependencies.cwd || process.cwd(), allowUnresolvedMode: true }); }
+  try {
+    const paths = resolveRuntimePaths({ env: outputEnv });
+    cliOptions = parseRunnerArgs(argv, { cwd: paths.layout === 'dev' ? dependencies.cwd || process.cwd() : paths.userDataRoot, allowUnresolvedMode: true });
+  }
   catch (error) {
-    stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "invalid_input", error: String(error?.message || error) })}\n`);
+    stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "invalid_input", code: 'RUNNER_ARGUMENT_INVALID', error: '检查启动参数。' })}\n`);
     return EXIT_CODES.input;
   }
   let resolved;
   try {
-    resolved = await (dependencies.resolveRunnerConfigurationImpl || resolveRunnerConfiguration)(cliOptions, dependencies);
+    resolved = await (dependencies.resolveRunnerConfigurationImpl || resolveRunnerConfiguration)(cliOptions, { ...dependencies, readOnly: true });
   } catch (error) {
-    stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "invalid_configuration", code: String(error?.code || "CONFIG_INVALID"), error: redactText(error?.message || error, dependencies.env || process.env), details: error?.details || {} })}\n`);
+    const code = error instanceof RunnerConfigurationError && /^CONFIG_[A-Z0-9_]+$/.test(error.code) ? error.code : 'CONFIG_INVALID';
+    stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "invalid_configuration", code, error: '检查配置格式、路径和运行模式。' })}\n`);
     return EXIT_CODES.configuration;
   }
   if (cliOptions.scheduledDaily) {
     let selection;
     try {
+      if (inspectRestoreTransaction(resolveRuntimePaths({ env: resolved.env }).userDataRoot).blocking) {
+        stdout.write(JSON.stringify({ type: 'schedule', status: 'recovery_required', reason: 'RESTORE_RECOVERY_REQUIRED' }) + '\n');
+        return EXIT_CODES.pipeline;
+      }
+      const runtime = buildRuntimeConfig({ cwd: dependencies.repoRoot, env: resolved.env });
+      const admission = await inspectStartupRecovery({ runRoot: runtime.runRoot,
+        researchRoot: runtime.researchRoot, dataRoots: [runtime.projectRoot, runtime.reviewRoot] });
+      if (admission.blocking && !admission.automaticSafe) {
+        stdout.write(`${JSON.stringify({ type: 'schedule', status: 'recovery_required', reason: admission.code })}\n`);
+        return EXIT_CODES.pipeline;
+      }
       selection = await (dependencies.selectScheduledDailyRunImpl || selectScheduledDailyRun)(resolved, {
         now: (dependencies.clock || (() => new Date()))(),
         repoRoot: dependencies.repoRoot,
         fsApi: dependencies.fsApi,
       });
     } catch (error) {
-      stderr.write(`${JSON.stringify({ type: "schedule", status: "blocked", reason: String(error?.message || error) })}\n`);
+      stderr.write(`${JSON.stringify({ type: "schedule", status: "blocked", reason: 'SCHEDULE_STATUS_UNAVAILABLE' })}\n`);
       return EXIT_CODES.configuration;
     }
     stdout.write(`${JSON.stringify({ type: "schedule", status: selection.status, plannedSlot: selection.decision.plannedSlot, selectedFlow: selection.decision.selectedFlow, weeklyMode: selection.decision.weeklyMode, reason: selection.reason || selection.decision.reason, ...(selection.runId ? { runId: selection.runId } : {}) })}\n`);
@@ -116,20 +174,31 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     resolved = { ...selection.resolved, options: { ...selection.resolved.options, scheduledDecision: selection.decision } };
   }
   const options = resolved.options;
+  outputEnv = resolved.env;
   const runtimeDependencies = { ...dependencies, env: resolved.env };
   const preflight = await (dependencies.runPreflightImpl || runPreflight)(options, runtimeDependencies);
+  await dependencies.runtimeLog.write(preflight.canRun ? 'RUNNER_PREFLIGHT_READY' : 'RUNNER_PREFLIGHT_BLOCKED', { runId: options.resume });
   stdout.write(`${formatPreflightSummary(preflight)}\n${JSON.stringify({ type: "preflight", ...preflight })}\n`);
   if (!preflight.canRun) return blockedExitCode(preflight);
   if (options.action === "check") return EXIT_CODES.success;
 
   const plan = (dependencies.buildExecutionPlanImpl || buildExecutionPlan)(options, runtimeDependencies);
+  // The parent owns the existing workflow lease through result/receipt writes.
+  let retainLease = false;
+  const execute = async () => {
+  dependencies.logRunId = plan.runId;
+  await dependencies.runtimeLog.write('RUNNER_ADMITTED', { runId: plan.runId });
   let processResult;
   try { processResult = await (dependencies.runProductionImpl || runProduction)(plan, dependencies); }
   catch (error) {
-    stderr.write(`${JSON.stringify({ type: "runner_error", status: "failed", error: redactText(error?.message || error, dependencies.env || process.env) })}\n`);
+    retainLease = true; // A failed spawn contract does not prove the child exited.
+    stderr.write(`${JSON.stringify({ type: "runner_error", status: "failed", code: 'RUNNER_EXECUTION_FAILED', error: '检查本次运行登记状态。' })}\n`);
     return EXIT_CODES.pipeline;
   }
   const productionReport = extractLastJsonObject(processResult.stdout);
+  retainLease = processResult.childExitConfirmed === false;
+  if (processResult.childExitConfirmed === true && processResult.code !== 0 && !productionReport) processResult.status = 'interrupted';
+  if (processResult.stderr) await dependencies.runtimeLog.write('CHILD_STDERR', { runId: plan.runId });
   if (options.scheduledDaily && processResult.code === 0 && productionReport?.status === "skipped"
     && productionReport?.skipReport?.reason === "duplicate_schedule_trigger") {
     stdout.write(`${JSON.stringify({ type: "result", status: "already_claimed", plannedSlot: options.scheduledDecision.plannedSlot, runId: productionReport?.schedule_decision?.businessRunId || null })}\n`);
@@ -153,9 +222,9 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     stdout.write(`${JSON.stringify(result)}\n`);
     return result.exitCode;
   }
-  const notificationSchemaV2 = String(resolved.env.PAPERECHO_CONFIG_SCHEMA_VERSION || "") === "2";
+  const notificationSchemaSupported = Number(resolved.env.PAPERECHO_CONFIG_SCHEMA_VERSION || 0) >= 2 && emailDeliveryPolicy('failure', { env: resolved.env }).required;
   const recipient = String(options.email || resolved.env.PAPERFLOW_REPORT_TO || resolved.env.NOTIFICATION_EMAIL || "").trim();
-  if (processResult.code !== 0 && notificationSchemaV2 && /^(1|true|yes|on)$/i.test(String(resolved.env.PAPERECHO_FAILURE_NOTIFIER_ENABLED || ""))) {
+  if (processResult.code !== 0 && notificationSchemaSupported && /^(1|true|yes|on)$/i.test(String(resolved.env.PAPERECHO_FAILURE_NOTIFIER_ENABLED || ""))) {
     const stage = failedStage(productionReport);
     if (stage !== "stage5") {
       try {
@@ -165,7 +234,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
         stdout.write(`${JSON.stringify({ type: "failure_notification", status: "failed", reason: "notifier_internal_error" })}\n`);
       }
     }
-  } else if (processResult.code === 0 && notificationSchemaV2 && /^(1|true|yes|on)$/i.test(String(resolved.env.PAPERECHO_HEALTH_NOTIFIER_ENABLED || ""))) {
+  } else if (processResult.code === 0 && notificationSchemaSupported && /^(1|true|yes|on)$/i.test(String(resolved.env.PAPERECHO_HEALTH_NOTIFIER_ENABLED || ""))) {
     try {
       const health = await (dependencies.processHealthNotificationsImpl || processHealthNotifications)({ runRoot: plan.runRoot, runId: plan.runId, observations: productionReport?.notification_health_observations || [], recipient, env: resolved.env, fsApi: dependencies.fsApi });
       stdout.write(`${JSON.stringify({ type: "health_notifications", status: health.status, eventCount: health.events?.length || 0, maxNotifications: health.maxNotifications || 0 })}\n`);
@@ -176,11 +245,24 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const validation = await (dependencies.validateProductionResultImpl || validateProductionResult)({ options, plan, processResult, fsApi: dependencies.fsApi });
   stdout.write(`${JSON.stringify({ type: "result", ...validation })}\n`);
   return validation.exitCode;
+  };
+  if (!plan.runRoot) return execute();
+  const runtime = buildRuntimeConfig({ cwd: plan.cwd, env: resolved.env });
+  const lease = await acquireStartupWorkflowLease({ runRoot: plan.runRoot, runId: plan.runId, profile: options.profile,
+    resumeRunId: options.resume, automatic: Boolean(options.scheduledDaily), researchRoot: options.mode === 'local' ? undefined : runtime.researchRoot,
+    dataRoots: [runtime.projectRoot, runtime.reviewRoot, options.outputRoot].filter(Boolean) });
+  if (!lease.acquired) {
+    stdout.write(`${JSON.stringify({ type: 'result', status: 'recovery_required', code: lease.reason })}\n`);
+    return EXIT_CODES.pipeline;
+  }
+  plan.childEnv = copyEnvironment(plan.childEnv, { PAPERECHO_PARENT_WORKFLOW_LEASE: lease.lease.ownerId });
+  try { return await execute(); }
+  finally { if (!retainLease) await releaseRunLease(lease); }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
   main().then((code) => { process.exitCode = code; }).catch((error) => {
-    process.stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "runner_crash", error: redactText(error?.message || error) })}\n`);
+    process.stderr.write(`${JSON.stringify({ schemaVersion: 1, status: "runner_crash", code: 'RUNNER_CRASH', error: '检查运行环境和本次运行登记状态。' })}\n`);
     process.exitCode = EXIT_CODES.pipeline;
   });
 }

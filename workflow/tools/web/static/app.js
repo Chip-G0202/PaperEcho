@@ -2,6 +2,7 @@
 const main = document.querySelector('#content');
 const notice = document.querySelector('#notice');
 let csrf = '';
+let supportExportBusy = false;
 let page = 'home';
 let feedbackView = 'rating';
 let researchDraft = '';
@@ -10,40 +11,55 @@ let settingsGroup = 'common';
 let settingsView = 'sources';
 let reviewSection = 'normal';
 let activeReview = null;
+let disposeManualRunView = () => {};
+let manualRunExpanded = false;
+let activeChannelModal = null;
+let setupState = null;
+let setupStep = 0;
+const setupDraft = new Map(); // Non-secret unsaved fields only; no browser persistence.
+const notificationChannelIds = ['email', 'qq', 'wechat', 'feishu', 'wecom'];
 const decisionReceipts = new Map();
-const pageNames = { home: '概览 · Overview', weekly: '文献 · Literature', feedback: '反馈 · Feedback', settings: '设置 · Settings', system: '系统 · System' };
-const errorMessages = { SETTING_VALUE_INVALID: '请检查字段格式或允许范围，原设置未改变。', SEARCH_KEYWORD_OWNER_REQUIRED: '请使用检索词分组修改检索式。', CREDENTIAL_VALUE_INVALID: '请输入有效单行凭据（最多 4096 字符）；请勿同时包含两种引号。', CREDENTIAL_EXTERNALLY_MANAGED: '该凭据由外部环境管理，请在原入口修改。', CREDENTIAL_WRITE_FAILED: '凭据未保存，请检查本地配置权限后重试。', CREDENTIAL_ENV_FORMAT_UNSUPPORTED: '凭据文件格式无法安全编辑，原文件未改变。', WEEKLY_CHANGED_RELOAD: '当前文献已更新，请刷新页面后重试。' };
+const pageNames = { home: '概览 · Overview', weekly: '文献 · Literature', feedback: '反馈 · Feedback', settings: '设置 · Settings', system: '系统 · System', setup: '首次配置 · Setup' };
+const errorMessages = { SHARED_MODEL_PROVIDER_MISMATCH: '请检查 AI 服务地址；API Key 未保存。', SETTING_VALUE_INVALID: '请检查字段格式或允许范围，原设置未改变。', SEARCH_KEYWORD_OWNER_REQUIRED: '请使用检索词分组修改检索式。', CREDENTIAL_VALUE_INVALID: '请输入有效单行凭据（最多 4096 字符）；请勿同时包含两种引号。', CREDENTIAL_EXTERNALLY_MANAGED: '该凭据由外部环境管理，请在原入口修改。', CREDENTIAL_WRITE_FAILED: '凭据未保存，请检查本地配置权限后重试。', CREDENTIAL_ENV_FORMAT_UNSUPPORTED: '凭据文件格式无法安全编辑，原文件未改变。', WEEKLY_CHANGED_RELOAD: '当前文献已更新，请刷新页面后重试。' };
 // Keep the existing API/canonical values; the stored learning action is unchanged.
+Object.assign(errorMessages, { SESSION_REQUIRED: '会话已失效，请刷新页面后重试。', CSRF_REQUIRED: '安全校验未通过，请刷新页面后重试。', ORIGIN_REJECTED: '请求来源未通过安全校验。', CREDENTIAL_ACL_UNSAFE: '文件权限无法安全确认，凭据未保存，请在原配置入口检查权限。', CREDENTIAL_CONCURRENT_CHANGE: '凭据文件已被其他操作更改，请重新读取后重试。', CREDENTIAL_RECOVERY_REQUIRED: '凭据恢复未完成，请通过原配置入口检查后再继续。', CREDENTIAL_KEY_NOT_ALLOWED: '此凭据字段不允许修改。' });
 const feedbackLabels = { highly_relevant: '升级', relevant: '不变', maybe: '降级', irrelevant: '排除', do_not_recommend_similar: '排除（原强负反馈）' };
+Object.assign(errorMessages, {
+  CREDENTIAL_ACL_RUNTIME_UNAVAILABLE: '安全校验运行时不可用，未保存。请完整解压官方程序包后重试；无需修改目录权限。',
+  CREDENTIAL_ACL_CHECK_FAILED: '安全校验未能完成，未保存。请关闭并重启程序后重试；不要放宽目录权限。',
+});
 const feedbackActions = ['highly_relevant', 'relevant', 'maybe', 'irrelevant'];
 const manualGrades = ['A', 'B', 'C', 'D'];
 const statusLabels = { pending: '待确认', candidate: '候选', accepted: '已接受', revised: '已修改接受', rejected: '已拒绝', superseded: '已被替代', expired: '已过期' };
 const riskLabels = { low: '低', medium: '中', high: '高' };
 const settingGroups = [
   ['common', '常用设置', ['General', 'Sources', 'Search', 'RSS']],
-  ['review', '模型与审阅', ['Models', 'Ranking / Review']],
+  ['review', 'AI 功能配置', ['Models', 'Ranking / Review']],
   ['runtime', '运行路径', ['Runtime']],
   ['automation', '自动化', ['Radar', 'Weekly', 'Integrity']],
-  ['connections', '连接与通知', ['Zotero', 'Notifications', 'Credentials']],
+  ['connections', '通知与推送', ['Zotero', 'Notifications', 'Credentials']],
 ];
 const settingViews = {
   common: [['databases', '文献数据库', ['Sources']], ['rss', 'RSS 订阅', ['Sources', 'RSS']], ['period', '检索周期', ['General', 'Search']]],
-  review: [['translation', '标题翻译', ['Models']], ['preference', '偏好学习', ['Models', 'Ranking / Review']]],
+  review: [['ai', 'AI 功能配置', ['Models', 'Ranking / Review']]],
   runtime: [['path', '运行路径', ['Runtime']]],
-  automation: [['radar', 'Daily Radar', ['Radar']], ['weekly', '周报', ['Weekly', 'Integrity']]],
-  connections: [['notifications', '通知', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
+  automation: [['radar', '自动化', ['Radar', 'Weekly', 'Integrity']]],
+  connections: [['notifications', '通知偏好', ['Notifications']], ['credentials', '凭据', ['Credentials']]],
 };
 function el(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; }
 function button(text, action) { const node = el('button', text); node.type = 'button'; node.addEventListener('click', async () => {
   node.disabled = true; node.setAttribute('aria-busy', 'true'); notice.dataset.kind = 'success';
-  const scope = node.closest('.setting, article, .research-form, .settings-subgroup, .settings-section');
+  const modal = node.closest('.channel-dialog') ? activeChannelModal : null;
+  modal?.setBusy(true);
+  const scope = modal?.dialog || node.closest('.setting, article, .research-form, .settings-subgroup, .settings-section');
   const previousNotice = notice.textContent;
   scope?.querySelectorAll('.field-error,.save-state').forEach((entry) => entry.remove());
   scope?.querySelectorAll('[aria-invalid]').forEach((entry) => { entry.removeAttribute('aria-invalid'); entry.removeAttribute('aria-describedby'); });
   try { await action(); if (scope?.isConnected && notice.textContent && notice.textContent !== previousNotice) { const state = el('p', notice.textContent, 'save-state meta'); state.setAttribute('role', 'status'); scope.append(state); } } catch (error) {
     notice.dataset.kind = 'error'; notice.textContent = error.message;
-    if (scope) { const message = el('p', error.message, 'field-error'); message.id = `error-${crypto.randomUUID()}`; message.setAttribute('role', 'alert'); scope.append(message); scope.querySelectorAll('input,select,textarea').forEach((entry) => { entry.setAttribute('aria-invalid', 'true'); entry.setAttribute('aria-describedby', message.id); }); }
-  } finally { node.disabled = false; node.removeAttribute('aria-busy'); }
+    if (scope) { const message = el('p', error.message, 'field-error'); message.id = `error-${crypto.randomUUID()}`; message.setAttribute('role', 'alert'); message.tabIndex = -1; scope.append(message); if (modal) message.focus(); scope.querySelectorAll('input,select,textarea').forEach((entry) => { entry.setAttribute('aria-invalid', 'true'); entry.setAttribute('aria-describedby', message.id); }); }
+  } finally { modal?.setBusy(false); if (!modal) node.disabled = false; node.removeAttribute('aria-busy'); }
+  node.syncDisabled?.();
 }); return node; }
 function select(values, selected) { const node = el('select'); for (const [value, label] of values) { const option = el('option', label); option.value = value; node.append(option); } node.value = selected || ''; return node; }
 function label(text, input) { const node = el('label', text); input.id ||= `field-${crypto.randomUUID()}`; input.setAttribute('aria-label', text); node.htmlFor = input.id; node.append(input); return node; }
@@ -58,25 +74,25 @@ function contextCard(title, rows) {
   for (const row of rows.filter(Boolean)) card.append(el('p', row));
   return card;
 }
-const flowName = (flow) => flow === 'weekly' ? '周报' : flow === 'radar' ? 'Daily Radar' : '待确认';
+const flowName = (flow) => flow === 'weekly' ? '研究简报' : flow === 'radar' ? '每日雷达' : '待确认';
 const reportDay = (value) => value ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' }).format(new Date(value)) : '待确认';
 function taskIssue(plan) {
   if (plan.status === 'unsupported') return ['本地运行路径不支持定时任务', '请切换至 Zotero Desktop 或 Zotero Web。', 'settings/runtime/path', '前往运行路径'];
   if (plan.status === 'invalid') {
-    const cause = plan.reason === 'SCHEDULE_WEEKLY_MODE_INVALID' ? '周报运行配置不兼容'
-      : plan.reason === 'SCHEDULE_INTERVAL_UNSUPPORTED' ? '周报周期配置不受支持'
+    const cause = plan.reason === 'SCHEDULE_WEEKLY_MODE_INVALID' ? '研究简报运行配置不兼容'
+      : plan.reason === 'SCHEDULE_INTERVAL_UNSUPPORTED' ? '研究简报周期配置不受支持'
         : plan.reason === 'SCHEDULE_STATE_UNREADABLE' ? '计划记录暂无法读取'
           : plan.reason?.startsWith('SCHEDULE_DAY_DECISION_') ? '当日计划记录异常' : '计划记录格式或内容不一致';
     const route = plan.reason === 'SCHEDULE_WEEKLY_MODE_INVALID' ? 'settings/automation/weekly' : 'system';
-    return ['计划状态异常', `${cause}；已暂停自动选择流程。`, route, route === 'system' ? '查看运行状态' : '前往周报设置'];
+    return ['计划状态异常', `${cause}；已暂停自动选择流程。`, route, route === 'system' ? '查看运行状态' : '前往研究简报设置'];
   }
   if (plan.currentRun?.state === 'unconfirmed') return ['上次运行结果尚未确认', '已暂停开启新的写入流程。', 'system', '查看运行状态'];
-  if (plan.currentRun?.flow === 'weekly' && plan.currentRun.business === 'completed' && plan.notification === 'pending') return ['周报已完成，通知待恢复', '周报主体已成功；通知按现有收据恢复。', 'system', '查看运行状态'];
+  if (plan.currentRun?.flow === 'weekly' && plan.currentRun.business === 'completed' && plan.notification === 'pending') return ['研究简报已完成，通知待恢复', '研究简报主体已成功；通知按现有收据恢复。', 'system', '查看运行状态'];
   if (plan.currentRun?.state === 'recovery_required') {
-    if (plan.currentRun.flow === 'weekly' && plan.currentRun.business === 'not_completed') return ['周报未完成，等待恢复', '周期尚未推进；下次仍将优先处理周报。', 'system', '查看运行状态'];
+    if (plan.currentRun.flow === 'weekly' && plan.currentRun.business === 'not_completed') return ['研究简报未完成，等待恢复', '周期尚未推进；下次仍将优先处理研究简报。', 'system', '查看运行状态'];
     return ['需要恢复上次运行', '上次任务仍待处理。', 'system', '查看运行状态'];
   }
-  if (plan.status === 'radar_disabled') return ['Daily Radar 未启用', '今日任务无法运行，也不会改为周报。', 'settings/automation/radar', '前往 Radar 设置'];
+  if (plan.status === 'radar_disabled') return ['每日雷达 未启用', '今日任务无法运行，也不会改为研究简报。', 'settings/automation/radar', '前往自动化设置'];
   return null;
 }
 function taskCard(plan) {
@@ -87,11 +103,11 @@ function taskCard(plan) {
     card.append(el('p', issue[0], 'plan-headline'), el('p', issue[1], 'meta'), button(issue[3], () => navigate(issue[2])));
     return card;
   }
-  if (!plan.weekly.lastSuccessfulPlannedSlot && !plan.currentRun) card.append(el('p', '尚未建立周报周期', 'plan-headline'), el('p', '首次计划任务将生成周报。', 'meta'));
+  if (!plan.weekly.lastSuccessfulPlannedSlot && !plan.currentRun) card.append(el('p', '尚未建立研究简报周期', 'plan-headline'), el('p', '首次计划任务将生成研究简报。', 'meta'));
   else card.append(el('p', flowName(plan.today.selectedFlow), 'plan-headline'));
   const facts = el('div', undefined, 'plan-facts');
   facts.append(el('span', `今天 ${plan.scheduledTime} · 北京时间`));
-  if (plan.weekly.nextDuePlannedSlot) facts.append(el('span', `${!plan.weekly.lastSuccessfulPlannedSlot ? '首次周报' : '下次周报'}：${plan.weekly.nextDuePlannedSlot === plan.today.plannedSlot ? `今天 ${plan.scheduledTime}` : reportDay(plan.weekly.nextDuePlannedSlot)}`));
+  if (plan.weekly.nextDuePlannedSlot) facts.append(el('span', `${!plan.weekly.lastSuccessfulPlannedSlot ? '首次研究简报' : '下次研究简报'}：${plan.weekly.nextDuePlannedSlot === plan.today.plannedSlot ? `今天 ${plan.scheduledTime}` : reportDay(plan.weekly.nextDuePlannedSlot)}`));
   card.append(facts);
   if (plan.status === 'before_slot') card.append(el('p', '尚未到时间', 'plan-state'));
   else if (plan.currentRun?.state === 'completed') card.append(el('p', '已完成', 'plan-state'));
@@ -113,7 +129,89 @@ async function api(url, value) {
   const response = await fetch(url, value === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(value) }).catch(() => { throw new Error('无法连接本地服务，请检查服务是否仍在运行。'); });
   const result = await response.json().catch(() => { throw new Error('服务响应暂不可用，请刷新页面后重试。'); });
   if (!response.ok) throw new Error(errorMessages[result.error] || '操作未完成。请检查输入或刷新页面后重试；安全限制仍然有效。');
+  if (value !== undefined && ['/api/settings', '/api/credentials'].includes(url)) { notice.textContent = '配置保存成功，诊断重新检查中…'; await refreshConfigurationDiagnostics(); notice.textContent = diagnosticState === 'current' ? '配置保存成功，相关诊断已更新。' : '配置保存成功；诊断结果未知，保留上次问题。'; }
   return result;
+}
+let diagnosticCache = null;
+let diagnosticFull = false;
+let diagnosticState = 'unknown';
+let configurationRequest = null;
+async function refreshConfigurationDiagnostics() {
+  if (configurationRequest) { await configurationRequest; return refreshConfigurationDiagnostics(); }
+  diagnosticState = 'checking';
+  configurationRequest = api('/api/doctor/configuration').then(report => {
+    if (!Array.isArray(report.configurationIssues)) throw new Error('UNKNOWN');
+    diagnosticCache = { ...(diagnosticCache || { checks: [] }), configurationIssues: report.configurationIssues };
+    diagnosticState = 'current';
+  }).catch(() => { diagnosticState = 'unknown'; }).finally(() => { configurationRequest = null; });
+  await configurationRequest;
+}
+const settingDestinations = {
+  'ai.key': ['settings/models/ai', '[data-credential="PAPERECHO_MODEL_API_KEY"]'],
+  'ai.endpoint': ['settings/models/ai', '[data-ai-field="endpoint"]'],
+  'ai.model': ['settings/models/ai', '[data-ai-field="model"]'],
+};
+let pendingSettingTarget = null;
+function goToSetting(target) { if (!settingDestinations[target]) return; pendingSettingTarget = target; navigate(settingDestinations[target][0]); }
+function focusSettingTarget() {
+  const destination = settingDestinations[pendingSettingTarget]; pendingSettingTarget = null;
+  const node = destination && main.querySelector(destination[1]); if (!node) return;
+  for (const details of node.querySelectorAll('details')) details.open = true;
+  const details = node.closest('details'); if (details) details.open = true;
+  const edit = node.querySelector('.credential-actions button'); if (edit && !edit.hidden) edit.click();
+  node.scrollIntoView({ block: 'center', behavior: 'smooth' }); node.classList.add('setting-highlight');
+  node.tabIndex = -1; node.focus({ preventScroll: true });
+  const field = node.querySelector('input:not([disabled]):not([readonly]),select'); if (field) field.focus({ preventScroll: true });
+  setTimeout(() => node.classList.remove('setting-highlight'), 2500);
+}
+async function appendAiService(container, data, refreshModel, credentials) {
+  const value = id => data.find(row => row.id === id)?.value;
+  const section = el('section', undefined, 'settings-section section ai-service'); container.append(section);
+  section.append(el('h3', 'AI 服务配置'));
+  const grid = el('div', undefined, 'ai-grid'); section.append(grid);
+  const provider = select([['compatible', 'OpenAI 兼容服务'], ['openai', 'OpenAI'], ['anthropic', 'Anthropic']], value('ai.provider') || 'compatible');
+  const endpoint = el('input'); endpoint.type = 'url'; endpoint.required = true; endpoint.value = value('ai.endpoint') || '';
+  const model = el('input'); model.required = true; model.value = value('ai.model') || '';
+  for (const [key, title, input] of [['provider', '服务提供商', provider], ['endpoint', 'API 地址', endpoint], ['model', '模型', model]]) {
+    const row = el('div', undefined, 'setting'); row.dataset.aiField = key; row.append(label(title, input)); grid.append(row);
+  }
+  const shared = credentials.find(row => row.id === 'PAPERECHO_MODEL_API_KEY');
+  const keyRow = shared && appendCredentialEditor(grid, shared, async () => { await refreshModel(); sync(); }, { compact: true });
+  const keyHint = el('p', '', 'meta ai-key-hint'); section.append(keyHint);
+  const capability = el('p', '', 'meta ai-capability'); capability.setAttribute('role', 'status'); grid.querySelector('[data-ai-field=model]').append(capability);
+  const state = el('p', '', 'meta'); state.setAttribute('role', 'status');
+  const sync = () => {
+    const caps = window.PaperEchoAI.capabilities(provider.value, model.value, value('ai.api_version') || '2023-06-01');
+    capability.textContent = caps.thinking ? '' : caps.confirmed ? '此模型不支持思考，使用标准模式。' : '模型能力未确认，使用基础兼容协议，不发送思考扩展。';
+    keyHint.textContent = shared?.configured && !shared?.effectiveConfigured ? 'API Key 与当前服务不匹配，请重新配置。' : '';
+  };
+  for (const input of [provider, model]) input.addEventListener('input', sync);
+  provider.addEventListener('change', () => { if (!endpoint.value || /api\.(openai|anthropic)\.com/.test(endpoint.value)) endpoint.value = provider.value === 'anthropic' ? 'https://api.anthropic.com/v1' : provider.value === 'openai' ? 'https://api.openai.com/v1' : ''; sync(); });
+  section.addEventListener('paperecho:preview-key-saved', async () => { await refreshModel(); keyRow?.refreshCredential?.(); sync(); });
+  const fields = () => ({ api_version: value('ai.api_version') || '2023-06-01', provider: provider.value, endpoint: endpoint.value.trim(), model: model.value.trim() });
+  const validate = () => {
+    if (!endpoint.checkValidity() || !model.value.trim()) throw new Error('请填写有效的 API 地址和模型。');
+  };
+  section.addEventListener('input', () => { state.textContent = '编辑中，尚未保存。'; });
+  const testState = el('p', '', 'meta'); testState.setAttribute('role', 'status');
+  const actions = el('div', undefined, 'actions ai-service-actions');
+  actions.append(button('测试连接', async () => {
+    validate(); testState.textContent = '正在验证模型调用（可能产生少量费用）…';
+    const keyInput = keyRow?.querySelector('input[type=password]');
+    let result;
+    try { result = await api('/api/ai/test', { ...fields(), ...(keyInput?.value ? { apiKey: keyInput.value } : {}) }); }
+    catch (error) { testState.textContent = '测试未完成，请检查本地服务后重试。'; throw error; }
+    testState.textContent = ({ preview: '模拟预览：未联网，未验证真实 API。', reachable: '服务已响应，但未确认模型能返回有效结果。', callable: '连接成功，认证与模型调用已通过。', authentication: '认证失败，请检查 API Key。', model_or_address: '模型或 API 地址不存在，请检查模型名称、权限和接口路径。', model: '模型不可用，请检查模型名称或权限。', address: 'API 地址无效。', protocol: '服务响应不完整或协议不匹配，未确认调用成功。', network: '网络故障或请求超时，未确认模型可调用。', configuration: '配置不完整或模型参数不受支持。', limited: '服务限流或额度不足，未确认模型可调用。' })[result.status] || '结果未知，请稍后重试。';
+  }));
+  actions.append(button('保存 AI 配置', async () => {
+    validate(); state.textContent = '正在保存…';
+    const updates = Object.entries(fields()).map(([key, v]) => ({ id: `ai.${key}`, value: v })); updates.push({ id: 'ai.enabled', value: true });
+    let saved = false;
+    try { await api('/api/settings', { updates }); saved = true; await refreshModel(); keyRow?.refreshCredential?.(); sync(); state.textContent = diagnosticState === 'current' ? '已保存，诊断已更新。' : '已保存，诊断结果待确认。'; }
+    catch (error) { state.textContent = saved ? '已保存，页面状态待确认。' : '保存失败，请重试。'; if (!saved) throw error; }
+  }));
+  actions.lastElementChild.classList.add('primary');
+  section.append(actions, el('p', '测试连接会发送极短请求，可能产生少量费用。', 'meta ai-test-note'), testState, state); sync();
 }
 // Presentation-only queue: source grades/order are never mutated. Saving is
 // serialized; failed or uncertain requests reuse their id until acknowledged.
@@ -154,7 +252,7 @@ function pendingPaperCounts(items = []) {
   const visible = displayablePapers(items);
   return {
     normal: visible.filter((item) => !item.needsReview && item.feedbackAllowed && !item.feedback).length,
-    manual: items.filter((item) => item.needsReview && (item.pendingReview || ['A', 'B', 'C'].includes(displayGrade(item))) && item.feedbackAllowed && !item.manualGrade).length,
+    manual: items.filter((item) => item.manualReviewPending && item.feedbackAllowed && !item.manualGrade).length,
   };
 }
 const pendingRuleCount = (rows = []) => rows.filter((entry) => ['pending', 'candidate'].includes(entry.status)).length;
@@ -215,6 +313,7 @@ function gradeBadge(value) {
 }
 function paperHeading(card, item, { showGrade = true } = {}) {
   card.append(el('h3', item.title || '原始标题未提供', 'paper-title'));
+  if (!String(item.title || '').trim()) card.append(el('p', [item.doi && `DOI：${item.doi}`, item.pmid && `PMID：${item.pmid}`, item.url && `来源链接：${item.url}`].filter(Boolean).join(' · '), 'meta'));
   if (item.translatedTitle && item.translatedTitle !== item.title) card.append(el('p', item.translatedTitle, 'translated-title'));
   card.append(el('p', [item.journal, item.year, item.source].filter(Boolean).join(' · '), 'meta'));
   if (showGrade) { const badges = el('div', undefined, 'badge-row'); badges.append(gradeBadge(displayGrade(item))); card.append(badges); }
@@ -231,23 +330,196 @@ function gradeEvidence(item) {
 async function home() {
   const [status, schedule, weeklyData] = await Promise.all([api('/api/status'), api('/api/schedule-status'), loadWeekly()]); const visibleWeekly = displayablePapers(weeklyData.items); const grades = gradeCounts(visibleWeekly);
   main.append(pageIntro('研究工作空间', '从最近的文献开始，让每次反馈帮助下一次推荐。'));
-  main.append(taskCard(schedule));
+  const planCard = taskCard(schedule); main.append(planCard);
+  planCard.append(manualRunView());
+  const actions = el('div', undefined, 'actions quick-links page-toolbar'); const review = button('开始文献评级', () => navigate('feedback/rating/normal')); review.className = 'primary'; actions.append(review, button('提交研究方向反馈', () => navigate('feedback/research'))); planCard.append(actions);
   const grid = el('div', undefined, 'grid page-summary');
   const date = (value) => value ? new Date(value).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }) : '暂无记录';
-  for (const [name, value] of [['最近周报', date(status.lastWeekly)], ['最近 Radar', date(status.lastRadar)], ['本次文献数量', visibleWeekly.length], ['待确认规则建议', status.pendingSuggestions ?? '暂无统计']]) {
+  for (const [name, value] of [['最近研究简报', date(status.lastWeekly)], ['最近每日雷达', date(status.lastRadar)], ['本次文献数量', visibleWeekly.length], ['待确认规则建议', status.pendingSuggestions ?? '暂无统计']]) {
     const card = el('section', undefined, 'card'); card.append(el('h3', name), el('p', String(value), 'metric')); grid.append(card);
   }
   main.append(grid, el('p', `A级 ${grades.A} · B级 ${grades.B} · C级 ${grades.C} · 待处理反馈 ${visibleWeekly.filter((item) => !item.feedback).length}`, 'overview-summary'));
   const strip = el('div', undefined, 'summary-strip page-summary'); strip.append(el('p', `最近运行：${status.lastRun?.status === 'completed' ? '已完成' : status.lastRun?.status === 'failed' ? '未完成，请检查运行报告' : '暂无可靠状态'}`), el('p', `需人工复核：${status.needsReview ?? '暂无统计'}`)); main.append(strip);
   if (status.integrity) main.append(el('p', `完整性提醒：新撤稿 ${status.integrity.newlyConfirmedRetractions ?? 0} · 更正 ${status.integrity.newCorrections ?? 0} · 关注声明 ${status.integrity.newExpressionsOfConcern ?? 0}`, 'meta'));
-  const actions = el('div', undefined, 'actions quick-links page-toolbar'); const review = button('开始文献评级', () => navigate('feedback/rating/normal')); review.className = 'primary'; actions.append(review, button('提交研究方向反馈', () => navigate('feedback/research'))); main.append(actions);
+}
+// Preview and real execution use separate controllers with the same view.
+function workflowPreview() {
+  const preview = window.paperEchoWorkflowPreview;
+  return preview?.kind === 'PAPERECHO_MEMORY_RUN_PREVIEW' && typeof preview.start === 'function' && typeof preview.snapshot === 'function' && typeof preview.subscribe === 'function' ? preview : null;
+}
+function liveRunController() {
+  let state = {status:'unknown', stages:[], products:[], elapsed:0, current:-1}, listener, timer, active = true;
+  const publish = () => listener?.();
+  const read = async () => {
+    try { const next = await api('/api/run'); if (active) state = next; }
+    catch { if (active) state = {...state,status:'unknown',error:'连接中断，运行结果尚未确认。'}; }
+    if (!active) return;
+    publish();
+    if (state.status === 'running') timer = setTimeout(read, 3000);
+  };
+  return { snapshot: () => state,
+    subscribe(fn) { listener = fn; void read(); return () => {active = false; clearTimeout(timer);}; },
+    async start() {
+      if (['running','unknown'].includes(state.status)) return;
+      state = {...state,status:'running',error:null}; publish(); clearTimeout(timer);
+      try { state = await api('/api/run', {}); }
+      catch { state = {...state,status:'unknown',error:'无法确认启动结果，请刷新状态；不会自动重试启动。'}; }
+      if (active) {publish(); if(state.status === 'running')timer = setTimeout(read,3000);}
+    },
+  };
+}
+function manualRunView() {
+  const preview = workflowPreview();
+  const controller = preview || liveRunController();
+  let previousStatus;
+  const view = el('section', undefined, 'manual-run-entry');
+  const heading = el('div', undefined, 'manual-run-heading');
+  const copy = el('div'); const stateText = el('p', undefined, 'manual-run-state'); stateText.setAttribute('role', 'status');
+  const description = el('p', preview ? '模拟演示，不执行真实业务。' : '运行会调用已配置的 AI、生成文件并写回 Zotero；关闭本地后端可能中断任务。', 'meta');
+  copy.append(el('h3', '工作流运行'), stateText, description);
+  const actions = el('div', undefined, 'actions manual-run-actions');
+  const start = button('立即运行', async () => { manualRunExpanded = true; syncExpanded(); await controller.start(); }); start.className = 'primary';
+  start.syncDisabled = () => { start.disabled = ['running', 'unknown'].includes(controller.snapshot().status); };
+  const toggle = button('展开详情', () => { manualRunExpanded = !manualRunExpanded; syncExpanded(); });
+  actions.append(start, toggle); heading.append(copy, actions); view.append(heading);
+  const labels = { idle: '未运行', running: '运行中', success: '成功', failed: '失败', unknown: '状态未知' };
+  const recent = el('span', undefined, 'meta'); view.append(recent);
+  const detail = el('div', undefined, 'manual-run-details'); detail.id = 'manual-run-detail'; view.append(detail);
+  toggle.setAttribute('aria-controls', detail.id);
+  const syncExpanded = () => { detail.hidden = !manualRunExpanded; toggle.textContent = manualRunExpanded ? '收起详情' : '展开详情'; toggle.setAttribute('aria-expanded', String(manualRunExpanded)); followUp.hidden = !manualRunExpanded; };
+  const followUp = el('p', '后续操作', 'meta manual-run-follow-up'); view.append(followUp);
+  const facts = el('dl', undefined, 'manual-run-facts'); const values = {};
+  {
+    for (const [key, title] of [['elapsed', '已运行耗时'], ['startedAt', '开始时间'], ['endedAt', '结束时间']]) { const pair = el('div'); values[key] = el('dd', '—'); pair.append(el('dt', title), values[key]); facts.append(pair); }
+    detail.append(facts);
+  }
+  const stageRows = []; let progress; const current = el('p', undefined, 'manual-run-current');
+  const output = el('div', undefined, 'manual-run-output'); const error = el('p', undefined, 'field-error'); error.setAttribute('role', 'alert'); error.hidden = true;
+  {
+    if (preview) detail.append(el('p', '研究简报分支演示 · 各阶段及耗时均为模拟；每日雷达不执行后续写回与简报导出。', 'meta'), el('p', '运行前检查：模拟通过。实际入口另有配置、间隔及后端就绪检查，失败会阻断后续步骤。', 'meta'));
+    progress = el('progress'); progress.max = Math.max(1, controller.snapshot().stages.length); progress.setAttribute('aria-label', '模拟阶段完成进度');
+    detail.append(current, progress);
+    const stages = el('ol', undefined, 'manual-run-stages');
+    for (const [i, stage] of controller.snapshot().stages.entries()) {
+      const row = el('li'); const marker = el('span', String(i + 1), 'manual-stage-marker'); const body = el('div');
+      const status = el('span', undefined, 'manual-stage-status'); body.append(el('strong', stage.name), el('p', stage.description, 'meta')); row.append(marker, body, status); stages.append(row); stageRows.push({ row, marker, status });
+    }
+    detail.append(stages, error, output);
+  }
+  const time = value => value ? new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—';
+  const refresh = () => {
+    const state = controller.snapshot(); start.syncDisabled();
+    if (!preview && state.status === 'running' && previousStatus !== 'running') manualRunExpanded = true;
+    previousStatus = state.status;
+    stateText.textContent = `${labels[state.status] || '状态未知'}${preview ? ' · 模拟运行' : state.runId ? ' · ' + state.runId : ''}`;
+    view.dataset.state = state?.status || 'unavailable';
+    recent.textContent = state?.startedAt ? `最近${preview ? '模拟' : ''}运行：${time(state.startedAt)} · ${labels[state.status]}` : '';
+    followUp.hidden = !manualRunExpanded; syncExpanded();
+    values.elapsed.textContent = state.startedAt && Number.isFinite(state.elapsed) ? `${Math.floor(state.elapsed / 60)} 分 ${state.elapsed % 60} 秒` : '—'; values.startedAt.textContent = time(state.startedAt); values.endedAt.textContent = time(state.endedAt);
+    current.textContent = state.status === 'idle' ? '尚未开始' : `${state.status === 'failed' ? '失败阶段' : '当前阶段'}：${state.phase || state.stages[state.current]?.name || '尚未确认'}`;
+    progress.hidden = !preview;
+    const list = detail.querySelector('ol');
+    if (stageRows.length !== state.stages.length) {
+      stageRows.length = 0; list.replaceChildren();
+      state.stages.forEach((stage, i) => {
+        const row = el('li'), marker = el('span', String(i + 1), 'manual-stage-marker'), body = el('div'), status = el('span', '', 'manual-stage-status');
+        body.append(el('strong', stage.name)); row.append(marker, body, status); list.append(row); stageRows.push({row,marker,status});
+      });
+    }
+    progress.value = state.stages.filter(stage => ['completed', 'skipped'].includes(stage.status)).length;
+    const stageLabels = { pending: '待执行', running: '进行中', completed: '完成', failed: '失败', skipped: '跳过' };
+    state.stages.forEach((stage, i) => { const item = stageRows[i]; item.row.dataset.state = stage.status; item.status.textContent = `${stageLabels[stage.status] || '未确认'}${Number.isFinite(stage.elapsed) ? ` · ${preview ? '模拟 ' : ''}${Math.round(stage.elapsed * 10) / 10} 秒` : ''}`; item.marker.textContent = stage.status === 'completed' ? '✓' : String(i + 1); });
+    error.hidden = !state.error; error.textContent = state.error || '';
+    output.replaceChildren(); if (preview) output.append(el('p', '结果通知：模拟未配置，跳过；仅在导出成功后按通知配置执行。', 'meta'));
+    if (state.settingTarget) output.append(button('前往设置', () => state.settingTarget === 'runtime.path' ? navigate('settings/runtime/path') : goToSetting(state.settingTarget))); output.append(el('strong', preview && state.status === 'success' ? '模拟产物 · 未创建文件' : '本次运行产物'), el('p', state.status === 'failed' && !state.products.length ? (preview ? '本次模拟未生成最终产物。' : '尚无已确认产物。') : state.products.length ? '' : '尚无产物。', 'meta'));
+    for (const product of state.products) output.append(el('p', product.name), el('code', product.path));
+  };
+  refresh(); disposeManualRunView = controller.subscribe(refresh); return view;
 }
 function empty(title, text) { const box = el('section', undefined, 'empty-state'); box.append(el('h3', title), el('p', text)); main.append(box); }
+async function downloadSupportBundle() {
+  const name = 'paperecho-support.zip'; let handle;
+  if (!navigator.userAgent.includes('Electron/') && typeof window.showSaveFilePicker === 'function') handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'PaperEcho 诊断包', accept: { 'application/zip': ['.zip'] } }] });
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch('/api/support-bundle', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: '{}', signal: controller.signal });
+    const length = Number(response.headers.get('content-length'));
+    if (!response.ok || response.headers.get('content-type') !== 'application/zip' || !Number.isSafeInteger(length) || length < 1 || length > 65536) throw new Error('SUPPORT_EXPORT_FAILED');
+    const blob = await response.blob();
+    if (blob.size !== length) throw new Error('SUPPORT_EXPORT_FAILED');
+    if (handle) {
+      const writable = await handle.createWritable();
+      try { await writable.write(blob); await writable.close(); }
+      catch (error) { await writable.abort().catch(() => {}); throw error; }
+      return '诊断包已保存。';
+    }
+    const url = URL.createObjectURL(blob); const link = el('a'); link.href = url; link.download = name;
+    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+    return '诊断包下载已发起，请在浏览器或桌面保存对话框确认；取消保存不会上传文件。';
+  } finally { clearTimeout(timer); }
+}
 async function system() {
-  const status = await api('/api/status'); main.append(pageIntro('系统与数据状态', '这里展示已有运行证据，不主动连接外部服务或显示敏感路径。'));
-  const list = el('dl', undefined, 'status-list');
-  for (const [name, value] of [['版本', 'PaperEcho v2.4'], ['本地服务', '已响应 · 仅本机访问'], ['运行数据', '使用启动时解析的当前工作区；路径不在网页展示'], ['检索来源', status.sources.join('、') || '未配置'], ['Zotero', status.zotero === 'unknown' ? '暂无可靠记录' : '已有历史写入记录；非实时连接检测'], ['下次运行', status.nextScheduledRun || '暂无可靠调度信息'], ['兼容入口', 'XLSX / DOCX 仍受支持；不进行双向反馈同步']]) list.append(el('dt', name), el('dd', value));
-  main.append(list);
+  main.append(pageIntro('系统健康 · System Health', '只读本地检查；不会连接外部服务、修改权限、恢复工作流或显示凭据。'));
+  const facts = el('dl', undefined, 'status-list');
+  const { version } = await api('/api/version');
+  for (const [name, value] of [['应用版本', version ? `PaperEcho v${version}` : 'PaperEcho（版本未标定）'], ['本地服务', '已响应 · 仅本机访问']]) facts.append(el('dt', name), el('dd', value));
+  const statusPanel = el('section', undefined, 'settings-section system-status'); statusPanel.append(facts); main.append(statusPanel);
+  const support = el('section', undefined, 'settings-section system-support');
+  const supportState = el('p', '尚未导出。', 'meta'); supportState.setAttribute('role', 'status'); supportState.setAttribute('aria-live', 'polite'); supportState.dataset.supportStatus = 'idle';
+  const exportButton = button('导出诊断包', async () => {
+    if (supportExportBusy) return;
+    const restoreFocus = document.activeElement === exportButton;
+    supportExportBusy = true; exportButton.disabled = true; supportState.dataset.supportStatus = 'busy'; support.setAttribute('aria-busy', 'true');
+    supportState.textContent = '正在生成安全诊断包…';
+    try { supportState.textContent = await downloadSupportBundle(); supportState.dataset.supportStatus = 'success'; }
+    catch (error) { supportState.dataset.supportStatus = 'failed'; supportState.textContent = error.name === 'AbortError' ? '已取消选择或导出超时；没有上传文件，可稍后重试。' : '无法安全导出或保存诊断包；请检查本地凭据安全状态、保存权限后重试。原健康检查结果保持不变。'; }
+    finally {
+      supportExportBusy = false; exportButton.disabled = false; main.querySelectorAll('[data-support-export]').forEach(node => { node.disabled = false; }); support.removeAttribute('aria-busy');
+      if (restoreFocus && exportButton.isConnected && document.activeElement === document.body) exportButton.focus({ preventScroll: true });
+    }
+  });
+  exportButton.dataset.supportExport = ''; exportButton.disabled = supportExportBusy;
+  support.append(el('h3', '本地诊断包'), el('p', '仅包含版本、运行环境、健康检查状态及有限事件统计；不包含 Secret、用户目录、研究正文或原始日志。仅在主动操作后生成，由你选择保存位置，不自动上传。'), exportButton, supportState);
+  main.append(support);
+  const results = el('section', undefined, 'settings-section doctor-results'); results.setAttribute('aria-live', 'polite');
+  const checkStatus = el('p', '诊断重新检查中…', 'meta'); checkStatus.setAttribute('role', 'status');
+  const refreshResults = async (full = false) => {
+    results.setAttribute('aria-busy', 'true');
+    try {
+      checkStatus.textContent = '诊断重新检查中…';
+      if (full || !diagnosticFull) { const fresh = await api('/api/doctor'); if (!Array.isArray(fresh.checks) || !Array.isArray(fresh.configurationIssues)) throw new Error('UNKNOWN'); diagnosticCache = fresh; diagnosticFull = true; diagnosticState = 'current'; }
+      else await refreshConfigurationDiagnostics();
+      if (diagnosticState === 'unknown') { checkStatus.textContent = '诊断结果未知，保留上次问题；请稍后刷新。'; if (!diagnosticCache) return; }
+      else checkStatus.textContent = '诊断已更新；仅检查已保存配置。';
+      const report = diagnosticCache; results.replaceChildren();
+      const labels = { WARN: '建议处理', FAIL: '需要处理', UNKNOWN: '待确认' };
+      results.dataset.doctorStatus = report.status;
+      const checks = report.checks.filter(check => check.status !== 'PASS' && (!check.checkId.startsWith('secret.') || ['FAIL', 'UNKNOWN'].includes(check.status)) && (!['preflight.optional', 'runtime.platform'].includes(check.checkId) || check.blocking || check.status === 'FAIL'));
+      const groups = [['配置问题', report.configurationIssues || []], ['运行与数据', checks]];
+      const count = groups.reduce((n, [, rows]) => n + rows.length, 0);
+      results.append(el('h3', count ? `需要关注 ${count} 项` : '未发现需要处理的问题'), el('p', '仅检查本地状态；外部服务未实测。', 'meta'));
+      for (const [title, rows] of groups) {
+        if (!rows.length) continue;
+        const group = el('section', undefined, 'doctor-group'); group.append(el('h4', title));
+        const grid = el('div', undefined, 'doctor-grid');
+        for (const check of rows) {
+          const item = el('article', undefined, 'doctor-check'); item.dataset.checkId = check.checkId;
+          item.append(el('h4', `${labels[check.status] || '待确认'} · ${check.summary}`));
+          if (check.actionableHint) item.append(el('p', check.actionableHint, 'meta'));
+          if (check.summary.length > 32 || (check.actionableHint || '').length > 36) {
+            const details = el('details'); details.append(el('summary', '查看完整说明'), el('p', check.summary), el('p', check.actionableHint || ''));
+            item.append(details);
+          }
+          if (settingDestinations[check.settingTarget]) item.append(button('前往设置', () => goToSetting(check.settingTarget)));
+          grid.append(item);
+        }
+        group.append(grid); results.append(group);
+      }
+    } catch { diagnosticState = 'unknown'; checkStatus.textContent = '诊断结果未知，保留上次问题；请稍后刷新。'; } finally { results.setAttribute('aria-busy', 'false'); }
+  };
+  const refresh = button('检查 / 刷新健康状态', () => refreshResults(true));
+  refresh.className = 'system-refresh'; statusPanel.append(refresh, checkStatus); main.append(results);
+  await refreshResults();
 }
 async function feedback() {
   const intro = { rating: ['文献评级', '核对系统评级；常规文献使用相对纠正，人工复核直接选择正确等级。'], research: ['研究方向反馈', '告诉 PaperEcho 最近推荐结果哪里与你的研究需求不一致。'], rules: ['规则建议', '核对由研究反馈生成的建议；安全校验始终生效。'] }[feedbackView];
@@ -307,8 +579,8 @@ async function paperReview(showIntro = true, section = reviewSection) {
   // Pending candidates are shown only in manual review, not in admitted Weekly papers.
   const visibleItems = displayablePapers(data.items);
   const groups = {
-    normal: visibleItems.filter((item) => !item.needsReview),
-    manual: data.items.filter((item) => item.needsReview && (item.pendingReview || ['A', 'B', 'C'].includes(displayGrade(item)))),
+    normal: visibleItems.filter((item) => item.reviewScopeBucket === undefined ? !item.needsReview : item.reviewScopeBucket === 'feedback'),
+    manual: data.items.filter((item) => (item.reviewScopeBucket === undefined ? item.manualReviewPending : item.reviewScopeBucket === 'manual') && item.feedbackAllowed),
   };
   const queues = Object.fromEntries(Object.entries(groups).map(([key, items]) => [key, createReviewQueue(items, (item) => Boolean(key === 'manual' ? item.manualGrade : item.feedback), (item) => item.feedbackAllowed)]));
   let queue = queues[reviewSection]; let message = ''; let messageKind = 'success';
@@ -323,12 +595,12 @@ async function paperReview(showIntro = true, section = reviewSection) {
       ? [['1', '评为 A 级'], ['2', '评为 B 级'], ['3', '评为 C 级'], ['4', '评为 D 级'], ['↑', '返回上一篇'], ['↓', '前往下一篇']]
       : [['1', '升级当前文献'], ['2', '保持当前评级'], ['3', '降低当前评级'], ['4', '排除当前文献'], ['↑', '返回上一篇'], ['↓', '前往下一篇']];
     context.replaceChildren(
-      contextCard(manual ? '人工复核' : '文献评级', [`已处理 ${processed} / ${queue.items.length}`, `待处理 ${queue.items.length - processed}`, manual ? '直接选择你确认的 A / B / C / D 等级。' : '用相对反馈校准当前文献的最终评级。']),
+      contextCard(manual ? '人工复核' : '文献评级', [`${manual ? '本次已处理' : '已处理'} ${processed} / ${queue.items.length}`, `待处理 ${queue.items.length - processed}`, manual ? '直接选择你确认的 A / B / C / D 等级。' : '用相对反馈校准当前文献的最终评级。']),
       keyboardHelp('数字键快速审阅', shortcuts, '可使用主键盘或小键盘数字键；在输入框中输入时快捷键会自动暂停。'),
     );
-    workspace.append(el('p', `已处理 ${processed} / 共 ${queue.items.length} · 待处理 ${queue.items.length - processed}`, 'queue-progress'));
+    workspace.append(el('p', `${manual ? '本次已处理' : '已处理'} ${processed} / 共 ${queue.items.length} · 待处理 ${queue.items.length - processed}`, 'queue-progress'));
     if (message) { const receipt = el('p', message, `queue-receipt ${messageKind}`); receipt.setAttribute('role', 'status'); workspace.append(receipt); }
-    if (processed === queue.items.length) workspace.append(el('p', '本队列已完成。可用上 / 下一篇回看并修改已记录反馈。', 'completion'));
+    if (processed === queue.items.length) workspace.append(el('p', manual ? '本轮人工复核已完成。可用上 / 下一篇回看并修改已确认等级。' : '本队列已完成。可用上 / 下一篇回看并修改已记录反馈。', 'completion'));
     const item = queue.items[queue.index]; const card = el('article', undefined, 'focused-card paper-card'); paperHeading(card, item, { showGrade: false });
     card.append(gradeEvidence(item));
     const selectedValue = reviewSection === 'manual' ? item.manualGrade : item.feedback;
@@ -385,16 +657,18 @@ async function research(showIntro = true) {
   input.addEventListener('input', () => { researchDraft = input.value; researchRequestId = crypto.randomUUID(); });
   const submit = button('提交研究反馈', async () => {
     if (!input.value.trim()) throw new Error('请先描述你的研究需求或推荐质量反馈。');
-    input.disabled = true; receipt.textContent = '正在提交与处理，请稍候…';
+    input.disabled = true; receipt.textContent = '正在保存，请稍候…';
     try {
       const result = await api('/api/research', { text: input.value, requestId: researchRequestId });
-      receipt.textContent = `已接收 · ${result.status === 'processed' ? '处理完成' : '暂未完成处理，输入已保留'} · 产生 ${result.suggestions} 条待确认建议。${result.warnings.length ? '存在处理提醒，请检查模型配置后重试。' : ''}`;
-      viewRules.hidden = false;
-      if (result.status === 'processed') { input.value = ''; researchDraft = ''; researchRequestId = crypto.randomUUID(); }
+      if (!result.saved) throw new Error('反馈保存未确认，请重试。');
+      notice.textContent = '';
+      receipt.textContent = result.status === 'processed' || result.status === 'consumed' ? '该反馈已处理，可在规则建议中查看。' : '已保存，等待下一次工作流处理；业务成功后发布待审核建议。';
+      viewRules.hidden = !['processed', 'consumed'].includes(result.status);
+      input.value = ''; researchDraft = ''; researchRequestId = crypto.randomUUID();
     } catch (error) { receipt.textContent = '提交未完成，输入已保留。'; throw error; } finally { input.disabled = false; }
   }); submit.className = 'primary';
   form.append(label('你的评价', input), el('p', '生成的建议会先进入人工确认，不会直接修改正式规则。', 'meta'), submit, receipt); const viewRules = button('查看规则建议', () => navigate('feedback/rules')); viewRules.hidden = true; form.append(viewRules);
-  main.append(workspaceColumns([form], [contextCard('提交后会发生什么', ['反馈会生成待确认建议，不直接修改正式规则。', '处理成功后可前往“规则建议”继续审阅。'])]));
+  main.append(workspaceColumns([form], [contextCard('提交后会发生什么', ['反馈立即保存，提交时不生成建议。', '下一次 每日雷达/研究简报 业务成功后发布建议，审核接受前不改变正式规则。'])]));
 }
 async function suggestions(showIntro = true) {
   if (showIntro) main.append(pageIntro('规则建议审阅', '接受、拒绝或修改后提交，自动保存并继续下一条。'));
@@ -425,11 +699,12 @@ async function suggestions(showIntro = true) {
       contextCard('建议概览', [`待确认 ${pendingRuleCount(rows)} 条`, `当前风险：${riskLabels[item.risk_level] || '待核对'}`, '接受成功后立即写入正式规则，下一次运行会读取。']),
       keyboardHelp('数字键快速处理', [['1', '接受当前建议'], ['2', '拒绝当前建议'], ['3', '修改当前建议'], ['↑', '返回上一条'], ['↓', '前往下一条']], '可使用主键盘或小键盘数字键；编辑建议时快捷键会自动暂停。'),
     );
-    workspace.append(el('p', `共 ${rows.length} 条 · 待确认 ${pendingRuleCount(rows)}`, 'queue-progress'));
+    workspace.append(el('p', `本次已处理 ${rows.length - pendingRuleCount(rows)} / 共 ${rows.length} · 待处理 ${pendingRuleCount(rows)}`, 'queue-progress'));
     if (message) { const state = el('p', message, `queue-receipt ${messageKind}`); state.setAttribute('role', 'status'); workspace.append(state); }
     const card = el('article', undefined, 'focused-card rule-card');
     const badges = el('div', undefined, 'badge-row'); badges.append(el('span', statusLabels[item.status] || '状态未提供', 'badge'), el('span', `风险：${riskLabels[item.risk_level] || '待核对'}`, item.risk_level === 'high' ? 'badge warning' : 'badge'));
     card.append(badges, el('h3', ruleTitle(item)), el('p', `目标：${({ 'screening_standards.md': '长期筛选标准', 'pubmed_pmc_search.json': 'PubMed 检索条件', 'openalex_search.json': 'OpenAlex 检索条件' })[item.target] || '待核对配置'}`), el('p', `建议理由：${rationaleText(item)}`));
+    if (item.feedback_event_ids?.length) card.append(el('p', `关联研究反馈 ${item.feedback_event_ids.length} 条${item.search_change ? ` · ${item.search_change.data_source} / ${item.search_change.strategy_id}` : ''}`, 'meta'));
     if (pending(item) && item.content_issue) card.append(el('p', '旧建议原文需要核对。请修改为清晰中文，或拒绝。', 'meta'));
     const details = el('details'); details.append(el('summary', '查看依据与技术详情'), el('p', item.evidence_text_excerpt || (item.evidence_titles || []).join('；') || '没有附加证据。'), el('p', `编号：${id} · 目标：${item.target || 'screening_standards.md'} · 变更类型：${item.change_type || 'add_rule'}`, 'meta')); card.append(details);
     if (receipt?.application_status === 'requires_manual_action' && pending(item)) card.append(el('p', '此前的接受意向未应用。可再次接受以尝试写入，或拒绝。', 'meta'));
@@ -459,15 +734,19 @@ async function suggestions(showIntro = true) {
     const pendingBefore = rows.filter(pending).length;
     const work = queue.submit(action + (action === 'revised' ? ':' + draft : ''),
       (entry) => api('/api/decision', { id: idOf(entry), decision: action, revisedRule: action === 'revised' ? draft : '', humanApproval: true }),
-      (entry, result) => { entry.status = result.status; if (action === 'revised') entry.rule_text = draft; delete entry.decision_receipt; decisionReceipts.delete(idOf(entry)); });
+      (entry, result) => {
+        if (['pending', 'candidate', 'accepted', 'rejected', 'revised', 'superseded', 'expired'].includes(result.status)) entry.status = result.status;
+        if (pending(entry)) { entry.decision_receipt = result; decisionReceipts.set(idOf(entry), result); }
+        else { if (action === 'revised') entry.rule_text = draft; delete entry.decision_receipt; decisionReceipts.delete(idOf(entry)); }
+      });
     draw();
     let saved = null;
     try {
       saved = await work;
       if (saved) {
         editing = false;
-        messageKind = 'success';
-        message = action === 'rejected' ? '已记录：拒绝。' : '已写入正式规则，下一次运行会读取。';
+        messageKind = pending(saved.item) ? 'error' : 'success';
+        message = pending(saved.item) ? '处理尚未完成，建议仍在待处理队列，请核对后重试。' : action === 'rejected' ? '已记录：拒绝。' : '已写入正式规则，下一次运行会读取。';
       }
     } catch (error) {
       const explanations = {
@@ -498,20 +777,22 @@ function rssEditor(setting, container) {
     list.replaceChildren();
     entries.forEach((entry, index) => {
       const row = el('div', undefined, 'rss-row'); const name = el('input'); name.value = entry.name; name.placeholder = '例如：期刊或机构名称'; const url = el('input'); url.type = 'url'; url.value = entry.url; url.placeholder = '例如：https://example.com/feed.xml'; const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = entry.enabled;
-      name.oninput = () => { entry.name = name.value; }; url.oninput = () => { entry.url = url.value; }; enabled.onchange = () => { entry.enabled = enabled.checked; };
-      row.append(label('名称', name), label('RSS URL', url), label('启用', enabled), button('删除该订阅', () => { entries.splice(index, 1); draw(); })); list.append(row);
+      const publicationTitle = el('input'); publicationTitle.value = entry.publicationTitle ?? ''; publicationTitle.maxLength = 200; publicationTitle.placeholder = '仅填写该 Feed 对应的正式期刊名；综合来源留空';
+      name.oninput = () => { entry.name = name.value; }; url.oninput = () => { entry.url = url.value; }; enabled.onchange = () => { entry.enabled = enabled.checked; }; publicationTitle.oninput = () => { entry.publicationTitle = publicationTitle.value; };
+      row.append(label('Feed 名称（订阅源显示名称）', name), label('期刊名称 / Publication Title（可选）', publicationTitle), label('RSS URL', url), label('启用', enabled), button('删除该订阅', () => { entries.splice(index, 1); draw(); })); list.append(row);
     });
   };
   draw(); container.append(list, button('添加 RSS', () => { entries.push({ name: '', url: '', enabled: false }); draw(); }));
   return () => structuredClone(entries);
 }
-const settingGroupNames = { General: '运行方式', Models: '模型与 AI', Sources: '文献数据库', Search: '检索周期', RSS: 'RSS 期刊订阅', 'Ranking / Review': '评审体验', Radar: 'Daily Radar', Weekly: '周报', Integrity: '撤稿与更正监测', Runtime: '运行路径', Notifications: '邮件与提醒', Credentials: '凭据' };
+const settingGroupNames = { General: '运行方式', Models: '模型与 AI', Sources: '文献数据库', Search: '检索周期', RSS: 'RSS 期刊订阅', 'Ranking / Review': '评审体验', Radar: '每日雷达', Weekly: '研究简报', Integrity: '撤稿与更正监测', Runtime: '运行路径', Notifications: '邮件与提醒', Credentials: '凭据' };
 function visibleSetting(setting) {
   if (['sources.domain', 'review.master', 'review.batch', 'general.profile', 'weekly.email', 'feedback.enabled', 'zotero.user', 'zotero.batch'].includes(setting.id)) return false;
   if (setting.category === 'Search') return ['pubmed.days', 'openalex.days'].includes(setting.id);
   return setting.category !== 'Advanced';
 }
 function currentSettingText(setting) {
+  if (setting.id === 'wechat.uid') return setting.configured || setting.value ? '已配置（接收标识已隐藏）' : '未配置';
   if (setting.value === null || setting.value === undefined || setting.value === '') return '未配置';
   const prefix = setting.ownerPresent === false ? '默认值 · ' : '';
   if (setting.type === 'url') { try { return `${prefix || '已配置 · '}${new URL(setting.value).hostname}`; } catch { return prefix ? `${prefix}已提供` : '已配置'; } }
@@ -529,7 +810,7 @@ function settingControl(setting) {
     Object.defineProperty(input, 'value', { get: () => [...preserved, ...[...input.querySelectorAll('input')].filter((entry) => entry.checked).map((entry) => entry.value)] });
   } else if (setting.type === 'enum' && setting.validation.values.length <= 5) {
     input = el('fieldset', undefined, 'setting-options'); input.append(el('legend', setting.description)); const name = `option-${crypto.randomUUID()}`;
-    for (const value of setting.validation.values) { const radio = el('input'); radio.type = 'radio'; radio.name = name; radio.value = value; radio.checked = value === setting.value; const text = ({ local: '本地', desktop: '桌面', web: '网页', disabled: '停用', enabled: '启用', strict: '严格', warn: '提醒', off: '关闭', on: '开启', auto: '自动', standard: '标准运行', complete: '完整运行', radar: '每日速览' })[value] || value; input.append(label(text, radio)); }
+    for (const value of setting.validation.values) { const radio = el('input'); radio.type = 'radio'; radio.name = name; radio.value = value; radio.checked = value === setting.value; const text = setting.id === 'qq.targetType' ? ({ user: '单聊用户', group: '群聊' })[value] : ({ local: '本地', desktop: '桌面', web: '网页', disabled: '停用', enabled: '启用', strict: '严格', warn: '提醒', off: '关闭', on: '开启', auto: '自动', standard: '标准运行', complete: '完整运行', radar: '每日速览' })[value] || value; input.append(label(text, radio)); }
     Object.defineProperty(input, 'value', { get: () => input.querySelector('input:checked')?.value });
   } else if (setting.type === 'enum') input = select(setting.validation.values.map((value) => [value, value]), setting.value);
   else if (setting.type === 'boolean') { input = el('input'); input.type = 'checkbox'; input.setAttribute('role', 'switch'); input.checked = setting.value === true; }
@@ -540,7 +821,7 @@ function settingPlaceholder(setting) {
   const exact = {
     'translation.model': '例如：deepseek-flash', 'preference.model': '例如：deepseek-flash',
     'translation.endpoint': '例如：https://api.example.com/v1/chat/completions', 'preference.endpoint': '例如：https://api.example.com/v1/chat/completions',
-    'email.recipient': '例如：name@example.com', 'smtp.host': '例如：smtp.example.com', 'smtp.port': '例如：465', 'smtp.user': '例如：name@example.com',
+    'email.recipient': '例如：name@example.com', 'smtp.host': '例如：smtp.example.com', 'smtp.port': '例如：465', 'smtp.user': '例如：name@example.com', 'smtp.from': '默认使用登录邮箱',
     'web.userId': '例如：1234567', 'zotero.batch': '例如：25', 'pubmed.days': '例如：10', 'openalex.days': '例如：10',
     'runtime.projectRoot': '例如：C:\\Research\\PaperEcho', 'local.input': '例如：input', 'local.output': '例如：output', 'local.feedback': '例如：feedback', 'desktop.zoteroExe': '例如：C:\\Program Files\\Zotero\\zotero.exe',
     'translation.temperature': '例如：0.1', 'preference.temperature': '例如：0.1', 'translation.timeout': '例如：30000', 'preference.timeout': '例如：30000',
@@ -555,30 +836,63 @@ function settingValue(setting, input) {
   if (['integer', 'number'].includes(setting.type)) return Number(input.value);
   return input.value;
 }
-function appendCredentialEditor(section, item, onStatusChange = () => {}) {
-  if (!item) return null;
-  const names = { TITLE_TRANSLATION_API_KEY: '标题翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key' };
-  const row = el('div', undefined, 'setting'); const status = el('p');
-  let configure; let clear;
-  const zoteroKey = item.id === 'ZOTERO_API_KEY';
-  const configureLabel = () => zoteroKey ? (item.configured ? '替换 API Key' : '配置 API Key') : (item.configured ? '替换凭据' : '配置凭据');
+function appendCredentialEditor(section, item, onStatusChange = () => {}, { compact = false } = {}) {
+  const names = { PAPERECHO_MODEL_API_KEY: 'API Key', TITLE_TRANSLATION_API_KEY: '智能翻译 API 密钥', PREFERENCE_LEARNING_API_KEY: '智能评审 API 密钥', SEMANTIC_SCHOLAR_API_KEY: 'Semantic Scholar API 密钥', EASYSCHOLAR_SECRET_KEY: '期刊指标密钥', SMTP_PASS: '邮件 SMTP 密码', ZOTERO_API_KEY: 'Zotero Web API Key', QQ_BOT_APP_SECRET: 'QQ 机器人 AppSecret', WXPUSHER_APP_TOKEN: 'WxPusher appToken', WECOM_WEBHOOK_URL: '企业微信群机器人 Webhook', FEISHU_WEBHOOK_URL: '飞书机器人 Webhook', FEISHU_SIGNING_SECRET: '飞书签名密钥（可选；开启签名校验时必填）' };
+  if (!item || !Object.hasOwn(names, item.id)) return null;
+  const writable = () => item.writable === true && ['local-managed', 'unconfigured'].includes(item.storageClass);
+  const row = el('div', undefined, 'setting credential-setting'); row.dataset.credential = item.id; if (compact) row.classList.add('credential-compact');
+  const status = el('p'); status.setAttribute('role', 'status');
+  const statusText = () => `${names[item.id]}：${item.storageClass === 'external-managed' ? '由外部环境管理' : !['local-managed', 'unconfigured'].includes(item.storageClass) ? '来源无法确认（只读）' : item.configured ? '已配置' : '未配置'}`;
+  status.textContent = statusText(); row.append(status); section.append(row);
+  if (!writable()) { if (compact) { const field = el('input'); field.type = 'password'; field.readOnly = true; field.placeholder = item.configured ? '已配置，由外部管理' : '来源待确认'; row.append(label(names[item.id], field)); } row.append(el('p', item.reason || '请在原配置入口维护并重启；此处不允许写入。', 'muted')); return row; }
+  let editing = !item.configured, busy = false, focusTarget = null;
+  const input = el('input'); input.type = 'password'; input.value = ''; input.autocomplete = 'new-password'; input.maxLength = 4096; input.placeholder = '输入新值；原值不会回显';
+  const editor = el('div', undefined, 'credential-editor');
   const sync = () => {
-    status.textContent = `${names[item.id] || '凭据'}：${item.configured ? '已配置' : '未配置'}`;
-    if (configure) configure.textContent = configureLabel();
-    if (clear) clear.hidden = !item.configured;
+    status.textContent = statusText();
+    if (!writable()) input.value = '';
+    editor.hidden = !writable() || !editing && !compact;
+    if (compact) { input.readOnly = !editing; input.placeholder = item.configured && !editing ? '已保存，原值不回显' : '输入 API Key'; save.hidden = !editing; }
+    configure.hidden = !writable() || editing || !item.configured;
+    clear.hidden = !writable() || editing || !item.configured;
+    cancel.hidden = !item.configured || !editing;
+    save.disabled = busy || !writable() || input.value.length === 0;
+    input.disabled = busy;
   };
-  sync(); row.append(status);
-  if (item.writable) {
-    const input = el('input'); input.type = 'password'; input.autocomplete = 'new-password'; input.maxLength = 4096; input.placeholder = item.id === 'ZOTERO_API_KEY' ? '请输入 Zotero API Key' : '输入新值；原值不会回显';
-    const editor = el('div', undefined, 'credential-editor'); editor.hidden = true;
-    const save = button(zoteroKey ? '保存 API Key' : '保存凭据', async () => { const value = input.value; await api('/api/credentials', { id: item.id, action: 'replace', value }); input.value = ''; item.configured = true; editor.hidden = true; sync(); onStatusChange(); notice.textContent = `凭据已替换。${item.reload}`; });
-    const cancel = button('取消', () => { input.value = ''; editor.hidden = true; });
-    editor.append(label(item.id === 'ZOTERO_API_KEY' ? '新的 Zotero Web API Key' : '新的凭据', input), save, cancel);
-    configure = button('', () => { editor.hidden = false; input.focus(); });
-    clear = button(zoteroKey ? '清除' : '清除凭据', async () => { if (!confirm(`清除 ${item.id}？依赖该凭据的功能可能暂不可用。`)) return; await api('/api/credentials', { id: item.id, action: 'clear' }); input.value = ''; item.configured = false; editor.hidden = true; sync(); onStatusChange(); notice.textContent = `凭据已清除。${item.reload}`; });
-    const actions = el('div', undefined, 'actions credential-actions'); actions.append(configure, clear); row.append(actions, editor); sync();
-  } else row.append(el('p', item.reason, 'muted'));
-  section.append(row); return row;
+  const update = async action => {
+    if (busy || !writable() || action === 'replace' && !input.value.length) return;
+    if (action === 'clear' && !confirm(`清除 ${item.id}？依赖该凭据的功能可能暂不可用。`)) return;
+    busy = true; sync(); let persisted = false;
+    try {
+      const result = await api('/api/credentials', { id: item.id, action, ...(action === 'replace' ? { value: input.value } : {}) });
+      if (result.id !== item.id || !result.savedToFile || !result.currentServiceUpdated || result.status !== (action === 'clear' ? 'cleared' : 'replaced')) throw new Error();
+      persisted = true; input.value = '';
+      const fresh = (await api('/api/credentials')).find(entry => entry.id === item.id);
+      if (!fresh) throw new Error();
+      Object.assign(item, fresh);
+      if (fresh.configured !== (action === 'replace') || fresh.storageClass !== (action === 'clear' ? 'unconfigured' : 'local-managed') || !fresh.writable) throw new Error();
+      editing = !item.configured; await onStatusChange();
+      notice.textContent = action === 'clear' ? '已清除此凭据。历史配置未删除。' : '凭据已保存。';
+      if (row.isConnected) focusTarget = item.configured ? configure : input;
+    } catch (error) {
+      throw new Error(persisted ? '写入已返回，但状态刷新未完成；请重新读取后确认，不要重复提交。' : Object.values(errorMessages).includes(error.message) ? error.message : '凭据操作未完成，请检查连接、会话与权限后重试或取消。');
+    } finally { busy = false; sync(); }
+  };
+  const restoreControls = () => { sync(); if (focusTarget && !busy) { const target = focusTarget; focusTarget = null; target.focus(); } };
+  const save = button('保存', () => update('replace')); save.className = 'primary'; save.syncDisabled = restoreControls;
+  const cancel = button('取消', () => { input.value = ''; editing = false; sync(); focusTarget = configure; }); cancel.syncDisabled = restoreControls;
+  const configure = button('修改', () => { input.value = ''; editing = true; sync(); input.focus(); }); configure.setAttribute('aria-label', `修改${names[item.id]}`);
+  const clear = button(item.id === 'ZOTERO_API_KEY' ? '清除' : '清除凭据', () => update('clear')); clear.syncDisabled = restoreControls;
+  input.oninput = sync;
+  editor.append(label(compact ? names[item.id] : `${names[item.id]}（新值）`, input), save, cancel);
+  const actions = el('div', undefined, 'actions credential-actions'); actions.append(configure, clear); row.append(actions, editor); if (compact) editor.append(configure, clear); sync();
+  row.refreshCredential = sync;
+  return row;
+}
+function clearCredentialInputs(scope = document) {
+  scope.querySelectorAll('.credential-editor').forEach(editor => {
+    editor.querySelectorAll('input').forEach(input => { input.value = ''; input.oninput?.(); });
+  });
 }
 const runtimePaths = {
   local: { title: '本地运行', summary: '不使用 Zotero，直接使用 PaperEcho 本地研究目录。', fit: '适合希望以本地目录作为输入与输出的工作方式。', data: '从配置的 JSON / JSONL 文件或目录读取。', result: '写入配置的本地输出目录；反馈文件可选。', needs: '不需要 Zotero Desktop，也不需要 Zotero Web API 凭据。' },
@@ -594,34 +908,169 @@ function runtimePathOptions(selected, onChange) {
   const fieldset = el('fieldset', undefined, 'runtime-path-options'); fieldset.append(el('legend', '选择运行路径')); const name = `runtime-path-${crypto.randomUUID()}`;
   for (const [key, path] of Object.entries(runtimePaths)) {
     const input = el('input'); input.type = 'radio'; input.name = name; input.value = key; input.checked = selected === key; input.id = `runtime-${key}-${crypto.randomUUID()}`; input.setAttribute('aria-label', path.title); input.addEventListener('change', () => onChange(key));
-    const copy = el('span', undefined, 'runtime-path-copy'); copy.append(el('strong', path.title), el('span', path.summary), el('small', path.fit), el('small', path.data), el('small', path.result), el('small', path.needs));
-    const card = el('label', undefined, 'runtime-path-card'); card.htmlFor = input.id; card.append(input, copy); fieldset.append(card);
+    const copy = el('span', undefined, 'runtime-path-copy'); copy.append(el('strong', path.title), el('span', path.summary));
+    const card = el('label', undefined, 'runtime-path-card'); card.htmlFor = input.id; card.append(input, copy);
+    const details = el('details', undefined, 'runtime-path-details'); details.append(el('summary', '适用场景与说明'));
+    for (const text of [path.fit, path.data, path.result, path.needs]) details.append(el('p', text, 'meta'));
+    const choice = el('div', undefined, 'runtime-path-choice'); choice.append(card, details); fieldset.append(choice);
   }
   Object.defineProperty(fieldset, 'value', { get: () => fieldset.querySelector('input:checked')?.value });
   return fieldset;
 }
+const emailResultLabels = { success: '发送成功', failed: '发送失败', pending: '待恢复', none: '尚未发送', busy: '发送中', blocked: '暂时无法发送' };
+const emailErrorLabels = { authentication_failed: '认证失败', authorization_failed: '发送权限不可用', destination_unavailable: '目标不可用', rate_limited: '发送频率受限', payload_invalid: '消息不符合平台要求', connection_failed: '连接失败', configuration_invalid: '配置错误', configuration_incomplete: '配置不完整', temporarily_unavailable: '暂时无法发送', test_in_progress: '测试通知正在发送' };
+function emailDeliveryText(delivery) {
+  const time = delivery.at && Number.isFinite(Date.parse(delivery.at)) ? ` · ${new Date(delivery.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}` : '';
+  return `最近发送：${emailResultLabels[delivery.status] || '尚未发送'}${delivery.kind === 'test' ? '（测试通知）' : ''}${time}${delivery.error ? ` · ${emailErrorLabels[delivery.error] || '暂时无法发送'}` : ''}`;
+}
+async function appendLoginStartup(container) {
+  if (!window.paperEchoLoginStartup) { container.append(el('p', '浏览器工作台使用相同工作空间；登录启动设置请在桌面应用中修改。', 'meta')); return; }
+  const section = el('section', undefined, 'settings-section section login-startup');
+  const label = el('label', '登录时启动 PaperEcho');
+  const input = el('input'); input.type = 'checkbox'; input.disabled = true;
+  label.prepend(input);
+  const notice = el('p', '正在读取系统登录项…', 'meta'); notice.setAttribute('role', 'status');
+  section.append(label, notice, el('p', '默认关闭，仅在当前用户登录后启动，可随时关闭。', 'meta'));
+  container.append(section);
+  const messages = {
+    LOGIN_STARTUP_APPROVAL_REQUIRED: '系统尚未批准。请在 macOS“系统设置 → 通用 → 登录项”中确认后重新读取。',
+    LOGIN_STARTUP_NOT_CONFIRMED: '系统未确认此设置，请检查系统登录项后重试。',
+    LOGIN_STARTUP_UNAVAILABLE: '当前运行方式不支持登录启动，请使用安装后的桌面应用。',
+    LOGIN_STARTUP_FAILED: '无法读取或修改系统登录项；请检查系统登录项设置。',
+  };
+  const show = state => {
+    input.indeterminate = typeof state.enabled !== 'boolean';
+    if (typeof state.enabled === 'boolean') input.checked = state.enabled;
+    input.disabled = state.available !== true || state.enabled === undefined;
+    notice.textContent = state.error ? (messages[state.error] || '系统登录项设置失败。') : state.enabled ? '系统已确认：登录时启动。' : state.status === 'requires-approval' ? messages.LOGIN_STARTUP_APPROVAL_REQUIRED : '系统已确认：登录时不启动。';
+  };
+  const refresh = async () => {
+    input.disabled = true;
+    try { show(await window.paperEchoLoginStartup.status()); }
+    catch { show({ error: 'LOGIN_STARTUP_FAILED' }); }
+  };
+  input.addEventListener('change', async () => {
+    const enabled = input.checked; input.disabled = true;
+    try { show(await window.paperEchoLoginStartup.set(enabled)); }
+    catch { await refresh(); notice.textContent = messages.LOGIN_STARTUP_FAILED; }
+  });
+  section.append(button('重新读取系统状态', refresh));
+  await refresh();
+}
+async function appendModelSettings(container, data, credentials) {
+  const section = el('section', undefined, 'settings-section section model-settings');
+  section.append(el('h3', '功能开关')); section.classList.add('ai-toggles');
+  const shared = credentials.find(row => row.id === 'PAPERECHO_MODEL_API_KEY');
+  const controls = []; const toggleGroup = el('div', undefined, 'ai-toggle-controls'); section.append(toggleGroup);
+  for (const [id, title] of [['translation.enabled', '启用智能翻译'], ['preference.enabled', '启用自适应学习']]) {
+    const item = data.find(row => row.id === id);
+    const label = el('label', title, 'model-toggle'); const input = el('input'); input.type = 'checkbox';
+    const master = data.find(row => row.id === 'review.master');
+    input.checked = id === 'translation.enabled' ? item?.value === true : item?.value === true && master?.value === true;
+    const before = input.checked; label.prepend(input); toggleGroup.append(label); controls.push({ id, input, before });
+  }
+  const missingHint = () => controls.filter(c => c.input.checked).map(c => {
+    const name = c.id === 'translation.enabled' ? 'translation' : 'preference';
+    const own = credentials.find(row => row.id === (name === 'translation' ? 'TITLE_TRANSLATION_API_KEY' : 'PREFERENCE_LEARNING_API_KEY'));
+    const missing = [!String(data.find(row => row.id === `${name}.model`)?.value || '').trim() && '模型名称', !String(data.find(row => row.id === `${name}.endpoint`)?.value || '').trim() && 'API 地址', !(shared?.effectiveConfigured || (own?.effectiveConfigured ?? own?.configured)) && 'API Key'].filter(Boolean);
+    return missing.length ? `${name === 'translation' ? '智能翻译' : '自适应学习'}仍需配置：${missing.join('、')}` : '';
+  }).filter(Boolean).join('；');
+  const status = el('p', '', 'meta ai-toggle-status'); status.setAttribute('role', 'status');
+  section.append(button('保存功能开关', async () => {
+    const updates = controls.filter(c => c.input.checked !== c.before).flatMap(c => {
+      const rows = [{ id: c.id, value: c.input.checked }];
+      if (c.id === 'preference.enabled' && c.input.checked && data.find(row => row.id === 'review.master')?.value !== true) {
+        rows.push({ id: 'review.master', value: true });
+        // Preserve the effective grade-review state when enabling its shared master.
+        if (data.find(row => row.id === 'review.enabled')?.value === true) rows.push({ id: 'review.enabled', value: false });
+      }
+      return rows;
+    });
+    if (!updates.length) { status.textContent = '开关未改变。'; return; }
+    await api('/api/settings', { updates }); controls.forEach(c => { c.before = c.input.checked; });
+    for (const update of updates) { const item = data.find(row => row.id === update.id); if (item) item.value = update.value; }
+    status.textContent = `开关已保存，下次工作流生效。${missingHint()}`;
+  }), status);
+  container.append(section);
+  const refreshModel = async () => {
+    const [freshData, freshCredentials] = await Promise.all([api('/api/settings'), api('/api/credentials')]);
+    for (const row of data) Object.assign(row, freshData.find(item => item.id === row.id));
+    for (const row of credentials) Object.assign(row, freshCredentials.find(item => item.id === row.id));
+    status.textContent = missingHint();
+  };
+  section.addEventListener('paperecho:preview-key-saved', () => refreshModel().catch(() => { status.textContent = '配置状态未知，请重新读取。'; }));
+  return refreshModel;
+}
 async function settings(group = settingsGroup, view = settingsView) {
-  settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common'; settingsView = view;
-  main.append(pageIntro('工作空间设置', '这里只保留日常最常用的选项；检索词、检索式和底层参数继续由原配置维护。'));
+  clearCredentialInputs();
+  settingsGroup = Object.hasOwn(settingViews, group) ? group : 'common';
+  const requestedChannel = settingsGroup === 'connections' && notificationChannelIds.includes(view) ? view : null;
+  settingsView = requestedChannel ? 'notifications' : view;
+  main.append(pageIntro(settingsGroup === 'review' ? 'AI 功能配置' : settingsGroup === 'automation' ? '自动化' : '工作空间设置', settingsGroup === 'review' ? '智能翻译与自适应学习共用一个模型服务。' : settingsGroup === 'automation' ? '安排研究任务的运行节奏。' : '设置本机工作空间与服务。'));
+  if (settingsGroup === 'common') await appendLoginStartup(main);
   const data = await api('/api/settings');
   const credentials = await api('/api/credentials');
   const groupPath = { common: 'general', review: 'models', runtime: 'runtime', automation: 'automation', connections: 'connections' }[settingsGroup];
-  const hasContent = ([key, , categories]) => ['translation', 'preference', 'path'].includes(key) || (key === 'credentials' ? credentials.length > 0 : categories.some((category) => data.some((entry) => entry.category === category && visibleSetting(entry) && (category !== 'Models' || entry.id.startsWith(`${key}.`)))));
+  const hasContent = ([key, , categories]) => ['ai', 'path'].includes(key) || (key === 'credentials' ? credentials.length > 0 : categories.some((category) => data.some((entry) => entry.category === category && visibleSetting(entry) && (category !== 'Models' || entry.id.startsWith(`${key}.`)))));
   const views = settingViews[settingsGroup].filter(hasContent);
   if (!views.some(([key]) => key === settingsView)) settingsView = views[0]?.[0] || settingViews[settingsGroup][0][0];
   if (views.length > 1) main.append(tertiaryNav('设置任务', views.map(([key, title]) => [key, title]), settingsView, `settings/${groupPath}`));
   const body = el('div', undefined, 'settings-body page-content'); main.append(body);
-  if (settingsGroup === 'automation' && settingsView === 'radar') body.append(el('p', '非周报日运行。', 'meta'));
-  if (settingsGroup === 'automation' && settingsView === 'weekly') {
-    body.append(el('p', '每 7 天生成一次。', 'meta'));
-    const profile = data.find((entry) => entry.id === 'general.profile');
-    if (profile?.value === 'radar') body.append(el('p', '当前旧运行配置仅指向 Radar，不适用于周报。', 'plan-alert'), button('修复为标准周报模式', async () => { await api('/api/settings', { id: 'general.profile', value: 'standard' }); notice.textContent = '周报执行模式已修复，下次运行生效。'; await settings(); }));
+  if (settingsGroup === 'automation') {
+    const registrationText = registration => {
+      if (registration?.state === 'registered') return `系统任务已注册：北京时间 ${registration.time || '15:00'} 自动运行，退出工作台后仍有效。`;
+      if (registration?.state === 'paused') return '自动化配置已保留，系统定时执行尚未启用。请重新保存自动化设置。';
+      if (registration?.state === 'disabled' && registration.enabled === false && registration.taskPresent === false) return '系统自动化已关闭，任务已注销。';
+      const reasons = { SCHEDULER_MODE_UNSUPPORTED: '当前本地运行模式不支持系统自动化，请在运行路径中配置 Zotero Desktop 或 Web。', SCHEDULER_LAUNCHCTL_FAILED: '无法连接 macOS 任务服务，请在当前用户桌面会话中重试。', SCHEDULER_PATH_UNSAFE: '任务路径权限不符合安全要求。', SCHEDULER_REGISTER_UNCONFIRMED: 'macOS 未确认任务注册，请检查系统状态后重试。', SCHEDULER_PREVIEW_ONLY: '当前为模拟预览，不会创建系统任务。', SCHEDULER_HOST_TIMEZONE_REQUIRED: '当前 macOS 时区不受支持，需使用 Asia/Shanghai 时区。', SCHEDULER_PREFLIGHT_BLOCKED: '配置或运行状态未通过安全检查。', SCHEDULER_GUI_SESSION_REQUIRED: '需要在当前用户的桌面会话中启动。', SCHEDULER_TASK_RUNNING: '任务正在执行，请完成后重新保存。', SCHEDULER_PACKAGED_LAYOUT_REQUIRED: '当前启动方式不支持系统任务，请使用安装后的桌面应用。' };
+      return `${registration?.state === 'failed' ? '系统任务注册失败。' : '系统任务注册尚未确认。'}${reasons[registration?.code] || '请检查配置后重新保存，或重新启动应用。'}`;
+    };
+    const taskStatus = el('p', '正在核对系统任务…', 'meta'); taskStatus.setAttribute('aria-live', 'polite');
+    const card = el('section', undefined, 'settings-section automation-settings');
+    for (const [id, title, description] of [
+      ['radar.enabled', '每日雷达', '在研究简报间隔期间运行每日检索。'],
+      ['weekly.interval', '研究简报', '按间隔生成研究简报，默认每 7 天一次。'],
+      ['integrity.enabled', '撤稿检测', '运行时检查文献的撤稿与更正状态。'],
+      ['scheduler.time', '自动执行时间', '北京时间（Asia/Shanghai），每日雷达与研究简报共用。'],
+    ]) {
+      const entry = data.find(item => item.id === id); const row = el('div', undefined, 'automation-row'); row.dataset.setting = id;
+      const copy = el('div', undefined, 'automation-copy'); const controlId = `automation-${id.replaceAll('.', '-')}`;
+      const titleLabel = el('label', title); titleLabel.htmlFor = controlId;
+      const hint = el('p', id === 'weekly.interval' && entry?.enabled === false ? '当前已停用；保存新间隔后启用。' : description, 'meta');
+      copy.append(titleLabel, hint); row.append(copy);
+      const controls = el('div', undefined, 'automation-controls');
+      if (!entry?.available) { controls.append(el('p', '配置暂不可用，请稍后重试。', 'field-error')); row.append(controls); card.append(row); continue; }
+      const input = ['weekly.interval', 'scheduler.time'].includes(id) ? el('input') : settingControl(entry); input.id = controlId;
+      if (id === 'weekly.interval') { input.type = 'number'; input.min = entry.validation.min; input.max = entry.validation.max; input.step = '1'; input.required = true; input.value = entry.value; input.setAttribute('aria-describedby', `${controlId}-unit`); }
+      if (id === 'scheduler.time') { input.type = 'time'; input.step = '60'; input.required = true; input.value = entry.value; }
+      controls.append(input);
+      if (id === 'weekly.interval') { const unit = el('span', '天'); unit.id = `${controlId}-unit`; controls.append(unit); }
+      const save = button('保存', async () => {
+        const value = id === 'scheduler.time' ? input.value : id === 'weekly.interval' ? Number(input.value) : input.checked;
+        if (id === 'scheduler.time' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) { notice.textContent = '请输入有效的 HH:mm 时间，未保存。'; return; }
+        if (id === 'weekly.interval' && (!input.value.trim() || !Number.isInteger(value) || value < Number(input.min) || value > Number(input.max))) {
+          input.setCustomValidity(`请输入 ${input.min}–${input.max} 之间的正整数天数。`); input.reportValidity(); notice.textContent = `研究简报间隔须为 ${input.min}–${input.max} 天的正整数，未保存。`; return;
+        }
+        notice.textContent = '正在保存并核对系统任务…';
+        const result = await api('/api/settings', { id, value }); entry.value = value;
+        if (id === 'weekly.interval') { entry.enabled = true; hint.textContent = description; }
+        taskStatus.textContent = registrationText(result.scheduling);
+        notice.textContent = `${title}配置已保存。${taskStatus.textContent}`;
+      });
+      input.addEventListener('input', () => input.setCustomValidity(''));
+      controls.append(save); row.append(controls); card.append(row);
+    }
+    body.append(card, taskStatus);
+    try { taskStatus.textContent = registrationText((await api('/api/schedule-status')).registration); }
+    catch { taskStatus.textContent = '系统任务注册状态未知，请重新读取。'; }
+    return;
   }
   const appendSettingsControls = (container, entries, saveName, saveLabel = '保存本组', featureToggleIds = [], featureOptions = {}) => {
+    container.classList.add('settings-form-grid');
     const toggleIds = new Set(featureToggleIds); const saves = []; const dependentRows = []; const featureToggles = []; let unavailable = 0;
     const orderedEntries = toggleIds.size ? [...entries].sort((a, b) => Number(toggleIds.has(b.id)) - Number(toggleIds.has(a.id))) : entries;
     for (const entry of orderedEntries) {
-      const setting = { ...entry, sourceEntry: entry, optionScope: settingsView, description: entry.description.replace(/translation/g, '标题翻译').replace(/preference/g, '偏好学习').replace(/required/g, '必要').replace(/optional/g, '补充').replace(/negative/g, '排除').replace(/owner/g, '配置服务').replace(/workflow/g, '工作流').replace(/Weekly/g, '周报') };
+      const rowContainer = featureOptions.rowContainer?.(entry) || container;
+      const setting = { ...entry, sourceEntry: entry, optionScope: settingsView, description: entry.description.replace(/translation/g, '智能翻译').replace(/preference/g, '自适应学习').replace(/required/g, '必要').replace(/optional/g, '补充').replace(/negative/g, '排除').replace(/owner/g, '配置服务').replace(/workflow/g, '工作流').replace(/Weekly/g, '研究简报') };
       if (setting.id === 'sources.override') setting.description = settingsView === 'rss' ? 'RSS 订阅状态' : '选择 PaperEcho 用于检索论文的数据库来源';
       if (setting.id === 'pubmed.days') setting.description = 'PubMed / PMC 检索天数';
       if (setting.id === 'openalex.days') setting.description = 'OpenAlex 检索天数';
@@ -630,30 +1079,38 @@ async function settings(group = settingsGroup, view = settingsView) {
         unavailable += 1;
         continue;
       }
-      if (setting.readOnly) { row.append(el('p', `${setting.description}：${setting.value}（只读）`)); container.append(row); continue; }
-      if (setting.type === 'rss') { const read = rssEditor(setting, row); saves.push({ setting, read, input: row }); container.append(row); continue; }
+      if (setting.readOnly) { row.append(el('p', `${setting.description}：${setting.value}（只读）`)); rowContainer.append(row); continue; }
+      if (setting.type === 'rss') { const read = rssEditor(setting, row); saves.push({ setting, read, input: row }); rowContainer.append(row); continue; }
       const input = settingControl(setting);
       if (setting.synthetic) { input.addEventListener('change', () => { setting.changed = true; }); }
       if (toggle) { featureToggles.push(input); input.id ||= `field-${crypto.randomUUID()}`; input.setAttribute('aria-label', setting.description); const switchLabel = el('label'); switchLabel.htmlFor = input.id; const switchCopy = el('span', undefined, 'feature-toggle-copy'); const stateText = el('small', setting.value === true ? '当前已开启' : '当前已关闭'); switchCopy.append(el('strong', setting.description), stateText); switchLabel.append(switchCopy, input); row.append(switchLabel); input.addEventListener('change', () => { stateText.textContent = `待保存：${input.checked ? '开启' : '关闭'}`; }); if (setting.mixed) row.append(el('p', '现有相关开关状态不一致；切换并保存后会同步。', 'meta')); setting.stateText = stateText; }
       else { if (toggleIds.size) dependentRows.push({ row, input }); if (input.className.includes('setting-options')) row.append(input); else if (setting.type === 'boolean') { const stateText = el('p', setting.value === true ? '当前已开启' : '当前已关闭', 'meta'); row.append(label(setting.description, input), stateText); setting.stateText = stateText; } else { const currentValue = el('p', `当前：${currentSettingText(setting)}`, 'setting-current'); row.append(currentValue, label(`${setting.description}（留空不变）`, input)); setting.currentValue = currentValue; } }
       if (setting.validation.min !== undefined || setting.validation.max !== undefined) row.append(el('small', `允许范围：${setting.validation.min ?? '不限'}–${setting.validation.max ?? '不限'}`));
-      saves.push({ setting, input, read: () => settingValue(setting, input) }); container.append(row);
+      saves.push({ setting, input, read: () => settingValue(setting, input) }); rowContainer.append(row);
     }
     let syncFeatureStatus = () => {};
     if (toggleIds.size && featureOptions.statusText) {
       const row = el('div', undefined, 'feature-dependent capability-status'); const status = el('p'); syncFeatureStatus = () => { status.textContent = typeof featureOptions.statusText === 'function' ? featureOptions.statusText() : featureOptions.statusText; }; syncFeatureStatus(); row.append(el('strong', '当前配置状态'), status); container.append(row); dependentRows.push({ row });
     }
     for (const item of featureOptions.credentials || []) {
-      const row = appendCredentialEditor(container, item, syncFeatureStatus); if (row) { row.className += ' feature-dependent'; dependentRows.push({ row }); }
+      const row = appendCredentialEditor(container, item, async () => { await featureOptions.refresh?.(); syncFeatureStatus(); }); if (row) { row.className += ' feature-dependent'; dependentRows.push({ row }); }
     }
+    if (featureOptions.extraContent) { container.append(featureOptions.extraContent); dependentRows.push({ row: featureOptions.extraContent }); }
     if (featureToggles.length) {
       const detailsId = `feature-details-${crypto.randomUUID()}`;
+      let editWhileDisabled = false;
       const syncFeatureState = () => {
-        const expanded = featureToggles.some((input) => input.checked); container.dataset.featureCollapsed = String(!expanded);
+        const expanded = featureToggles.some((input) => input.checked) || editWhileDisabled; container.dataset.featureCollapsed = String(!expanded);
         for (const input of featureToggles) { input.setAttribute('aria-controls', detailsId); input.setAttribute('aria-expanded', String(expanded)); }
         dependentRows.forEach(({ row, input }, index) => { if (index === 0) row.id ||= detailsId; row.hidden = !expanded; if (input) input.disabled = !expanded; });
       };
-      for (const input of featureToggles) input.addEventListener('change', syncFeatureState); syncFeatureState();
+      for (const input of featureToggles) input.addEventListener('change', () => { editWhileDisabled = false; syncFeatureState(); }); syncFeatureState();
+      if (featureOptions.allowDisabledEditing) {
+        const diagnostic = button(featureOptions.diagnosticLabel || '配置与测试邮箱（不启用通知）', () => { editWhileDisabled = !editWhileDisabled; syncFeatureState(); diagnostic.setAttribute('aria-expanded', String(editWhileDisabled)); });
+        const syncDiagnostic = () => { diagnostic.hidden = featureToggles.some((input) => input.checked); diagnostic.setAttribute('aria-expanded', String(editWhileDisabled)); };
+        for (const input of featureToggles) input.addEventListener('change', syncDiagnostic); syncDiagnostic();
+        diagnostic.setAttribute('aria-expanded', 'false'); container.append(diagnostic);
+      }
     }
     if (unavailable) container.append(el('p', '当前配置未提供此组的部分常用字段；已有值仍由原配置维护。', 'meta'));
     if (!saves.length) return;
@@ -667,24 +1124,14 @@ async function settings(group = settingsGroup, view = settingsView) {
         else if (entry.setting.type === 'boolean') { entry.setting.value = entry.input.checked; entry.setting.sourceEntry.value = entry.input.checked; if (entry.setting.stateText) entry.setting.stateText.textContent = entry.input.checked ? '当前已开启' : '当前已关闭'; }
         else if (value !== undefined && entry.input.dataset?.replacement === 'true') { entry.setting.value = value; entry.setting.sourceEntry.value = value; entry.input.value = ''; if (entry.setting.currentValue) entry.setting.currentValue.textContent = `当前：${currentSettingText(entry.setting)}`; }
       }
-      syncFeatureStatus();
+      await featureOptions.refresh?.(); syncFeatureStatus();
       notice.textContent = `“${saveName}”已保存，下次运行生效。`;
     }); save.className = 'primary'; actions.append(save); container.append(actions);
   };
   const active = (views.find(([key]) => key === settingsView) || settingViews[settingsGroup][0]);
   if (settingsGroup === 'review') {
-    const title = settingsView === 'translation' ? '标题翻译' : '偏好学习';
-    const entries = settingsView === 'translation'
-      ? (() => { const rows = data.filter((entry) => entry.category === 'Models' && entry.id.startsWith('translation.')); return rows.some((entry) => entry.id === 'translation.enabled') ? rows : [{ category: 'Models', available: true, ownerPresent: false, id: 'translation.enabled', description: '启用标题翻译', type: 'boolean', value: true, validation: {} }, ...rows]; })()
-      : (() => { const master = data.find((entry) => entry.id === 'review.master'); const preference = data.find((entry) => entry.id === 'preference.enabled'); const review = data.find((entry) => entry.id === 'review.enabled'); const states = [master, preference, review].filter(Boolean).map((entry) => entry.value); const combined = { ...(preference || {}), category: 'Models', available: true, ownerPresent: Boolean(master?.ownerPresent && preference?.ownerPresent && review?.ownerPresent), id: 'review-learning.combined', description: '启用智能评审与偏好学习', type: 'boolean', validation: {}, value: states.length === 3 && states.every((value) => value === true), mixed: states.length > 1 && new Set(states).size > 1, synthetic: true, changed: false, writeIds: ['review.master', 'review.enabled', 'preference.enabled'] }; return [combined, ...data.filter((entry) => entry.id.startsWith('preference.') && entry.id !== 'preference.enabled' && visibleSetting(entry))]; })();
-    const requiredIds = settingsView === 'translation' ? ['translation.model', 'translation.endpoint'] : ['preference.model', 'preference.endpoint'];
-    const credentialId = settingsView === 'translation' ? 'TITLE_TRANSLATION_API_KEY' : 'PREFERENCE_LEARNING_API_KEY';
-    const credential = credentials.find((entry) => entry.id === credentialId);
-    const capabilityStatus = () => { const missing = requiredIds.filter((id) => !String(entries.find((entry) => entry.id === id)?.value || '').trim()).map((id) => id.endsWith('.model') ? '模型名称' : 'API 地址'); if (!credential?.configured) missing.push('API 密钥'); return missing.length ? `功能已开启时，还需要完成以下配置：${missing.join('、')}。` : '必要参数已配置；真实可用性仍由运行前检查确认。'; };
-    const section = el('section', undefined, 'settings-section section');
-    section.append(el('h3', settingsView === 'translation' ? '标题翻译' : '智能评审与偏好学习', 'section-header'), el('p', settingsView === 'translation' ? '开启后使用配置的模型生成中文标题；关闭不会清空已有配置。' : '一个开关同时控制等级复审与 LLM 偏好学习；关闭不会清空已有配置。', 'meta'));
-    appendSettingsControls(section, entries, title, `保存${title}`, settingsView === 'translation' ? ['translation.enabled'] : ['review-learning.combined'], { statusText: capabilityStatus, credentials: credential ? [credential] : [] });
-    body.append(section); return;
+    const refreshModel = await appendModelSettings(body, data, credentials);
+    await appendAiService(body, data, refreshModel, credentials); return;
   }
   if (settingsGroup === 'runtime') {
     const section = el('section', undefined, 'settings-section runtime-settings'); section.append(el('h3', '选择运行路径', 'section-header'), el('p', '三种路径互斥；只显示当前路径需要的设置。固定启动入口仍会校验路径一致性。', 'meta'));
@@ -692,7 +1139,7 @@ async function settings(group = settingsGroup, view = settingsView) {
     if (!mode?.available) { section.append(el('p', '当前配置尚未提供运行路径字段。', 'empty-state')); body.append(section); return; }
     let selectedMode = mode.value || mode.effectiveValue;
     const current = el('p', `当前运行路径：${runtimePaths[mode.value || mode.effectiveValue]?.title || '未配置'}${mode.ownerPresent === false ? '（当前启动路径；统一配置尚未保存）' : ''}`, 'runtime-current');
-    const options = runtimePathOptions(selectedMode, (value) => { selectedMode = value; current.textContent = `正在配置：${runtimePaths[value].title}（尚未保存）`; current.className = 'runtime-current unsaved'; sync(); }); section.append(options, current);
+    const options = runtimePathOptions(selectedMode, (value) => { clearCredentialInputs(section); selectedMode = value; current.textContent = `正在配置：${runtimePaths[value].title}（尚未保存）`; current.className = 'runtime-current unsaved'; sync(); }); section.append(options, current);
     const panels = {}; const records = []; const readinessFor = {}; let save;
     for (const pathName of Object.keys(runtimePathFields)) {
       const panel = el('div', undefined, 'runtime-path-panel'); panel.dataset.path = pathName;
@@ -709,7 +1156,7 @@ async function settings(group = settingsGroup, view = settingsView) {
         if (spec.required && !String(entry.value || '').trim()) input.required = true;
         currentValue = el('p', `当前：${currentSettingText(entry)}`, 'setting-current');
         row.append(currentValue, label(`${entry.description}${spec.required ? '（必填；留空保持现值）' : '（选填；留空不变）'}`, input));
-        if (id === 'web.userId') row.append(el('small', 'Zotero 数字 User ID，不是用户名或邮箱。PaperEcho v2.4 的 Web 路径使用个人文库。'));
+        if (id === 'web.userId') row.append(el('small', 'Zotero 数字 User ID，不是用户名或邮箱。PaperEcho 的 Web 路径使用个人文库。'));
         panel.append(row); records.push({ pathName, entry, input, currentValue, required: spec.required, row });
       }
       if (pathName === 'web') {
@@ -727,13 +1174,127 @@ async function settings(group = settingsGroup, view = settingsView) {
     const actions = el('div', undefined, 'actions group-save section-actions'); save = button('', async () => { const selected = options.value; if (!selected) throw new Error('请先选择一种运行路径。'); const selectedRecords = records.filter((entry) => entry.pathName === selected || entry.pathName === 'shared' && selected !== 'local'); const updates = [{ id: 'runtime.mode', value: selected }]; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); if (record.required && value === undefined && !String(record.entry.value || '').trim()) throw new Error(`请先填写${record.entry.description}，原设置未改变。`); if (record.input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。'); if (value !== undefined) updates.push({ id: record.entry.id, value }); } await api('/api/settings', { updates }); mode.value = selected; mode.ownerPresent = true; current.textContent = `当前运行路径：${runtimePaths[selected].title}`; current.className = 'runtime-current'; for (const record of selectedRecords) { const value = settingValue(record.entry, record.input); record.entry.ownerPresent = true; if (value !== undefined) { record.entry.value = value; if (record.input.dataset?.replacement === 'true') record.input.value = ''; } if (record.currentValue) record.currentValue.textContent = `当前：${currentSettingText(record.entry)}`; } panels[selected].querySelector('.runtime-readiness').textContent = readinessFor[selected](); notice.textContent = selected === 'web' ? 'Zotero Web 配置已保存；下次运行生效。连接状态仍由运行前检测确认。' : '“运行路径”已保存，下次运行生效；连接与路径可用性仍由运行前检查确认。'; }); save.className = 'primary'; actions.append(save); section.append(actions); sync(); body.append(section); return;
   }
   if (settingsGroup === 'connections' && settingsView === 'notifications') {
-    const emailEntries = data.filter((entry) => entry.category === 'Notifications' && (entry.id.startsWith('email.') || entry.id.startsWith('smtp.')));
-    const credential = credentials.find((entry) => entry.id === 'SMTP_PASS');
-    const emailStatus = () => { const missing = ['email.recipient', 'smtp.host', 'smtp.user'].filter((id) => !String(emailEntries.find((entry) => entry.id === id)?.value || '').trim()).map((id) => ({ 'email.recipient': '收件人', 'smtp.host': 'SMTP 主机', 'smtp.user': 'SMTP 用户名' })[id]); if (!credential?.configured) missing.push('SMTP 密码'); return missing.length ? `启用邮件后，还需要完成以下配置：${missing.join('、')}。` : '邮件参数已配置；真实投递能力仍由运行前检查确认。'; };
-    const emailSection = el('section', undefined, 'settings-section section'); emailSection.append(el('h3', '报告邮件', 'section-header'), el('p', '启用后使用下方 SMTP 配置发送报告；关闭不会清空已有参数。', 'meta'));
-    appendSettingsControls(emailSection, emailEntries, '报告邮件', '保存报告邮件', ['email.enabled'], { statusText: emailStatus, credentials: credential ? [credential] : [] }); body.append(emailSection);
-    const reminderEntries = data.filter((entry) => entry.category === 'Notifications' && entry.id.startsWith('notification.'));
-    if (reminderEntries.length) { const reminderSection = el('section', undefined, 'settings-section section'); reminderSection.append(el('h3', '运行提醒', 'section-header'), el('p', '失败与健康提醒沿用现有 Stage5 通知 owner，不在此处更改投递逻辑。', 'meta')); appendSettingsControls(reminderSection, reminderEntries, '运行提醒'); body.append(reminderSection); }
+    const channelSettings = await api('/api/notifications');
+    const preferences = el('section', undefined, 'settings-section section notification-preferences');
+    preferences.append(el('h3', '通知偏好', 'section-header'), el('p', '选择一次通知渠道，再分别开启 每日雷达 与 Weekly 通知。平台配置在下方卡片中管理。', 'meta'));
+    const names = { email: 'Email', qq: 'QQ', wechat: '微信', feishu: '飞书', wecom: '企业微信' };
+    const globalIds = notificationChannelIds.map(id => `${id}.enabled`);
+    const selector = el('fieldset', undefined, 'notification-global-channels'); selector.append(el('legend', '通知渠道'), el('p', 'PaperEcho 使用哪些平台发送通知。', 'meta')); preferences.append(selector);
+    const events = new Map();
+    for (const [event, title] of [['radar', '每日雷达 通知'], ['weekly', '研究简报通知']]) {
+      const region = el('section', undefined, 'notification-event'); region.dataset.event = event;
+      region.append(el('h4', title), el('p', `开启后，${event === 'radar' ? '每日雷达' : '研究简报'} 会通过上方选择的通知渠道发送。`, 'meta')); preferences.append(region); events.set(`notification.${event}`, region);
+    }
+    const other = el('details', undefined, 'notification-other'); other.append(el('summary', '其它提醒')); preferences.append(other);
+    const preferenceEntries = data.filter(entry => globalIds.includes(entry.id) || entry.id.startsWith('notification.')).map(entry => ({ ...entry, description: globalIds.includes(entry.id) ? names[entry.id.split('.')[0]] : events.has(entry.id) ? '启用通知' : entry.description }));
+    appendSettingsControls(preferences, preferenceEntries, '通知偏好', '保存通知偏好', [], {
+      rowContainer: entry => globalIds.includes(entry.id) ? selector : events.get(entry.id) || other,
+      refresh: async () => { for (const next of (await api('/api/notifications')).channels) { const card = cards.get(next.id); if (card) { Object.assign(card.channel, next); card.sync(); } } },
+    });
+    other.hidden = !preferenceEntries.some(entry => entry.id.startsWith('notification.') && !events.has(entry.id));
+    body.append(preferences);
+    const grid = el('div', undefined, 'notification-channel-grid'); body.append(grid);
+    const descriptions = { email: '通过邮件接收研究摘要与提醒。', qq: '通过 QQ 官方机器人接收 Markdown 摘要。', wechat: '通过 WxPusher 接收微信通知。', feishu: '通过飞书群机器人接收摘要。', wecom: '通过企业微信群机器人接收摘要。' };
+    const icons = { email: '✉', qq: 'Q', wechat: '微', feishu: '飞', wecom: '企' };
+    const readinessLabels = { configured: '配置完整', incomplete: '配置不完整', invalid: '配置错误' };
+    const cards = new Map();
+    for (const channel of channelSettings.channels) {
+      const name = names[channel.id] || channel.displayName;
+      const card = el('section', undefined, 'settings-section channel-card'); card.dataset.channel = channel.id;
+      const heading = el('div', undefined, 'channel-heading'); const icon = el('span', icons[channel.id], 'channel-icon'); icon.setAttribute('aria-hidden', 'true'); heading.append(icon, el('h3', name));
+      const status = el('p', undefined, 'channel-status'); const recent = el('p', undefined, 'meta delivery-status');
+      const sync = () => { status.textContent = `${channel.enabled ? '已选择' : '未选择'} · ${readinessLabels[channel.readiness] || '配置不完整'}`; recent.textContent = emailDeliveryText(channel.lastDelivery || { status: 'none' }); };
+      sync(); const actions = el('div', undefined, 'actions channel-actions');
+      const open = button('设置', () => openChannel(channel, open)); open.className = 'primary'; open.setAttribute('aria-label', `设置${name}`); actions.append(open);
+      card.append(heading, el('p', descriptions[channel.id], 'channel-description'), status, recent, actions); grid.append(card); cards.set(channel.id, { channel, sync, open });
+    }
+    function openChannel(channel, opener) {
+      activeChannelModal?.close(true, false);
+      const name = names[channel.id] || channel.displayName;
+      const backdrop = el('div', undefined, 'channel-backdrop');
+      const dialog = el('section', undefined, 'channel-dialog settings-section'); dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.tabIndex = -1;
+      const title = el('h2', `${name}通知设置`); title.id = 'channel-dialog-title'; dialog.setAttribute('aria-labelledby', title.id);
+      const status = el('p', undefined, 'channel-status');
+      const sync = () => { status.textContent = `${channel.enabled ? '已选择' : '未选择'} · ${readinessLabels[channel.readiness] || '配置不完整'}`; };
+      const refresh = async () => {
+        const next = (await api('/api/notifications')).channels.find(entry => entry.id === channel.id);
+        if (!next) throw new Error('设置已提交，但渠道状态未能读取，请重新读取后确认。');
+        Object.assign(channel, next); cards.get(channel.id).sync(); sync();
+      };
+      sync(); let busy = false;
+      const background = [...document.body.children].map(node => [node, node.inert]); const overflow = document.body.style.overflow;
+      const close = (force = false, clearRoute = true) => {
+        if (busy && !force) return;
+        clearCredentialInputs(dialog);
+        backdrop.remove(); background.forEach(([node, inert]) => { node.inert = inert; }); document.body.style.overflow = overflow;
+        if (activeChannelModal?.dialog === dialog) activeChannelModal = null;
+        if (clearRoute && notificationChannelIds.includes(parseRoute(location.hash).settingsView)) window.history?.replaceState(null, '', '#settings/connections/notifications');
+        opener?.focus();
+      };
+      const header = el('header', undefined, 'channel-dialog-header'); const copy = el('div'); copy.append(title, status, el('p', descriptions[channel.id], 'meta')); const dismiss = button('关闭', () => close(true)); dismiss.setAttribute('aria-label', '关闭通知设置'); header.append(copy, dismiss); dialog.append(header);
+      const form = el('div', undefined, 'channel-dialog-body'); dialog.append(form);
+      form.append(el('p', '渠道选择在通知偏好中管理。配置完整不代表平台已验证；测试使用已保存的设置，与渠道选择及事件开关无关。', 'meta'));
+      if (channel.id === 'qq') form.append(el('p', '使用 QQ 机器人 AppID / AppSecret；目标是机器人对应的用户或群 OpenID，不是 QQ 号码。', 'meta'));
+      if (channel.id === 'wechat') form.append(el('p', 'WxPusher API 接受不等于微信已送达；绑定与激活状态由客户端确认。', 'meta'));
+      const records = [];
+      for (const entry of data.filter(entry => entry.category === 'Notifications' && entry.id !== `${channel.id}.enabled` && (channel.id === 'email' ? entry.id.startsWith('email.') || entry.id.startsWith('smtp.') : entry.id.startsWith(channel.id + '.')))) {
+        if (!entry.available) continue;
+        const row = el('div', undefined, 'setting');
+        if (entry.readOnly) { row.append(el('p', `${entry.description}：${currentSettingText(entry)}（只读）`)); form.append(row); continue; }
+        const input = settingControl(entry);
+        if (entry.type !== 'boolean' && entry.type !== 'enum') row.append(el('p', `当前：${currentSettingText(entry)}`, 'setting-current'));
+        row.append(input.className.includes('setting-options') ? input : label(entry.description + (input.dataset.replacement === 'true' ? '（留空不变）' : ''), input));
+        form.append(row); records.push({ entry, input });
+      }
+      const credentialsSection = el('section', undefined, 'channel-credentials'); credentialsSection.append(el('h3', '凭据'), el('p', '原值永不回显；替换或清除凭据会单独保存。', 'meta'));
+      for (const credential of (channel.credentials || [channel.credential]).filter(Boolean)) appendCredentialEditor(credentialsSection, credential, refresh);
+      form.append(credentialsSection);
+      const testState = el('p', '测试不会自动启用渠道。', 'meta notification-test-state'); testState.setAttribute('role', 'status'); form.append(testState);
+      const footer = el('footer', undefined, 'actions channel-dialog-actions'); footer.append(button('取消', () => close(true)));
+      const save = button('保存设置', async () => {
+        const updates = records.flatMap(({ entry, input }) => {
+          if (input.checkValidity?.() === false) throw new Error('请按字段要求输入有效值，原设置未改变。');
+          const value = settingValue(entry, input); return value === undefined ? [] : [{ id: entry.id, value }];
+        });
+        if (updates.length) await api('/api/settings', { updates }); await refresh();
+        for (const { entry } of records) { const update = updates.find(item => item.id === entry.id); if (update) entry.value = update.value; }
+        notice.textContent = `${name}通知设置已保存。`; close(true);
+      }); save.className = 'primary'; footer.append(save);
+      let requestId = crypto.randomUUID();
+      const test = button('发送测试通知', async () => {
+        test.textContent = '发送中…'; testState.textContent = '正在发送测试通知…';
+        try {
+          const result = await api('/api/notifications/test', { channel: channel.id, requestId });
+          testState.textContent = result.status === 'success' && channel.id !== 'email' ? '平台 API 已接受消息；请在目标端确认。' : emailErrorLabels[result.error] || emailResultLabels[result.status] || '暂时无法发送';
+          await refresh(); if (result.status === 'success') requestId = crypto.randomUUID();
+        } finally { test.textContent = '发送测试通知'; }
+      }); footer.append(test); dialog.append(footer); backdrop.append(dialog);
+      const setBusy = value => {
+        busy = value; dialog.setAttribute('aria-busy', String(value));
+        dialog.querySelectorAll('button').forEach(node => { node.disabled = value; });
+        dialog.querySelectorAll('input,select,textarea').forEach(node => { node.disabled = value; });
+        if (!value) dialog.querySelectorAll('button').forEach(node => node.syncDisabled?.());
+        test.disabled = value || channel.readiness !== 'configured';
+      };
+      activeChannelModal = { dialog, close, setBusy };
+      background.forEach(([node]) => { node.inert = true; }); document.body.style.overflow = 'hidden'; document.body.append(backdrop); setBusy(false);
+      backdrop.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { event.preventDefault(); close(); return; }
+        if (event.key !== 'Tab') return;
+        const nodes = [...dialog.querySelectorAll('button,input,select,textarea')].filter(node => {
+          if (node.disabled) return false;
+          for (let parent = node; parent && parent !== dialog; parent = parent.parentElement) if (parent.hidden) return false;
+          return true;
+        });
+        const first = nodes[0], last = nodes.at(-1);
+        if (!first) { event.preventDefault(); dialog.focus(); }
+        else if (!nodes.includes(document.activeElement)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
+        else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      });
+      dismiss.focus();
+    }
+    if (requestedChannel && cards.has(requestedChannel)) openChannel(cards.get(requestedChannel).channel, cards.get(requestedChannel).open);
     return;
   }
   for (const group of active[2]) {
@@ -743,23 +1304,121 @@ async function settings(group = settingsGroup, view = settingsView) {
     appendSettingsControls(section, entries, groupTitle);
     if (group === 'Credentials') {
       section.append(el('p', '凭据是敏感操作，仍需逐项明确替换或清除；原值永不回显。', 'meta'));
-      for (const item of credentials.filter((entry) => entry.id !== 'ZOTERO_API_KEY')) appendCredentialEditor(section, item);
+      for (const item of credentials.filter((entry) => !['PAPERECHO_MODEL_API_KEY', 'ZOTERO_API_KEY', 'TITLE_TRANSLATION_API_KEY', 'PREFERENCE_LEARNING_API_KEY'].includes(entry.id))) appendCredentialEditor(section, item);
       section.append(el('p', '已配置不代表连接成功。暂无可复用的安全连接测试入口；连接测试尚未开放。', 'muted'));
     }
     if (entries.length || group === 'Credentials') body.append(section);
   }
 }
+async function setup() {
+  const [state, entries] = await Promise.all([api('/api/setup'), api('/api/settings')]); setupState = state;
+  const titles = ['欢迎使用', '确认本地工作空间', '基础配置', '服务凭据', '本地检查与摘要'];
+  const section = el('section', undefined, 'settings-section setup-wizard'); section.dataset.step = setupStep;
+  section.append(pageIntro(titles[setupStep], `第 ${setupStep + 1} / 5 步 · 配置保存在本机，可返回修改或下次继续。`));
+  const actions = el('div', undefined, 'wizard-actions');
+  const go = async step => { setupStep = step; await render(); window.scrollTo?.(0, 0); main.focus({ preventScroll: true }); };
+  if (setupStep === 0) {
+    section.append(el('p', 'PaperEcho 在本机运行。向导不会自动检索、调用 AI、写入 Zotero、发送通知或创建计划任务。'), el('p', '已有配置和研究历史会保留；可选服务可以稍后在 Settings 中配置。'));
+    await appendLoginStartup(section);
+  } else if (setupStep === 1) {
+    section.append(contextCard('已选定的数据位置', [`部署模式：${{ installed: '安装模式（程序与数据分离）', portable: '可携带模式', dev: '开发模式' }[state.roots.layout] || state.roots.layout}`, `用户数据目录：${state.roots.userDataRoot}`, `缓存目录：${state.roots.cacheRoot}`]), el('p', '数据目录由启动时的路径契约确定。此处仅确认，不迁移数据，也不切换到其它工作空间。'));
+    if (window.paperEchoFirstRun) {
+      const availability = await window.paperEchoFirstRun.status();
+      if (availability.available) {
+        const notice = el('p', '首次空白配置可选择其他空目录；保存后必须重新启动。', 'meta'); notice.setAttribute('role', 'status');
+        const choose = button('选择数据目录…', async () => {
+          let pending = false;
+          const controls = [...document.querySelectorAll('button,input,select,textarea')].map(node => [node, node.disabled]);
+          controls.forEach(([node]) => { node.disabled = true; });
+          try {
+            const result = await window.paperEchoFirstRun.choose();
+            if (['restarting', 'restart-required'].includes(result.status)) {
+              pending = true;
+              notice.textContent = result.status === 'restarting' ? '位置已保存，正在重新启动。新进程确认目录后才可继续。' : '位置已保存，但尚未重新启动。请关闭并重新打开 PaperEcho；不要在当前窗口继续配置。';
+              document.querySelectorAll('button,input,select,textarea,a').forEach(node => { if ('disabled' in node) node.disabled = true; else node.setAttribute('aria-disabled', 'true'); });
+              return;
+            }
+            notice.textContent = result.status === 'cancelled' ? '已取消，数据位置未改变。' : `目录未切换：${errorMessages[result.error] || '请选择独立、可写的空目录，或保留默认位置。'}`;
+          } catch { pending = true; section.replaceChildren(el('h2', '需要重新启动'), el('p', '未确认重新启动。请关闭并重新打开 PaperEcho，核对实际数据位置；不要重复保存。')); }
+          finally { if (!pending) controls.forEach(([node, disabled]) => { node.disabled = disabled; }); }
+        });
+        section.append(choose, notice);
+      }
+    }
+  } else if (setupStep === 2) {
+    const form = el('form', undefined, 'settings-subgroup');
+    const saved = id => setupDraft.has(id) ? setupDraft.get(id) : entries.find(x => x.id === id)?.value;
+    const mode = select([['', '请选择运行路径'], ...Object.entries(runtimePaths).map(([id, value]) => [id, value.title])], saved('runtime.mode')); mode.required = true; mode.dataset.setupField = 'runtime.mode';
+    form.append(label('运行路径（必需）', mode));
+    const panel = el('div'); const controls = new Map();
+    const sync = () => {
+      panel.replaceChildren(); controls.clear();
+      const selected = mode.value;
+      if (!selected) return;
+      panel.append(el('p', runtimePaths[selected].summary), el('p', runtimePaths[selected].needs, 'meta'));
+      for (const spec of runtimePathFields[selected]) {
+        const entry = entries.find(x => x.id === spec.id); const input = settingControl(entry);
+        input.value = saved(spec.id) ?? ''; input.required = spec.required; input.dataset.setupField = spec.id;
+        input.addEventListener('input', () => setupDraft.set(spec.id, input.value));
+        panel.append(label(`${entry.description}${spec.required ? '（必需）' : '（可选）'}`, input)); controls.set(spec.id, input);
+      }
+    };
+    mode.addEventListener('change', () => { setupDraft.set('runtime.mode', mode.value); sync(); }); sync(); form.append(panel);
+    const save = button('保存基础配置并继续', async () => {
+      if (!form.reportValidity()) return;
+      const updates = [{ id: 'runtime.mode', value: mode.value }];
+      for (const [id, input] of controls) if (input.value.trim()) updates.push({ id, value: input.value.trim() });
+      await api('/api/settings', { updates }); setupDraft.clear();
+      notice.textContent = '基础配置已保存；运行路径将在下次启动时采用，当前检查读取已保存配置。';
+      await go(3);
+    });
+    form.addEventListener('submit', event => { event.preventDefault(); save.click(); });
+    form.append(save); section.append(form);
+  } else if (setupStep === 3) {
+    section.append(el('p', '密钥原值永不回显，也不会请求外部服务验证。可稍后配置；缺少运行必需凭据时，完成页仍会显示“仍需配置”。'));
+    const credentials = await api('/api/credentials');
+    const ids = [];
+    if (entries.find(x => x.id === 'runtime.mode')?.value === 'web') ids.unshift('ZOTERO_API_KEY');
+    for (const id of ids) appendCredentialEditor(section, credentials.find(x => x.id === id));
+    const refresh = await appendModelSettings(section, entries, credentials);
+    await appendAiService(section, entries, refresh, credentials);
+  } else {
+    section.append(el('h3', state.canRun ? '本地检查通过' : '仍需配置，尚不能正式运行'), el('p', '仅进行了本地配置与环境检查；密钥、网络连接及真实外部服务尚未验证。'), el('p', state.persisted ? '基础配置已持久保存。' : '基础配置尚未保存。'));
+    section.append(contextCard('已保存配置摘要', [`运行路径：${runtimePaths[state.mode]?.title || '仍需选择'}`, `用户数据目录：${state.roots.userDataRoot}`, `当前服务路径：${runtimePaths[state.roots.activeMode]?.title || '未选择'}`]));
+    if (state.mode && state.mode !== state.roots.activeMode) section.append(el('p', '已保存的新运行路径将在下次启动时采用；此处检查读取已保存配置。', 'meta'));
+    const checkGroups = el('div', undefined, 'setup-check-groups'); section.append(checkGroups);
+    for (const [title, values] of [['必需项目', state.requiredMissing], ['可选或稍后配置', state.optionalMissing]]) {
+      const group = el('section'); group.append(el('h4', title)); const list = el('ul');
+      const names = { 'Stage5 recipient': '通知收件人', 'real LLM credentials': 'AI 服务凭据', 'local.input': '本地输入文件或目录', 'local.outputRoot': '本地结果目录', ZOTERO_API_KEY: 'Zotero Web 凭据', ZOTERO_USER_ID: 'Zotero 用户 ID' };
+      for (const item of values) list.append(el('li', `${names[item.name] || item.name}：${item.purpose || ''}。${title === '必需项目' ? '请返回基础配置或在设置中补充后重新检查。' : '可稍后在设置中配置。'}`));
+      if (!values.length) list.append(el('li', '无未完成项目')); group.append(list); checkGroups.append(group);
+    }
+    const checks = { production_entry: '工作流程序', local_input: '本地输入', local_output_root: '本地结果目录', local_feedback: '本地反馈文件', project_output_root: '研究结果目录', zotero_desktop: 'Zotero Desktop', desktop_cli_bridge: 'Zotero 连接组件', zotero_web_api: 'Zotero Web 配置（尚未连接）', smtp: '邮件配置' };
+    for (const item of state.readiness) section.append(el('p', `${checks[item.name] || '本地环境项目'}：${item.status === 'ready' ? '通过' : '仍需检查'}`, 'meta'));
+    actions.append(button('重新检查', () => go(4)), button(state.canRun ? '完成并进入 Control Center' : '进入 Control Center 继续设置', () => navigate('home')));
+  }
+  if (setupStep > 0) actions.prepend(button('上一步', () => go(setupStep - 1)));
+  if ([0, 1, 3].includes(setupStep)) actions.append(button(setupStep === 3 ? '继续本地检查（可跳过凭据）' : '下一步', () => go(setupStep + 1)));
+  if (setupStep < 4) actions.append(button('稍后继续', () => navigate('home')));
+  section.append(actions); main.replaceChildren(section);
+}
 async function render() {
+  disposeManualRunView(); disposeManualRunView = () => {};
+  clearCredentialInputs();
+  activeChannelModal?.close(true, false);
+  document.body.classList.toggle('ai-settings-view', page === 'settings' && settingsGroup === 'review');
+  document.body.classList.toggle('workbench-view', !(page === 'settings' && settingsGroup === 'review'));
+  main.dataset.workbenchPage = page;
   activeReview = null; main.setAttribute('aria-busy', 'true'); main.replaceChildren(el('p', '正在读取当前工作空间…', 'loading'));
   document.querySelector('#page-title').textContent = pageNames[page];
-  document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = true; node.setAttribute('aria-current', node.dataset.page === page ? 'page' : 'false'); });
+  document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = true; node.setAttribute('aria-current', node.dataset.page === (page === 'run' ? 'home' : page) ? 'page' : 'false'); });
   document.querySelectorAll('[data-nav-group]').forEach((group) => { group.querySelector('.secondary-nav').hidden = group.dataset.navGroup !== page; });
   document.querySelectorAll('[data-nav-route]').forEach((node) => {
     const [, section] = node.dataset.navRoute.split('/');
     const active = page === 'feedback' ? section === feedbackView : page === 'settings' ? section === ({ common: 'general', review: 'models', runtime: 'runtime', automation: 'automation', connections: 'connections' }[settingsGroup]) : false;
     node.setAttribute('aria-current', active ? 'page' : 'false');
   });
-  try { await ({ home, weekly, feedback, settings, system })[page](); }
+  try { await ({ home, weekly, feedback, settings, system, setup })[page](); }
   catch { notice.dataset.kind = 'error'; notice.textContent = '无法读取当前页面，请检查本地服务后重试。'; empty('页面暂不可用', '没有更改你的数据。'); main.append(button('重新读取', render)); }
   finally { main.querySelector('.loading')?.remove(); main.setAttribute('aria-busy', 'false'); document.querySelectorAll('[data-page]').forEach((node) => { node.disabled = false; }); }
 }
@@ -776,20 +1435,34 @@ function parseRoute(hash) {
     if (section === 'automation' && task === 'plan') { state.page = 'home'; return state; }
     const groups = { general: 'common', common: 'common', models: 'review', review: 'review', runtime: 'runtime', automation: 'automation', connections: 'connections' };
     state.settingsGroup = groups[section] || 'common';
-    const fallback = { common: 'databases', review: 'translation', runtime: 'path', automation: 'radar', connections: 'notifications' }[state.settingsGroup];
-    state.settingsView = settingViews[state.settingsGroup].some(([key]) => key === task) ? task : fallback;
+    const fallback = { common: 'databases', review: 'ai', runtime: 'path', automation: 'radar', connections: 'notifications' }[state.settingsGroup];
+    if (state.settingsGroup === 'automation') { state.settingsView = 'radar'; return state; }
+    state.settingsView = settingViews[state.settingsGroup].some(([key]) => key === task) || state.settingsGroup === 'connections' && notificationChannelIds.includes(task) ? task : fallback;
   }
   return state;
 }
 function route() {
+  if (location.hash === '#run') { manualRunExpanded = true; location.replace('#home'); return; }
   if (location.hash === '#content' && main.getAttribute('aria-busy') === 'false') { main.focus(); return; }
   ({ page, feedbackView, reviewSection, settingsGroup, settingsView } = parseRoute(location.hash));
   notice.textContent = ''; document.querySelector('#sidebar').dataset.open = 'false'; document.querySelector('#menu-toggle').setAttribute('aria-expanded', 'false');
-  return render().then(() => { window.scrollTo?.(0, 0); (activeReview?.workspace || main).focus({ preventScroll: true }); });
+  return render().then(() => { window.scrollTo?.(0, 0); if (!activeChannelModal) (activeReview?.workspace || main).focus({ preventScroll: true }); focusSettingTarget(); });
 }
 const defaultRoutes = { feedback: 'feedback/rating/normal', settings: 'settings/general/databases' };
 document.querySelectorAll('[data-page]').forEach((node) => node.addEventListener('click', () => navigate(defaultRoutes[node.dataset.page] || node.dataset.page)));
 document.querySelectorAll('[data-nav-route]').forEach((node) => node.addEventListener('click', () => navigate(node.dataset.navRoute)));
 document.querySelector('#menu-toggle').addEventListener('click', () => { const sidebar = document.querySelector('#sidebar'); const open = sidebar.dataset.open !== 'true'; sidebar.dataset.open = String(open); document.querySelector('#menu-toggle').setAttribute('aria-expanded', String(open)); });
 window.addEventListener('hashchange', route);
-api('/api/session').then((session) => { csrf = session.token; return route(); }).catch(() => { main.replaceChildren(); empty('无法连接本地服务', '请确认 Control Center 正在运行，然后刷新页面。'); main.setAttribute('aria-busy', 'false'); });
+window.addEventListener('paperecho:preview-configuration-saved', () => refreshConfigurationDiagnostics());
+window.addEventListener('pagehide', () => clearCredentialInputs());
+window.addEventListener('pageshow', () => clearCredentialInputs());
+api('/api/session').then(async session => {
+  csrf = session.token;
+  if (!window.paperEchoLoginStartup) document.querySelector('.eyebrow').textContent = '本地 HTML 工作台 · 真实工作空间';
+  const { version } = await api('/api/version');
+  document.querySelector('#app-version').textContent = version ? `PaperEcho v${version}` : 'PaperEcho（版本未标定）';
+  setupState = await api('/api/setup');
+  if (setupState.needsSetup) history.replaceState(null, '', '#setup');
+  if (setupState.restoreRequired || setupState.recoveryRequired) history.replaceState(null, '', '#system');
+  return route();
+}).catch(() => { main.replaceChildren(); empty('无法连接本地服务', '请确认 Control Center 正在运行，然后刷新页面。'); main.setAttribute('aria-busy', 'false'); });

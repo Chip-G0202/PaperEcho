@@ -58,7 +58,7 @@ test('corrupted, contradictory and future state fail closed', () => {
     { ...baseline, last_successful_full_run_at: day(-1).toISOString() },
     { ...baseline, last_successful_scheduled_run_at: day(9).toISOString() },
   ]) assert.throws(() => select(7, { runtimeState: state }), /SCHEDULE_STATE_INVALID/);
-  assert.throws(() => select(7, { intervalDays: 14 }), /SCHEDULE_INTERVAL_UNSUPPORTED/);
+  assert.throws(() => select(7, { intervalDays: 0 }), /SCHEDULE_INTERVAL_UNSUPPORTED/);
 });
 
 test('state reader distinguishes missing, unreadable and malformed from an empty initial state', async () => {
@@ -68,4 +68,25 @@ test('state reader distinguishes missing, unreadable and malformed from an empty
   assert.equal(decideScheduledDaily({ now: day(0), ...empty }).selectedFlow, 'weekly');
   await assert.rejects(readScheduledRuntimeState('unused', { readFile: async () => '{' }), /SCHEDULE_STATE_INVALID:json/);
   await assert.rejects(readScheduledRuntimeState('unused', { readFile: async () => { throw new Error('permission'); } }), /SCHEDULE_STATE_UNREADABLE/);
+});
+
+ test('custom intervals preserve the success anchor and disabled brief never takes over', () => {
+  assert.equal(select(7, { intervalDays: 14 }).selectedFlow, 'radar');
+  assert.equal(select(14, { intervalDays: 14 }).selectedFlow, 'weekly');
+  assert.equal(select(7, { intervalDays: 14 }).nextWeeklySlot, day(14).toISOString());
+  assert.equal(select(1, { intervalDays: 1 }).selectedFlow, 'weekly');
+  assert.equal(select(30, { weeklyEnabled: false }).selectedFlow, 'radar');
+  assert.equal(select(30, { weeklyEnabled: false, radarEnabled: false }).allowed, false);
+  assert.equal(select(30, { weeklyEnabled: false }).nextWeeklySlot, null);
+  for (const intervalDays of [-1, 1.5, NaN, Infinity]) assert.throws(() => select(7, { intervalDays }), /SCHEDULE_INTERVAL_UNSUPPORTED/);
+ });
+
+test('custom Beijing trigger respects minute boundary and keeps old day claims after a time edit', async () => {
+ const {resolvePlannedSlotAt,validateScheduleDayClaim}=await import('../tools/lib/schedule_support.mjs');
+ const now=new Date('2026-11-02T01:25:00Z');
+ assert.equal(resolvePlannedSlotAt(now,'09:25').toISOString(),'2026-11-02T01:25:00.000Z');
+ assert.equal(decideScheduledDaily({now:new Date('2026-11-02T01:24:59Z'),time:'09:25'}).allowed,false);
+ assert.equal(decideScheduledDaily({now,time:'09:25'}).allowed,true);
+ const claim={schemaVersion:1,dateKey:'2026-11-02',plannedSlotAt:'2026-11-02T07:00:00.000Z',decision:'radar',businessRunId:'existing'};
+ assert.equal(validateScheduleDayClaim(claim,now),claim);
 });

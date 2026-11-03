@@ -306,10 +306,12 @@ async function processResearchEvaluationInput({
   llmRuntime = null,
   manualStandardEvaluationConfig = {},
   evaluationText = null,
+  configEnv = process.env,
+  prepareOnly = false,
 } = {}) {
   const mdPath = screeningStandardsPath(reviewRoot);
   const docxPath = screeningStandardsDocxPath(reviewRoot);
-  let pubmedConfig = readJsonIfExists(pubmedConfigPath);
+  let pubmedConfig = readJsonIfExists(pubmedConfigPath, { env: configEnv });
   const pubmedQueryBefore = String(pubmedConfig.query || buildPubMedQueryFromKeywordGroups(loadPubMedKeywordGroupsFromConfig(pubmedConfig)));
   const llmConfig = llmRuntime || getPreferenceLearningConfig();
   const audit = emptyAudit({ auditPath, llmConfig, pubmedQueryBefore, pubmedQueryAfter: pubmedQueryBefore });
@@ -323,7 +325,7 @@ async function processResearchEvaluationInput({
     if (evaluationText !== null) {
       parsed = {
         evaluation_text: evaluationText,
-        rules_text: (await readScreeningStandardsFile(reviewRoot)).content,
+        rules_text: prepareOnly ? await fs.promises.readFile(mdPath, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; }) : (await readScreeningStandardsFile(reviewRoot)).content,
         keyword_state: loadPubMedKeywordGroupsFromConfig(pubmedConfig),
         suggestions_table: [],
       };
@@ -451,6 +453,7 @@ async function processResearchEvaluationInput({
     evaluationText: parsed.evaluation_text,
     generatedAt,
   });
+  if (prepareOnly) return { evaluation_processed: true, proposed_changes: proposedChanges };
   audit.parsed_result = output;
   audit.llm_output = output;
   audit.llm_raw_text = llm.raw_text || "";
@@ -513,7 +516,7 @@ async function processResearchEvaluationInput({
     const afterMd = applyRuleModifications(beforeMd, output);
     await fs.promises.writeFile(mdPath, afterMd, "utf8");
     audit.formal_rules_modified = afterMd !== beforeMd;
-    queryUpdate = updatePubMedPmcKeywordGroups(pubmedConfigPath, output);
+    queryUpdate = await updatePubMedPmcKeywordGroups(pubmedConfigPath, output);
     audit.pubmed_config_modified = true;
     await syncScreeningStandardsDocx(reviewRoot, {
       pubmedConfigPath,

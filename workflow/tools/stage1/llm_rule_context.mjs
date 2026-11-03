@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DOMAIN_SECTIONS, readDomainConfig } from '../lib/application_config.mjs';
 
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
@@ -19,6 +20,13 @@ function hashValue(value) {
 }
 
 async function readText(filePath) {
+  if (DOMAIN_SECTIONS[path.basename(filePath)]) {
+    const loaded = readDomainConfig(filePath);
+    if (loaded.canonical) {
+      const content = loaded.value ? JSON.stringify(loaded.value) : '';
+      return { content, hash: hashText(content), included: Boolean(loaded.value), warning: loaded.value ? '' : 'missing' };
+    }
+  }
   try {
     const content = await fs.readFile(filePath, "utf8");
     return { content, hash: hashText(content), included: true, warning: "" };

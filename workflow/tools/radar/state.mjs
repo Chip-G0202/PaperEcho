@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { withAtomicJsonLock, writeAtomicJson } from "../lib/atomic_json.mjs";
-import { getLiteratureIdentityKeys } from "../lib/literature_identity.mjs";
+import { getLiteratureIdentityKeys, normalizeTitleForExistingDedupe } from "../lib/literature_identity.mjs";
+import { normalizeDoi } from "../lib/doi_normalization.mjs";
 import { canonicalQueryHash } from "../stage1/source_state.mjs";
 import {
   findLiteratureRecord,
@@ -74,6 +75,23 @@ export function radarClassificationFingerprint(item = {}) {
     ruleEvidence: item.matched_signals || item.matched_standard_rules || item.grade_reason || "",
     llmEvidence: item.llm_review || { reason: item.semantic_reason || "", confidence: item.semantic_confidence ?? null },
     metadataFingerprint: radarMetadataFingerprint(item),
+  });
+}
+
+// Notification-only v2; the queue's existing classification contract stays unchanged.
+export function radarNotificationFingerprint(item = {}) {
+  const doi = normalizeDoi(item.doi || item.DOI);
+  const title = normalizeTitleForExistingDedupe(item.title);
+  if (!doi && !title) throw new Error("RADAR_NOTIFICATION_IDENTITY_MISSING");
+  const grade = value => /^[ABCD]$/.test(clean(value).toUpperCase()) ? clean(value).toUpperCase() : null;
+  const confidence = clean(item.llm_review?.confidence).toLowerCase();
+  return 'v2:' + canonicalQueryHash({
+    identity: doi ? `doi:${doi}` : `title:${title}`,
+    ruleGrade: grade(item.rule_grade || item.ruleGrade || item.grade),
+    llmGrade: grade(item.llm_review_grade || item.llmGrade || item.semantic_grade),
+    finalGrade: grade(item.final_grade || item.finalGrade || item.grade),
+    confidence: ['low', 'medium', 'high'].includes(confidence) ? ({ low: 0.3, medium: 0.65, high: 0.9 })[confidence]
+      : typeof item.semantic_confidence === 'number' && Number.isFinite(item.semantic_confidence) && item.semantic_confidence >= 0 && item.semantic_confidence <= 1 ? item.semantic_confidence : null,
   });
 }
 
@@ -372,20 +390,42 @@ export async function settleRadarQueueClassification(filePath, identity, {
   }, options);
 }
 
-export async function selectRadarNotificationCandidates(indexPath, items = []) {
+export async function selectRadarNotificationCandidates(indexPath, items = [], { persist = updateSharedLiteratureRecordState } = {}) {
   const read = await readZoteroLibraryIndex(indexPath);
+  if (!read.usable && read.reason !== 'index_missing') throw new Error('RADAR_NOTIFICATION_HISTORY_UNREADABLE');
   const index = read.usable ? read.index : { records: {} };
   const selected = [];
   const suppressed = [];
+  const baselines = [];
+  const compatibility = [];
   for (const item of items) {
-    const fingerprint = radarClassificationFingerprint(item);
+    const stable = radarNotificationFingerprint(item);
+    const legacy = radarClassificationFingerprint(item);
     const record = findLiteratureRecord(index, item);
     const notification = record?.radar_notification || {};
-    if ([notification.deliveredFingerprint, notification.unknownFingerprint].includes(fingerprint)) {
-      suppressed.push({ identity: canonicalRadarIdentity(item), fingerprint, reason: notification.deliveredFingerprint === fingerprint ? "already_delivered" : "unknown_held" });
-    } else selected.push({ item, fingerprint });
+    if (typeof notification !== 'object' || Array.isArray(notification)) throw new Error('RADAR_NOTIFICATION_HISTORY_INCOMPLETE');
+    const fields = ['deliveredFingerprint', 'unknownFingerprint'];
+    const history = fields.map(field => notification[field]).filter(Boolean);
+    if (!history.length && (['accepted', 'unknown'].includes(notification.lastOutcome) || notification.deliveredAt || notification.unknownAt)) throw new Error('RADAR_NOTIFICATION_HISTORY_INCOMPLETE');
+    // Failed old attempts are not delivery evidence, but are not new history either.
+    if (!history.length && notification.lastDecisionFingerprint) history.push(notification.lastDecisionFingerprint);
+    if (history.some(value => typeof value !== 'string' || !/^(?:v2:)?[a-f0-9]{64}$/.test(value))) throw new Error('RADAR_NOTIFICATION_FINGERPRINT_UNSUPPORTED');
+    const matched = fields.find(field => [stable, legacy].includes(notification[field]));
+    if (matched) {
+      suppressed.push({ identity: canonicalRadarIdentity(item), fingerprint: notification[matched], reason: matched === 'deliveredFingerprint' ? "already_delivered" : "unknown_held" });
+      if (history.includes(legacy)) baselines.push({ item, patch: previous => {
+        const current = previous.radar_notification || {};
+        const upgrades = Object.fromEntries(fields.filter(field => current[field] === legacy).map(field => [field, stable]));
+        return Object.keys(upgrades).length ? { radar_notification: { ...current, ...upgrades } } : null;
+      } });
+    } else {
+      const unresolved = history.some(value => !value.startsWith('v2:'));
+      if (unresolved) compatibility.push({ identity: canonicalRadarIdentity(item), status: 'legacy_unmatched' });
+      selected.push({ item, fingerprint: unresolved ? legacy : stable });
+    }
   }
-  return { selected, suppressed, indexUsable: read.usable, indexReason: read.reason || "" };
+  if (baselines.length && (await persist(indexPath, baselines))?.ok !== true) throw new Error('RADAR_NOTIFICATION_BASELINE_SAVE_FAILED');
+  return { selected, suppressed, compatibility, indexUsable: read.usable, indexReason: read.reason || "" };
 }
 
 export async function recordRadarNotificationOutcome(indexPath, selected = [], outcome = {}, { generatedAt = new Date().toISOString() } = {}) {
@@ -393,14 +433,15 @@ export async function recordRadarNotificationOutcome(indexPath, selected = [], o
   if (!new Set(["accepted", "unknown", "failed"]).has(status)) return { ok: true, updated_count: 0, skipped: true };
   return updateSharedLiteratureRecordState(indexPath, selected.map(({ item, fingerprint }) => ({
     item,
-    patch: {
+    patch: previous => ({
       radar_notification: {
+        ...(previous.radar_notification || {}),
         ...(status === "accepted" ? { deliveredFingerprint: fingerprint, deliveredAt: generatedAt } : {}),
         ...(status === "unknown" ? { unknownFingerprint: fingerprint, unknownAt: generatedAt } : {}),
         lastDecisionFingerprint: fingerprint,
         lastOutcome: status,
         lastOutcomeAt: generatedAt,
       },
-    },
+    }),
   })), { generatedAt });
 }

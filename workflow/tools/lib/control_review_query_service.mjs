@@ -1,16 +1,48 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { buildStage4StandaloneExportSource } from '../stage4/finalize_exports_support.mjs';
+import { buildStage4StandaloneExportSource, buildProspectiveStage4ExportSource, buildFinalExportPayload, buildFinalReviewMembership, isManualReviewReachable, buildReviewProjectionContext } from '../stage4/finalize_exports_support.mjs';
 import { buildRunSummary } from './run_summary.mjs';
 import { feedbackIdentity } from './control_feedback_service.mjs';
 import { loadSourceSelectionConfig } from './literature_config.mjs';
 import { buildRuntimeConfig } from './runtime_config.mjs';
 import { buildLocalStage4ExportSource } from '../stage4/export_source_step.mjs';
 import { getWeeklyReviewEvidence } from '../stage4/spreadsheet_adapter.mjs';
-import { listPendingPaperReview } from './pending_paper_review.mjs';
+import { readPendingPaperReview, matchPendingPaperRecord } from './pending_paper_review.mjs';
+import { isActiveRuleSuggestion } from './unified_pending_rule_suggestions.mjs';
+import { getReviewDisplayMetadata } from './review_display_metadata.mjs';
+import { normalizeTitleCacheKey } from './title_translation_support.mjs';
+import { readBoundedJson, boundedDirectory } from './atomic_json.mjs';
+import { validateOperationLedger, inspectWorkflowLease } from '../recovery/operation_ledger.mjs';
+import { inspectRecoveryLedger } from '../recovery/run_recovery.mjs';
+import { validateNotificationReceipt } from '../stage5/email_receipt.mjs';
 
 const inside = (root, candidate) => { const rel = path.relative(root, candidate); return rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
+const paperId = (runId, item, index, keys = []) => createHash('sha256').update(item._reviewScopeRunId ? `${runId}:scope:${item._reviewScopeRunId}:${keys[0] || ''}` : `${runId}:${index}:${keys[0] || ''}`).digest('hex');
+const identityKeys = (item) => { try { return feedbackIdentity(item); } catch { return []; } };
+
+// Current artifact evidence owns actionability; durable pending status alone
+// never makes a historical record a current task. Canonical decisions win.
+export function isActiveManualReview(item, current = []) {
+  return isManualReviewReachable(item, { current });
+}
+
+// Artifact scope owns visibility for both queues. Canonical decisions overlay
+// progress immediately; they never remove an item from that selected scope.
+export function getCurrentReviewLifecycle(item, current = []) {
+  const keys = identityKeys(item);
+  const decision = current.find(entry => entry.keys.some(key => keys.includes(key)));
+  const manualVisible = Boolean(item._activeManualItem && isActiveManualReview(item._activeManualItem));
+  const reviewScopeBucket = manualVisible ? 'manual' : getWeeklyReviewEvidence(item).reviewBucket === 'feedback' ? 'feedback' : null;
+  const manualReviewPending = manualVisible && isActiveManualReview(item._activeManualItem, current);
+  return {
+    reviewScopeBucket,
+    reviewPending: keys.length > 0 && (manualVisible ? manualReviewPending : reviewScopeBucket === 'feedback' && !decision?.value),
+    manualReviewPending,
+    feedback: decision?.value || null,
+    manualGrade: decision?.manual_grade || null,
+  };
+}
 export class ReviewQueryService {
   constructor({ root, context = buildRuntimeConfig({ cwd: root, env: {}, argv: [] }), reviewRoot = context.reviewRoot, feedback, rules }) {
     Object.assign(this, { root: path.resolve(root), reviewRoot, feedback, rules });
@@ -41,6 +73,39 @@ export class ReviewQueryService {
     }
     return runs.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
   }
+  async health() {
+    const lease = await readBoundedJson(this.runRoot, path.join(this.runRoot, '.workflow.lease.json'));
+    const claim = inspectWorkflowLease(lease);
+    const runs = [];
+    for (const entry of await boundedDirectory(this.runRoot)) {
+      if (!entry.isDirectory()) continue;
+      const manifest = await readBoundedJson(this.runRoot, path.join(this.runRoot, entry.name, 'run_group.json'));
+      if (!manifest || manifest.schemaVersion !== 1 || manifest.runId !== entry.name || !Number.isFinite(Date.parse(manifest.startedAt))) throw new Error('RUN_MANIFEST_UNCONFIRMED');
+      runs.push(manifest);
+    }
+    const latest = runs.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0];
+    if (!latest) return { claim, lastRun: 'none', ledger: 'absent', receipts: [] };
+    const directory = path.join(this.runRoot, latest.runId);
+    const ledger = await readBoundedJson(this.runRoot, path.join(directory, 'operation_ledger.json'));
+    const lastRun = ['completed', 'running', 'failed', 'incomplete', 'interrupted', 'timed_out'].includes(latest.status) ? latest.status : 'unknown';
+    if (!ledger) return { claim, lastRun, ledger: 'absent', receipts: [] };
+    validateOperationLedger(ledger, { expectedRunId: latest.runId });
+    const notifications = ledger.operations.filter(op => op.type === 'notification');
+    if (notifications.length > 8) throw new Error('INSPECTION_LIMIT');
+    const receipts = [];
+    for (const operation of notifications) {
+      const file = operation.target?.receiptPath || operation.target?.path;
+      if (!file || !path.isAbsolute(file)) throw new Error('RECEIPT_PATH_UNCONFIRMED');
+      const receipt = await readBoundedJson(directory, file);
+      if (!receipt) { receipts.push('missing'); continue; }
+      validateNotificationReceipt(receipt);
+      if (receipt.runId !== latest.runId) throw new Error('RECEIPT_RUN_MISMATCH');
+      receipts.push(receipt.status);
+    }
+    const runner = await readBoundedJson(directory, path.join(directory, 'runner_report.json'));
+    return { claim, lastRun, ledger: 'readable', ...inspectRecoveryLedger(ledger), receipts,
+      runner: runner ? (['timed_out', 'interrupted', 'completed', 'failed'].includes(runner.status) ? runner.status : 'unknown') : 'absent' };
+  }
   pipeline(run) {
     const base = this.localRepository?.root || this.researchRoot;
     const artifact = run.artifacts?.find((entry) => entry.kind === 'pipeline' && entry.rootKey === (this.localRepository ? 'local' : 'research'));
@@ -58,36 +123,89 @@ export class ReviewQueryService {
         if (snapshot.schema_version !== 1 || !Array.isArray(snapshot.papers)) throw new Error('LOCAL_PAPERS_SCHEMA_UNSUPPORTED');
         const pipeline = this.pipeline(run);
         const report = pipeline ? await this.read(path.join(pipeline, 'run_report.json')) : null;
-        const source = buildLocalStage4ExportSource({ papers: snapshot.papers, runReport: report || {} });
+        const source = buildLocalStage4ExportSource({ papers: snapshot.papers, runReport: report || {}, runId: run.runId });
         return { run, report: report || {}, writeback: null, items: source.finalPayload.triaged };
       }
       const pipeline = this.pipeline(run);
       if (!pipeline) continue;
       const report = await this.read(path.join(pipeline, 'run_report.json'));
       if (report?.steps?.med_weekly_synthesis?.completed !== true) continue;
+      if (report.skipped || report.profile === 'radar' || report.runtime_profile === 'radar'
+        || (report.run_id && report.run_id !== run.runId)
+        || (report.started_at && Date.parse(report.started_at) < Date.parse(run.startedAt))) continue;
       const source = await this.read(path.join(pipeline, 'desktop_daily_review_source.json'));
       const writeback = await this.read(path.join(pipeline, 'zotero_writeback_summary.json'));
       const filtered = buildStage4StandaloneExportSource({ desktopSource: source, writebackSummary: writeback });
       if (!['ok', 'no_new_writeback_items'].includes(filtered.filter.status)) continue;
-      return { run, report, writeback, items: filtered.allAbcItems };
+      return { run, report, writeback, items: buildFinalExportPayload({ allAbcItems: filtered.allAbcItems, writebackSummary: writeback, reviewContext: buildReviewProjectionContext(report) }).triaged };
     }
     return null;
   }
+  async currentReviewScope(weekly, { pendingRecords = [] } = {}) {
+    const seen = new Set();
+    const runs = await this.runs();
+    if (!this.localRepository) for (const run of runs) {
+      const pipeline = this.pipeline(run);
+      if (!pipeline || !['desktop', 'web'].includes(run.pipelineMode)) continue;
+      if (seen.has(pipeline)) continue;
+      seen.add(pipeline);
+      const report = await this.read(path.join(pipeline, 'run_report.json'));
+      if (!report || report.profile === 'radar' || report.runtime_profile === 'radar') continue;
+      // A date pipeline can be reused: do not attach a different run's output.
+      if (report.skipped || (report.run_id && report.run_id !== run.runId)
+        || (report.started_at && Date.parse(report.started_at) < Date.parse(run.startedAt))) continue;
+      const candidates = await this.read(path.join(pipeline, 'triaged_items.json'));
+      if (candidates !== null && !Array.isArray(candidates)) throw new Error('REVIEW_SCOPE_INVALID');
+      const reviewContext = buildReviewProjectionContext(report, { pendingRecords });
+      const manualCandidates = candidates || [];
+      // Both completed and prospective views use the same current-run Manual
+      // reachability owner; durable historical pending records are not a source.
+      if (weekly?.run.runId === run.runId) return { run, type: 'weekly', items: buildFinalExportPayload({ allAbcItems: weekly.items, writebackSummary: weekly.writeback || {}, manualCandidates, reviewContext }).triaged };
+      if (report.steps?.stage4_export_audit?.stage4_export_status === 'success'
+        || report.steps?.med_weekly_synthesis?.completed === true) {
+        const desktopSource = await this.read(path.join(pipeline, 'desktop_daily_review_source.json'));
+        const writebackSummary = await this.read(path.join(pipeline, 'zotero_writeback_summary.json'));
+        const source = buildStage4StandaloneExportSource({ desktopSource, writebackSummary });
+        return { run, type: 'stage4', items: buildFinalExportPayload({ allAbcItems: source.allAbcItems, writebackSummary: writebackSummary || {}, manualCandidates, reviewContext }).triaged };
+      }
+      if (candidates === null) {
+        continue;
+      }
+      return { run, type: 'prospective_stage4', items: buildProspectiveStage4ExportSource(candidates, reviewContext) };
+    }
+    return weekly && (this.localRepository || !runs.length) ? { run: weekly.run, type: 'weekly', items: weekly.items } : null;
+  }
   async reviewData() {
     const weekly = await this.latestWeeklyData();
-    const current = await this.feedback.current();
-    const queued = this.localRepository ? [] : await listPendingPaperReview({ reviewRoot: this.reviewRoot, current });
-    const admittedKeys = new Set((weekly?.items || []).flatMap((item) => {
-      try { return feedbackIdentity(item); } catch { return []; }
-    }));
-    const pending = queued.filter((item) => {
-      const keys = feedbackIdentity(item).filter((key) => !key.startsWith('review:'));
-      return !keys.some((key) => admittedKeys.has(key));
+    const state = this.localRepository ? { records: [] } : await readPendingPaperReview(this.reviewRoot);
+    const scope = await this.currentReviewScope(weekly, { pendingRecords: state.records });
+    if (!scope && !weekly) return null;
+    const seen = new Set();
+    const scopeItems = [];
+    for (const item of scope?.items || []) {
+      const record = matchPendingPaperRecord(item, state.records);
+      const scoped = { ...item, ...(record ? { pending_review_id: record.id } : {}), _reviewScopeRunId: scope.run.runId };
+      const keys = identityKeys(scoped);
+      if (!keys.length || keys.some((key) => seen.has(key))) continue;
+      keys.forEach((key) => seen.add(key)); scopeItems.push(scoped);
+    }
+    const active = scopeItems.filter((item) => isActiveManualReview(item));
+    const admittedKeys = new Set((weekly?.items || []).flatMap(identityKeys));
+    const admittedReviews = new Set();
+    const weeklyMembership = buildFinalReviewMembership(weekly?.items || []);
+    const admittedMembership = new Set([...weeklyMembership.feedback, ...weeklyMembership.manual]);
+    const weeklyItems = (weekly?.items || []).filter(item => admittedMembership.has(item)).map((item) => {
+      const keys = identityKeys(item);
+      const matches = active.filter((entry) => identityKeys(entry).some((key) => keys.includes(key)));
+      if (matches.length > 1) throw new Error('FEEDBACK_IDENTITY_AMBIGUOUS');
+      if (!matches.length || admittedReviews.has(matches[0])) return item;
+      admittedReviews.add(matches[0]);
+      return { ...item, _activeManualItem: matches[0] };
     });
-    if (!weekly && !pending.length) return null;
+    const held = active.filter((item) => !identityKeys(item).some((key) => admittedKeys.has(key))).map((item) => ({ ...item, _heldReview: item['写回状态'] !== '已写回', _activeManualItem: item }));
     return {
-      ...(weekly || { run: { runId: 'pending-review' }, report: {}, writeback: null, items: [] }),
-      items: [...(weekly?.items || []), ...pending],
+      ...(weekly || { run: scope.run, report: {}, writeback: null }),
+      reviewScope: scope, scopeItems, items: [...weeklyItems, ...held],
     };
   }
   async weekly({ offset = 0, limit = 50 } = {}) {
@@ -95,24 +213,24 @@ export class ReviewQueryService {
     const data = await this.reviewData();
     if (!data) return { runId: null, total: 0, items: [] };
     const current = await this.feedback.current();
+    const rawCache = await this.read(path.join(this.researchRoot,'translation_cache.json'));
+    const translationCache = new Map(Object.entries(rawCache || {}).filter(([,entry]) => entry?.ok === true).map(([title,entry]) => [normalizeTitleCacheKey(title),entry]));
     const items = data.items.slice(offset, offset + limit).map((item, index) => {
       let keys = [];
       try { keys = feedbackIdentity(item); } catch {}
-      const id = createHash('sha256').update(`${data.run.runId}:${offset + index}:${keys[0] || ''}`).digest('hex');
+      const id = paperId(data.run.runId, item, offset + index, keys);
       const evidence = getWeeklyReviewEvidence(item);
-      const currentEntry = current.find((entry) => entry.keys.some((key) => keys.includes(key)));
+      const pendingReview = item._heldReview === true;
       return {
-        id, feedbackAllowed: keys.length > 0, title: String(item.title || ''),
-        translatedTitle: String(item.translatedTitle || item.translated_title || item.title_translation || item['标题翻译'] || item['中文标题'] || item.shortTitle || ''),
-        authors: (Array.isArray(item.authors) ? item.authors : [item.authors || '']).map((author) => typeof author === 'string' ? author : [author?.firstName, author?.lastName].filter(Boolean).join(' ')), journal: String(item.journal || item.publicationTitle || ''), year: String(item.year || ''),
-        doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), source: String(item.source || item.source_type || ''),
+        id, feedbackAllowed: keys.length > 0 && ['feedback', 'manual'].includes(evidence.reviewBucket),
+        ...getReviewDisplayMetadata(item._activeManualItem ? {...item,...item._activeManualItem} : item,{translationCache}),
+        authors: (Array.isArray(item.authors) ? item.authors : [item.authors || '']).map((author) => typeof author === 'string' ? author : [author?.firstName, author?.lastName].filter(Boolean).join(' ')),
+        doi: String(item.doi || item.DOI || ''), pmid: String(item.pmid || ''), url: String(item.url || item.URL || ''),
         ...evidence,
-        grade: evidence.finalGrade, zotero: item.pending_review_id ? 'not_written' : this.localRepository ? 'not_used_local' : 'admitted',
-        pendingReview: Boolean(item.pending_review_id),
+        grade: evidence.finalGrade, zotero: pendingReview ? 'not_written' : this.localRepository ? 'not_used_local' : 'admitted',
+        pendingReview, ...getCurrentReviewLifecycle(item, current),
         abstract: typeof item.abstract === 'string' ? item.abstract : '',
         integrity: item.integrity_status || null,
-        feedback: currentEntry?.value || null,
-        manualGrade: currentEntry?.manual_grade || null,
       };
     });
     return { runId: data.run.runId, total: data.items.length, items };
@@ -120,10 +238,12 @@ export class ReviewQueryService {
   async resolvePaper(runId, id) {
     const data = await this.reviewData();
     if (!data || data.run.runId !== runId) throw new Error('WEEKLY_CHANGED_RELOAD');
-    const matches = data.items.filter((item, index) => {
+    const matches = (data?.items || []).filter((item, index) => {
       let keys = []; try { keys = feedbackIdentity(item); } catch {}
-      return createHash('sha256').update(`${runId}:${index}:${keys[0] || ''}`).digest('hex') === id;
+      return paperId(runId, item, index, keys) === id;
     });
+    // Resolve this scope's just-decided items for retries/revisions, never all history.
+    if (!matches.length) matches.push(...data.scopeItems.filter((item) => isActiveManualReview(item) && paperId(runId, item, 0, identityKeys(item)) === id));
     if (matches.length !== 1) throw new Error('PAPER_NOT_FOUND');
     feedbackIdentity(matches[0]);
     return matches[0];
@@ -135,11 +255,10 @@ export class ReviewQueryService {
       total = page.total; items.push(...page.items); offset += page.items.length;
       if (!page.items.length) break;
     } while (offset < total);
-    const visible = items.filter((item) => ['A', 'B', 'C'].includes(item.finalGrade ?? item.grade) || item.pendingReview);
     return {
-      normal: visible.filter((item) => !item.pendingReview && !item.needsReview && item.feedbackAllowed && !item.feedback).length,
-      manual: visible.filter((item) => item.needsReview && item.feedbackAllowed && !item.manualGrade).length,
-      rules: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
+      normal: items.filter((item) => item.reviewScopeBucket === 'feedback' && !item.pendingReview && item.feedbackAllowed && item.reviewPending).length,
+      manual: items.filter((item) => item.reviewScopeBucket === 'manual' && item.feedbackAllowed && item.reviewPending).length,
+      rules: (await this.rules.list()).filter(isActiveRuleSuggestion).length,
     };
   }
   async status() {
@@ -159,7 +278,7 @@ export class ReviewQueryService {
       sources: loadSourceSelectionConfig({ root: this.root }).enabled_sources,
       counts: summary?.counts || null, integrity: summary?.integrity || null,
       needsReview: (await this.pendingSummary()).manual,
-      pendingSuggestions: (await this.rules.list()).filter((entry) => ['pending', 'candidate'].includes(entry.status)).length,
+      pendingSuggestions: (await this.rules.list()).filter(isActiveRuleSuggestion).length,
     };
   }
 }

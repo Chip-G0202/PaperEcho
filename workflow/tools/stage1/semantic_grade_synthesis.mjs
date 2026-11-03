@@ -206,43 +206,51 @@ export function deriveSemanticGradeFromStandards({
     semanticSource: searchResults.length > 0 ? "standards_with_auxiliary_evidence" : "standards",
   };
 }
-export function synthesizeFinalGrade({ ruleGrade, semanticGrade, semanticReason = "", flags = {} } = {}) {
-  const ruleNorm = normalizeGradeLetter(ruleGrade);
-  const semanticNorm = normalizeGradeLetter(semanticGrade);
+// D is an exclusion boundary. Classification does not grant writeback/export
+// eligibility and never turns a raw Stage1 hold into a user-facing task.
+export function classifyLiterature(item = {}, { semanticStageStatus } = {}) {
+  const rule = normalizeGradeLetter(item.rule_grade || item.ruleGrade || item.original_grade || item.initial_grade || item.grade || item.final_grade);
+  const semantic = normalizeGradeLetter(item.llm_review?.llm_review_grade || item.llm_review_grade || item.llmReviewGrade || item.semantic_grade || item.semanticGrade || item.semantic_review?.grade || item.semanticPreference?.grade);
+  const confirmed = normalizeGradeLetter(item.manual_confirmed_grade);
+  const result = (finalGrade, reviewBucket, classificationReason, disagreementType = '') => ({ finalGrade, reviewBucket, classificationReason, needsHumanReview: reviewBucket === 'manual', disagreementType });
+  if (confirmed) return result(confirmed, confirmed === 'D' ? 'excluded' : 'feedback', 'canonical_manual');
+  const stageStatus = item.semantic_stage_status || semanticStageStatus;
+  if (stageStatus === 'failed' || item.semantic_source === 'llm_title_review_failed') return result(rule, null, 'semantic_stage_failure');
+  if (!rule) return result('', null, 'invalid_rule_grade');
+  // Old pending persistence synthesized this marker from queue membership.
+  // Its preserved LLM request remains evidence; the inferred boolean does not.
+  const inferred = item.review_consensus_required === true && item.manual_review_state === 'pending';
+  const explicitRequest = item.review_required || item.reviewRequired || item.semantic_review?.review_required || item.llm_review?.needs_human_review;
+  const explicitMarker = !inferred && (item.needs_human_review || item.needsHumanReview || item.semantic_review?.needs_human_review);
+  if (explicitRequest) return result(rule, 'manual', 'explicit_manual_request', 'llm_requested_review');
+  const automatic = (finalGrade, bucket, reason, disagreement = '') => explicitMarker
+    ? result(rule, 'manual', 'explicit_manual_request', 'llm_requested_review') : result(finalGrade, bucket, reason, disagreement);
+  if (!semantic) {
+    if (stageStatus === 'completed' || item.semantic_source === 'llm_title_review_missing') return result(rule, 'manual', 'semantic_unavailable', 'semantic_unavailable');
+    if (explicitMarker) return result(rule, 'manual', 'explicit_manual_request', 'llm_requested_review');
+    return result(rule, null, 'semantic_stage_unverified');
+  }
+  if (item.llm_review?.confidence === 'low' && semantic !== rule) return result(rule, 'manual', 'low_confidence_conflict', 'llm_low_confidence_conflict');
+  if (rule === semantic) return automatic(rule, rule === 'D' ? 'excluded' : 'feedback', rule === 'D' ? 'double_d' : 'consensus');
+  if (rule === 'D' && semantic === 'C') return automatic('C', 'feedback', 'soft_rescue', 'semantic_upgrade');
+  if (rule === 'D' || semantic === 'D') {
+    const reason = rule === 'C' ? 'semantic_downgrade_review' : `semantic_${Math.abs(GRADE_NUMERIC[rule] - GRADE_NUMERIC[semantic]) === 3 ? 'extreme' : 'major'}_divergence`;
+    return result(rule, 'manual', 'exclusion_conflict', reason);
+  }
+  if ((rule === 'A' && semantic === 'C') || (rule === 'C' && semantic === 'A')) return result(rule, 'manual', 'large_grade_gap', 'semantic_major_divergence');
+  return automatic(semantic, 'feedback', 'adjacent_adjustment', `semantic_${GRADE_NUMERIC[semantic] < GRADE_NUMERIC[rule] ? 'upgrade' : 'downgrade'}`);
+}
 
-  if (!ruleNorm) {
-    return { finalGrade: ruleNorm, needsHumanReview: false, disagreementType: "" };
-  }
-  if (!semanticNorm) {
-    return { finalGrade: ruleNorm, needsHumanReview: false, disagreementType: "" };
-  }
-  if (ruleNorm === semanticNorm) {
-    return { finalGrade: ruleNorm, needsHumanReview: false, disagreementType: "" };
-  }
+export function synthesizeFinalGrade({ ruleGrade, semanticGrade, semanticStageStatus = 'completed' } = {}) {
+  const { finalGrade, needsHumanReview, disagreementType } = classifyLiterature({ rule_grade: ruleGrade, semantic_grade: semanticGrade }, { semanticStageStatus });
+  return { finalGrade, needsHumanReview, disagreementType };
+}
 
-  const ruleNum = GRADE_NUMERIC[ruleNorm];
-  const semanticNum = GRADE_NUMERIC[semanticNorm];
-  const diff = Math.abs(semanticNum - ruleNum);
+export function synthesizeLlmReview({ ruleGrade, llmGrade, confidence, llmNeedsHumanReview, semanticStageStatus = 'completed' }) {
+  const { finalGrade, needsHumanReview, disagreementType } = classifyLiterature({ rule_grade: ruleGrade, llm_review: { llm_review_grade: llmGrade, confidence, needs_human_review: llmNeedsHumanReview } }, { semanticStageStatus });
+  return { finalGrade, needsHumanReview, disagreementType };
+}
 
-  if (diff >= 2) {
-    return {
-      finalGrade: ruleNorm,
-      needsHumanReview: true,
-      disagreementType: `semantic_${diff >= 3 ? "extreme" : "major"}_divergence`,
-    };
-  }
-
-  const direction = semanticNum < ruleNum ? "upgrade" : "downgrade";
-  if (ruleNorm === "C" && semanticNorm === "D") {
-    return {
-      finalGrade: ruleNorm,
-      needsHumanReview: true,
-      disagreementType: "semantic_downgrade_review",
-    };
-  }
-  return {
-    finalGrade: semanticNorm,
-    needsHumanReview: false,
-    disagreementType: `semantic_${direction}`,
-  };
+export function isManualReviewEligible(item = {}, context = {}) {
+  return classifyLiterature(item, context).reviewBucket === 'manual';
 }

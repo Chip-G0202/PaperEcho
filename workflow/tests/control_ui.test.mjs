@@ -7,6 +7,49 @@ const html = await fs.readFile(new URL('../tools/web/static/index.html', import.
 const css = await fs.readFile(new URL('../tools/web/static/styles.css', import.meta.url), 'utf8');
 const app = await fs.readFile(new URL('../tools/web/static/app.js', import.meta.url), 'utf8');
 const logo = await fs.readFile(new URL('../tools/web/static/paperecho-mark.svg', import.meta.url), 'utf8');
+test('System Health uses explicit refresh, fixed state labels and accessible read-only results', () => {
+  const system = app.slice(app.indexOf('async function system()'), app.indexOf('async function feedback()'));
+  assert.match(system, /api\('\/api\/doctor'\)/); assert.match(system, /aria-live/);
+  for (const state of ['PASS', 'WARN', 'FAIL', 'UNKNOWN']) assert.ok(system.includes(state));
+  assert.doesNotMatch(system, /setInterval|setTimeout|localStorage|sessionStorage|innerHTML/);
+});
+
+test('System renders application metadata version and an honest unknown fallback without changing compatibility copy', async () => {
+  const source = app.slice(app.indexOf('async function system()'), app.indexOf('async function feedback()'));
+  for (const version of ['2.6.0', '2.7.1-test', null]) {
+    const nodes = [];
+    const el = (tag, text) => { const node = { tag, text, dataset: {}, append() {}, setAttribute() {} }; nodes.push(node); return node; };
+    const scope = vm.createContext({ main: { append() {} }, pageIntro: () => ({}), el, button: () => el('button'), supportExportBusy: false,
+      api: async route => { assert.equal(route, '/api/version'); return { version }; } });
+    await vm.runInContext(source + ';system()', scope);
+    assert.ok(nodes.some(node => node.tag === 'dt' && node.text === '应用版本'));
+    assert.ok(nodes.some(node => node.tag === 'dd' && node.text === (version ? `PaperEcho v${version}` : 'PaperEcho（版本未标定）')));
+  }
+  assert.doesNotMatch(source, /PaperEcho v2\.5/);
+  assert.match(app, /PaperEcho v2\.5 的 Web 路径使用个人文库/);
+});
+test('support download selects a destination before POST and handles cancellation, permissions and size safely', async () => {
+  const source = app.slice(app.indexOf('async function downloadSupportBundle()'), app.indexOf('async function system()'));
+  const flow = []; let aborts = 0; let posts = 0; let blobReads = 0;
+  const writable = { write: async value => { assert.equal(value.size, 3); flow.push('write'); }, close: async () => flow.push('close'), abort: async () => { aborts++; } };
+  const window = { showSaveFilePicker: async () => { flow.push('choose'); return { createWritable: async () => { flow.push('open'); return writable; } }; } };
+  let response = { ok: true, headers: new Map([['content-type', 'application/zip'], ['content-length', '3']]), blob: async () => { blobReads++; return new Blob(['zip']); } };
+  const scope = vm.createContext({ window, navigator: { userAgent: 'test-browser' }, csrf: 'dummy-csrf', AbortController, setTimeout, clearTimeout,
+    fetch: async (url, options) => { posts++; flow.push('post'); assert.equal(url, '/api/support-bundle'); assert.equal(options.method, 'POST'); assert.equal(options.headers['X-CSRF-Token'], 'dummy-csrf'); assert.equal(options.body, '{}'); return response; } });
+  const download = vm.runInContext(source + ';downloadSupportBundle', scope);
+  assert.equal(await download(), '诊断包已保存。'); assert.deepEqual(flow, ['choose', 'post', 'open', 'write', 'close']);
+  window.showSaveFilePicker = async () => { throw Object.assign(new Error('dummy-cancel'), { name: 'AbortError' }); };
+  await assert.rejects(download(), /dummy-cancel/); assert.equal(posts, 1);
+  window.showSaveFilePicker = async () => ({ createWritable: async () => { throw new Error('EACCES'); } });
+  await assert.rejects(download(), /EACCES/);
+  window.showSaveFilePicker = async () => ({ createWritable: async () => ({ ...writable, write: async () => { throw new Error('EACCES'); } }) });
+  await assert.rejects(download(), /EACCES/); assert.equal(aborts, 1);
+  const before = blobReads; response = { ...response, headers: new Map([['content-type', 'application/zip'], ['content-length', '65537']]) };
+  await assert.rejects(download(), /SUPPORT_EXPORT_FAILED/); assert.equal(blobReads, before);
+  const system = app.slice(app.indexOf('async function system()'), app.indexOf('async function feedback()'));
+  assert.match(system, /导出诊断包/); assert.match(system, /不自动上传/); assert.match(system, /supportExportBusy/); assert.match(system, /原健康检查结果保持不变/);
+});
+
 test('UI shell keeps five real routes, skip target, live status and collapsible navigation', () => {
   const routes = [...html.matchAll(/data-page="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(routes, ['home', 'weekly', 'feedback', 'settings', 'system']);
@@ -17,7 +60,7 @@ test('UI shell keeps five real routes, skip target, live status and collapsible 
 });
 test('sidebar owns L1 and L2 navigation while workspace owns L3 tabs', () => {
   assert.match(html, /class="primary-nav"/); assert.match(html, /class="secondary-nav" aria-label="反馈导航"/); assert.match(html, /class="secondary-nav" aria-label="设置导航"/);
-  for (const route of ['feedback/rating/normal', 'feedback/research', 'feedback/rules', 'settings/general/databases', 'settings/models/translation', 'settings/runtime/path', 'settings/automation/radar', 'settings/connections/notifications']) assert.match(html, new RegExp(`data-nav-route="${route}"`));
+  for (const route of ['feedback/rating/normal', 'feedback/research', 'feedback/rules', 'settings/general/databases', 'settings/models/ai', 'settings/runtime/path', 'settings/automation/radar', 'settings/connections/notifications']) assert.match(html, new RegExp(`data-nav-route="${route}"`));
   assert.match(app, /function tertiaryNav/); assert.match(app, /feedback\/rating\/\$\{key\}/); assert.match(app, /function parseRoute/);
   assert.match(app, /\['databases', '文献数据库'/); assert.match(app, /\['rss', 'RSS 订阅'/); assert.match(app, /\['period', '检索周期'/);
   assert.match(app, /settingsView === 'rss' \? 'RSS 订阅状态'/);
@@ -25,7 +68,9 @@ test('sidebar owns L1 and L2 navigation while workspace owns L3 tabs', () => {
 });
 
 test('sidebar footer offers one accessible GitHub Star link without API or tracking', () => {
-  assert.match(html, /<div class="sidebar-footer">[\s\S]*<div class="sidebar-star">[\s\S]*仅本机访问[\s\S]*PaperEcho v2\.4/);
+  assert.match(html, /<div class="sidebar-footer">[\s\S]*<div class="sidebar-star">[\s\S]*仅本机访问[\s\S]*id="app-version">PaperEcho<\/span>/);
+  assert.doesNotMatch(html, /PaperEcho v2\.4/); assert.doesNotMatch(app, /PaperEcho v2\.4/);
+  assert.match(app, /\['应用版本', version \? `PaperEcho v\$\{version\}`/);
   assert.match(html, /<a href="https:\/\/github\.com\/Chip-G0202\/PaperEcho" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 打开 PaperEcho 仓库">/);
   assert.match(html, /<svg[^>]*aria-hidden="true"[^>]*><path fill="currentColor"/);
   assert.match(html, /<span>GitHub Star<\/span><span aria-hidden="true">★<\/span>/);
@@ -36,23 +81,15 @@ test('sidebar footer offers one accessible GitHub Star link without API or track
   assert.match(css, /@media\(max-width:760px\)[^\n]*\.sidebar-footer\{padding-top:12px\}/);
 });
 
-test('Overview keeps read-only schedule facts while Automation has only actionable tabs', () => {
-  assert.match(app, /automation: \[\['radar', 'Daily Radar'[^\n]*\['weekly', '周报'/);
-  assert.doesNotMatch(app, /\['plan', '每日计划'|每日计划运行|Weekly 周报|运行机制|外部 Agent|Control Center 无需保持打开/);
-  assert.match(app, /api\('\/api\/schedule-status'\)/);
-  assert.match(app, /timeZone: 'Asia\/Shanghai'/);
-  assert.match(app, /function taskCard\(plan\)/);
-  assert.match(app, /今天 \$\{plan\.scheduledTime\} · 北京时间/);
-  assert.match(app, /下次周报/);
-  assert.match(app, /尚未建立周报周期/);
-  assert.match(app, /Radar 未启用/);
-  assert.match(app, /计划状态异常/);
-  assert.match(app, /周报已完成，通知待恢复/);
-  assert.match(app, /本地运行路径不支持定时任务/);
-  assert.match(app, /非周报日运行/);
-  assert.match(app, /每 7 天生成一次/);
+test('Overview keeps schedule facts while Automation uses one three-row settings card', () => {
+  assert.match(app, /automation: \[\['radar', '自动化', \['Radar', 'Weekly', 'Integrity'\]\]\]/);
+  assert.match(app, /automation-settings/); assert.match(app, /\['radar.enabled', '每日雷达'/);
+  assert.match(app, /\['weekly.interval', '研究简报'/); assert.match(app, /\['integrity.enabled', '撤稿检测'/);
+  assert.match(app, /input.step = '1'/); assert.match(app, /Number.isInteger\(value\)/);
+  assert.match(app, /api\('\/api\/schedule-status'\)/); assert.match(app, /function taskCard\(plan\)/);
+  assert.match(app, /下次研究简报/); assert.match(app, /每日雷达 未启用/);
   assert.match(app, /section === 'automation' && task === 'plan'/);
-  assert.doesNotMatch(app, /Agent：运行中|自动任务已启用|下一次 Agent 运行/);
+  assert.match(app, /if \(state.settingsGroup === 'automation'\) \{ state.settingsView = 'radar'; return state; \}/);
 });
 test('header and favicon reference the same canonical SVG mark', () => {
   assert.match(html, /rel="icon" href="\/paperecho-mark\.svg\?v=2\.4" type="image\/svg\+xml"/);
@@ -104,7 +141,7 @@ test('Settings exposes product controls while hiding internal LLM request batchi
   assert.match(app, /writeIds: \['review\.master', 'review\.enabled', 'preference\.enabled'\]/); assert.doesNotMatch(app, /\['rating', '评级设置'/);
   assert.match(app, /translation\.enabled/); assert.match(app, /updates: values\.map/); assert.doesNotMatch(app, /查看完整设置示例|renderAdvancedSettingsDemo|advanced-demo/);
   assert.doesNotMatch(app, /input\.disabled = true; row\.append\(label\(setting\.description, input\)/);
-  assert.match(app, /Zotero Web 配置/); assert.match(app, /个人文库/); assert.doesNotMatch(app, /群组文库|Group ID/); assert.match(app, /Zotero 数字 User ID/); assert.match(app, /API v3/); assert.match(app, /写入权限/); assert.match(app, /配置 API Key/); assert.match(app, /替换 API Key/); assert.match(app, /清除/);
+  assert.match(app, /Zotero Web 配置/); assert.match(app, /个人文库/); assert.doesNotMatch(app, /群组文库|Group ID/); assert.match(app, /Zotero 数字 User ID/); assert.match(app, /API v3/); assert.match(app, /写入权限/); assert.match(app, /button\('修改'/); assert.match(app, /button\('保存'/); assert.match(app, /清除/);
   assert.doesNotMatch(app, /runtimePathFields[\s\S]{0,400}web\.apiBase/); assert.match(app, /PaperEcho 本地工作区/);
   assert.match(app, /基础配置：不完整/); assert.match(app, /连接状态：运行前检测尚未执行/); assert.doesNotMatch(app, /Web 连接将在运行时验证/);
 });
@@ -112,7 +149,7 @@ test('UI renders untrusted content through text nodes and keeps credentials writ
   assert.doesNotMatch(app, /\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML|document\.write\(/);
   assert.match(app, /node\.textContent = text/);
   assert.match(app, /input\.type = 'password'/);
-  assert.match(app, /const value = input\.value; await api\('\/api\/credentials'.*input\.value = ''/);
+  assert.match(app, /persisted = true; input\.value = ''/);
   assert.doesNotMatch(app, /input\.value\s*=\s*item\.(?:value|secret|password)/);
   assert.match(app, /连接测试尚未开放/);
 });

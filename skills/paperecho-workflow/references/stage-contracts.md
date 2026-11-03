@@ -18,6 +18,8 @@
 
 ## Minimum regression category
 
+- Research feedback: `research_evaluation_service.mjs` owns the existing events plus protected run-scoped preparation artifact. Stage0 prepares only after execution admission, publishes after verified Radar business or Weekly Stage4, and never waits for notification. Resume reuses prepared results and retries idempotent publication before notification recovery and after business reconciliation. Unknown in-flight generation is held, never automatically sent again. Approval/apply remains in the existing unified suggestion/RuleSuggestionService owners.
+
 - Stage1 semantics: Stage1 artifact, dedupe, grading, and preference-learning tests closest to the change.
 - Stage2/3 semantics: backend contract plus Desktop and Web adapter tests; use real benchmarks only with explicit authorization.
 - Stage4 mapping: export-source/spreadsheet adapter tests and the path integration using it.
